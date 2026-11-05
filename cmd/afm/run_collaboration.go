@@ -363,6 +363,13 @@ func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskVie
 			view.Waived = true
 			view.WaiverReason = reason
 		}
+		if queue, ok := r.orch.TaskRequests(t.ID); ok {
+			view.ActiveRequestID = string(queue.Active)
+			view.PendingRequests = queue.Pending
+			view.LastRequestID = string(queue.Last)
+			view.LastOutcome = string(queue.LastOutcome)
+			view.Turn = queue.Turn
+		}
 		if passes, lastSeq, hasLast, ok := r.orch.WatcherStatus(t.ID); ok {
 			view.WatchPasses = &passes
 			if hasLast {

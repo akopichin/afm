@@ -810,7 +810,7 @@ func (f *Flow) validate() error {
 				return fmt.Errorf("stage %q: assistants[%d]: mode must be %q or %q, got %q", s.ID, i, assistants.ModeAdvisory, assistants.ModeRequired, a.Mode)
 			}
 			if !a.Trigger.Valid() {
-				return fmt.Errorf("stage %q: assistants[%d]: trigger must be %q, %q, or %q, got %q", s.ID, i, assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, a.Trigger)
+				return fmt.Errorf("stage %q: assistants[%d]: trigger must be %q, %q, %q, or %q, got %q", s.ID, i, assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage, a.Trigger)
 			}
 		}
 	}

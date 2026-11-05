@@ -75,28 +75,47 @@ func (o *Orchestrator) RetryTask(ctx context.Context, taskID assistants.TaskID) 
 	if t.Status != assistants.StatusFailed {
 		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: "only a failed task can be retried"}
 	}
+	// Nothing would ever work off the requests of an earlier attempt of the stage, and they would hold the run. The
+	// commit checks it again: a new attempt can come before it.
+	notSuperseded := func(cur *state.RunState) error {
+		if state.IsOnMessageHelper(t.Task) && t.RootGeneration != cur.Assistants.RootGenerations[t.RootStageID] {
+			return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("helper %s belongs to a superseded attempt of stage %s", taskID, t.RootStageID)}
+		}
+		return nil
+	}
+	if err := notSuperseded(&rs); err != nil {
+		return err
+	}
 
 	for _, id := range o.descendantIDs(taskID) {
 		o.cancelOneTask(id)
 	}
 
+	// An infrastructure failure stopped the on_message helper, and it kept its requests, the unfinished one too: it
+	// rests, and its wake takes them up, oldest first.
+	retried := assistants.StatusQueued
+	if state.IsOnMessageHelper(t.Task) {
+		retried = assistants.StatusWatching
+	}
 	bumpEff := state.Effect{Kind: "task_generation_bumped", Target: state.Target{TaskID: string(taskID)}}
-	queuedEff, err := taskStatusEffect(taskID, assistants.StatusQueued, "retried")
+	retriedEff, err := taskStatusEffect(taskID, retried, "retried")
 	if err != nil {
 		return err
 	}
 	op := state.Operation{
 		ID:      "task-retry:" + string(taskID) + ":" + randomOpSuffix(),
 		Kind:    "retry_task",
-		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusFailed}},
-		Effects: []state.Effect{bumpEff, queuedEff},
+		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusFailed}, Check: notSuperseded},
+		Effects: []state.Effect{bumpEff, retriedEff},
 	}
 	runCtx := o.runContext(ctx)
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: t.RootStageID, Data: map[string]any{
-			"task_id": string(taskID), "status": string(assistants.StatusQueued), "reason": "retried",
+			"task_id": string(taskID), "status": string(retried), "reason": "retried",
 		}})
 		o.maybeScheduleTask(runCtx, taskID)
+		o.wakeOnMessageTask(runCtx, taskID)
+		o.settleOnMessageTask(taskID) // a stage done meanwhile takes no more requests
 	})
 	if err != nil {
 		o.handleTaskOperationErr(err)

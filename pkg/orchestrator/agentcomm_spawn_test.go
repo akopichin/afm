@@ -395,7 +395,7 @@ func TestHelperResult_RunningHelperHasStatusAndNoResult(t *testing.T) {
 	installGatedHelpers(o, func(string) (executor.HelperOutcome, error) { return passResultOutcome(), nil })
 	h := mustSpawn(t, o, "op-hr-running", "look")
 
-	got, err := o.HelperResult(spawnStageActor, h.TaskID)
+	got, err := o.HelperResult(spawnStageActor, h.TaskID, "")
 	if err != nil {
 		t.Fatalf("HelperResult: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestHelperResult_CompletedHelperReturnsTheFullCommittedResult(t *testing.T)
 	gates.release(h.TaskID)
 	waitForTaskStatus(t, store, h.TaskID, assistants.StatusCompleted, 2*time.Second)
 
-	got, err := o.HelperResult(spawnStageActor, h.TaskID)
+	got, err := o.HelperResult(spawnStageActor, h.TaskID, "")
 	if err != nil {
 		t.Fatalf("HelperResult: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestHelperResult_StatusAndResultNeverTornAcrossTheFinishCommit(t *testing.T
 				return
 			default:
 			}
-			got, err := o.HelperResult(spawnStageActor, h.TaskID)
+			got, err := o.HelperResult(spawnStageActor, h.TaskID, "")
 			if err != nil {
 				continue
 			}
@@ -479,7 +479,7 @@ func TestHelperResult_FailedHelperHasTheReasonAndNoResult(t *testing.T) {
 	gates.release(h.TaskID)
 	waitUntil(t, "the helper is terminal", func() bool { return store.Snapshot().Assistants.Tasks[h.TaskID].Status.Terminal() })
 
-	got, err := o.HelperResult(spawnStageActor, h.TaskID)
+	got, err := o.HelperResult(spawnStageActor, h.TaskID, "")
 	if err != nil {
 		t.Fatalf("HelperResult: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestHelperResult_NeverReadsAnUncommittedResultFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := o.HelperResult(spawnStageActor, h.TaskID)
+	got, err := o.HelperResult(spawnStageActor, h.TaskID, "")
 	if err != nil {
 		t.Fatalf("HelperResult: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestHelperResult_RefusesWhatIsNotTheCallersOwnHelper(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := o.HelperResult(tc.actor, tc.taskID)
+			_, err := o.HelperResult(tc.actor, tc.taskID, "")
 			var rejected *state.OperationRejectedError
 			if !errors.As(err, &rejected) || rejected.Code != tc.code {
 				t.Fatalf("err = %v, want rejection %s", err, tc.code)
@@ -677,5 +677,81 @@ func TestSpawnHelper_FormatterUsageLimitStillParks(t *testing.T) {
 	})
 	if n := len(repliesTo(store, *h.MessageID)); n != 0 {
 		t.Fatalf("replies = %d, want none while the helper waits for its limit", n)
+	}
+}
+
+// A stage agent's on_message helper is created resting in watching with its thread and no request: the agent
+// sends the first message itself, and the helper runs nothing until then.
+func TestSpawnHelper_OnMessageRestsWithoutARequest(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	runs := countHelperRuns(o)
+
+	req := spawnReq("op-spawn-on-message", "answer my questions about the cart")
+	req.Trigger = assistants.TriggerOnMessage
+	res, err := o.SpawnHelper(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SpawnHelper: %v", err)
+	}
+
+	if res.MessageID != nil {
+		t.Fatalf("MessageID = %v, want none: no request was sent", *res.MessageID)
+	}
+	rs := store.Snapshot()
+	task := rs.Assistants.Tasks[res.TaskID]
+	if task == nil || task.Trigger != assistants.TriggerOnMessage || task.Status != assistants.StatusWatching ||
+		task.CreatedBy != assistants.OriginStageAgent || task.Mode != assistants.ModeAdvisory || task.RootStageID != assistantsTestStageID {
+		t.Fatalf("task = %+v, want an advisory on_message helper of %s spawned by the stage agent, resting in watching", task, assistantsTestStageID)
+	}
+	if th := rs.Assistants.Mesh.Threads[res.ThreadID]; th == nil || th.OriginStage != assistantsTestStageID || len(rs.Assistants.Mesh.Messages) != 0 {
+		t.Fatalf("thread = %+v, messages = %d, want the stage's thread and no message", th, len(rs.Assistants.Mesh.Messages))
+	}
+	if n := runs.Load(); n != 0 {
+		t.Fatalf("helper runs = %d, want 0 before a message", n)
+	}
+}
+
+func TestSpawnHelper_OnMessageRetryReturnsTheSameIDsAndConflictsOnAnotherTrigger(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	countHelperRuns(o)
+
+	req := spawnReq("op-spawn-on-message-retry", "answer my questions")
+	req.Trigger = assistants.TriggerOnMessage
+	first, err := o.SpawnHelper(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SpawnHelper: %v", err)
+	}
+	tasks, participants, threads, messages := meshSnapshotCounts(store.Snapshot())
+
+	again, err := o.SpawnHelper(context.Background(), req)
+	if err != nil || again != first {
+		t.Fatalf("retry = %+v, %v; want the first call's %+v", again, err, first)
+	}
+	if t2, p2, th2, m2 := meshSnapshotCounts(store.Snapshot()); t2 != tasks || p2 != participants || th2 != threads || m2 != messages {
+		t.Fatal("a retry wrote something again")
+	}
+
+	req.Trigger = ""
+	if _, err = o.SpawnHelper(context.Background(), req); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("the same request id with another trigger: err = %v, want a conflict", err)
+	}
+}
+
+func TestSpawnHelper_UnsupportedTriggerWritesNothing(t *testing.T) {
+	for _, trigger := range []assistants.Trigger{assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, "bogus"} {
+		t.Run(string(trigger), func(t *testing.T) {
+			o, store := newAssistantsTestOrchestrator(t, true)
+			activateStage(t, o, assistantsTestStageID)
+			tasks, participants, threads, messages := meshSnapshotCounts(store.Snapshot())
+
+			req := spawnReq("op-spawn-bad-trigger", "review it")
+			req.Trigger = trigger
+			_, err := o.SpawnHelper(context.Background(), req)
+			requireRejected(t, err, assistants.CodeInvalidRequest)
+			if t2, p2, th2, m2 := meshSnapshotCounts(store.Snapshot()); t2 != tasks || p2 != participants || th2 != threads || m2 != messages {
+				t.Fatal("a rejected spawn wrote something")
+			}
+		})
 	}
 }

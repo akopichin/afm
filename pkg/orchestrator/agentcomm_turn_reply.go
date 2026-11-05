@@ -41,6 +41,16 @@ func wakingMessage(ms state.MeshState, inbox []agentcomm.MessageID) (*agentcomm.
 	return nil, false
 }
 
+// turnRequest is the message t's current turn works on: an on_message helper's active request, whatever else the
+// turn was handed, or else the message that woke the turn (wakingMessage).
+func turnRequest(ms state.MeshState, t *state.TaskState) (*agentcomm.Message, bool) {
+	if state.IsOnMessageHelper(t.Task) {
+		m := ms.Messages[t.ActiveRequest]
+		return m, m != nil
+	}
+	return wakingMessage(ms, t.TurnInbox)
+}
+
 // answeredBy reports whether sender has already replied to messageID.
 func answeredBy(ms state.MeshState, sender agentcomm.ParticipantID, messageID agentcomm.MessageID) bool {
 	for _, m := range ms.Messages {
@@ -51,11 +61,9 @@ func answeredBy(ms state.MeshState, sender agentcomm.ParticipantID, messageID ag
 	return false
 }
 
-// turnReplyTargets are the messages the end of t's current turn answers: the message that woke this turn, and
-// each request an earlier turn ended waiting on (state.TaskState.OpenRequests) that someone still waits for an
-// answer to (a pending reply_to wait) — a turn woken only by a passive result owes that requester its answer,
-// or the requester would wait forever while the agent idles. A request nobody waits on is left alone: the
-// agent may have answered it some other way. Each target once, without those the agent answered itself.
+// turnReplyTargets are the messages the end of t's turn answers, each once and not those the agent answered itself:
+// the one the turn worked on (turnRequest), and each request an earlier yielded turn owes (OpenRequests) that
+// someone still waits on — the agent may have answered one nobody waits on some other way.
 func turnReplyTargets(rs state.RunState, t *state.TaskState, agent agentcomm.ParticipantID) []*agentcomm.Message {
 	var ids []agentcomm.MessageID
 	for _, id := range t.OpenRequests {
@@ -63,8 +71,8 @@ func turnReplyTargets(rs state.RunState, t *state.TaskState, agent agentcomm.Par
 			ids = append(ids, id)
 		}
 	}
-	if waking, ok := wakingMessage(rs.Assistants.Mesh, t.TurnInbox); ok && !slices.Contains(ids, waking.ID) {
-		ids = append(ids, waking.ID)
+	if request, ok := turnRequest(rs.Assistants.Mesh, t); ok && !slices.Contains(ids, request.ID) {
+		ids = append(ids, request.ID)
 	}
 	var out []*agentcomm.Message
 	for _, id := range ids {

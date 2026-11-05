@@ -231,6 +231,24 @@ func TestAttach_RejectsClientSuppliedCommand(t *testing.T) {
 	// values to have landed; this assertion documents that invariant rather than re-deriving it.
 }
 
+// The dashboard's trigger choice reaches the Service as is: on_message is validated and admitted (or refused)
+// by the orchestrator, one rule for every entry point.
+func TestAttach_PassesOnMessageTriggerToTheService(t *testing.T) {
+	fake := &fakeAssistantActions{}
+	srv := newTestServer(t, Config{AssistantActions: fake})
+	body, _ := json.Marshal(map[string]any{"request_id": "req-1", "profile_id": "reviewer", "trigger": "on_message"})
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/assistants", bytes.NewReader(body))
+	req.Header.Set("Origin", "http://"+req.Host)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if fake.lastAttach.Trigger != "on_message" {
+		t.Fatalf("Trigger = %q, want on_message", fake.lastAttach.Trigger)
+	}
+}
+
 func TestAttach_RejectsClientSuppliedDepthOrParentRoot(t *testing.T) {
 	fake := &fakeAssistantActions{}
 	srv := newTestServer(t, Config{AssistantActions: fake})
@@ -340,6 +358,38 @@ func TestList_DepthPassesThrough(t *testing.T) {
 	}
 }
 
+// An on_message helper's request queue reaches the dashboard as flat omitempty fields: a task without one adds
+// no keys, so the payload of every other task is unchanged.
+func TestList_OnMessageRequestFieldsPassThrough(t *testing.T) {
+	reader := &fakeAssistantsReader{tree: []AssistantTaskView{
+		{ID: "t-1", ProfileID: "reviewer", Status: "running", Trigger: "on_message",
+			ActiveRequestID: "mm-2", PendingRequests: 3, LastRequestID: "mm-1", LastOutcome: "result", Turn: 4},
+		{ID: "t-2", ProfileID: "reviewer", Status: "running", Trigger: "one_shot"},
+	}}
+	srv := newTestServer(t, Config{AssistantsReader: reader})
+	req := httptest.NewRequest(http.MethodGet, "/api/stages/"+testStageID+"/assistants", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := map[string]any{"active_request_id": "mm-2", "pending_requests": 3.0, "last_request_id": "mm-1", "last_outcome": "result", "turn": 4.0}
+	for key, value := range want {
+		if resp.Tasks[0][key] != value {
+			t.Errorf("on_message task %s = %v, want %v", key, resp.Tasks[0][key], value)
+		}
+		if _, present := resp.Tasks[1][key]; present {
+			t.Errorf("one_shot task carries %s, want it omitted", key)
+		}
+	}
+}
+
 func TestList_NormalizedTreeNoDuplicateSubtrees(t *testing.T) {
 	reader := &fakeAssistantsReader{tree: []AssistantTaskView{
 		{ID: "t-1", ProfileID: "reviewer", Status: "completed"},
@@ -369,6 +419,38 @@ func TestList_NormalizedTreeNoDuplicateSubtrees(t *testing.T) {
 	}
 	if len(resp.Tasks) != 2 {
 		t.Fatalf("got %d tasks, want 2", len(resp.Tasks))
+	}
+}
+
+// A task_result event carries the on_message binding (request_id, turn) flat in data next to the result's own
+// fields, the way the dashboard reads it.
+func TestEvents_TaskResultKeepsRequestBindingFlat(t *testing.T) {
+	payload, err := json.Marshal(state.TaskResultPayload{
+		Result:    assistants.Result{Summary: "answered"},
+		RequestID: "mm-7", Turn: 2,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	reader := &fakeAssistantsReader{events: []AssistantEventView{{Seq: 1, Type: "task_result", Data: json.RawMessage(payload)}}}
+	srv := newTestServer(t, Config{AssistantsReader: reader})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/assistants/t-1/events", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	type eventData struct {
+		Data map[string]any `json:"data"`
+	}
+	var resp struct {
+		Events []eventData `json:"events"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Events) != 1 {
+		t.Fatalf("decode: %v, events = %d", err, len(resp.Events))
+	}
+	data := resp.Events[0].Data
+	if data["summary"] != "answered" || data["request_id"] != "mm-7" || data["turn"] != 2.0 {
+		t.Fatalf("data = %v, want summary, request_id and turn side by side", data)
 	}
 }
 

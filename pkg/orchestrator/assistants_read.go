@@ -8,6 +8,7 @@ package orchestrator
 import (
 	"fmt"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
@@ -50,6 +51,32 @@ func (o *Orchestrator) TaskWaiver(taskID assistants.TaskID) (waived bool, reason
 		return false, "", false
 	}
 	return t.Waived, t.WaiverReason, true
+}
+
+// TaskRequestQueue is an on_message helper's request queue as the dashboard shows it (state.TaskState): the
+// request its turns work on, how many wait behind it, how the latest finished one ended, and the latest turn.
+type TaskRequestQueue struct {
+	Active      agentcomm.MessageID
+	Pending     int
+	Last        agentcomm.MessageID
+	LastOutcome state.RequestOutcome
+	Turn        uint64
+}
+
+// TaskRequests reports a task's request queue — ok is false for an unknown task id. A side lookup like
+// TaskWaiver: the bare assistants.Task TaskTree returns does not carry it.
+func (o *Orchestrator) TaskRequests(taskID assistants.TaskID) (TaskRequestQueue, bool) {
+	t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
+	if !ok {
+		return TaskRequestQueue{}, false
+	}
+	return TaskRequestQueue{
+		Active:      t.ActiveRequest,
+		Pending:     len(t.PendingRequests),
+		Last:        t.LastRequest,
+		LastOutcome: t.LastOutcome,
+		Turn:        t.Turn,
+	}, true
 }
 
 // AssistantsPolicyRevision returns the run's current effective collaboration depth-policy revision and max

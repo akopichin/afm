@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
+# On-message helper example: one helper stays attached to the stage and answers each question it is sent
+# in its own turn. The profile lives in .afm/config.yaml.
+
+name: on-message-helper
+description: "Demo: a stage agent asks one standing helper two different questions in turn"
+
+stages:
+  - id: explore
+    name: "Ask a standing helper two questions"
+    agents: [auto]
+    # trigger: on_message starts nothing when the stage starts: the helper waits (Waiting for message)
+    # until a request is sent to it. Replace profile with any role in collaboration.profiles.
+    assistants:
+      - profile: notes
+        title: Notes
+        instruction: Answer questions about this project from its files.
+        trigger: on_message
+    description: |
+      Write ./ANSWERS.md with the answers of the helper `Notes` to two different questions.
+      The helper is already attached to this stage and waits for requests; it is listed in
+      <your_helpers> with its task id. Write every message in English.
+
+      1. Run `afm agent list` and find the alias of `Notes` (by default `notes`).
+      2. Send the first request and keep the printed `message_id`:
+
+           afm agent send --to notes --kind request --body "List the top-level files and what each is for."
+
+      3. Register a wait for its answer and END YOUR TURN; do not poll:
+
+           afm agent wait --condition reply_to --message-id <message_id>
+
+         The answer arrives in your inbox (`afm agent inbox`). Read the answer to exactly
+         that request with
+         `afm agent helper-result --task-id <task_id> --message-id <message_id>`.
+      4. Send a second, different request to the same helper (same task, no new helper):
+
+           afm agent send --to notes --kind request --body "Which file would you change first to add a --verbose flag, and why?"
+
+         Wait for it the same way. The helper handles requests one at a time, so
+         never send the second one before you have read the first answer.
+      5. Write both answers to ./ANSWERS.md, each under its question, and finish.
+         Do not wait for the helper to finish: AFM returns it to waiting after every
+         result and closes it when this stage is done.

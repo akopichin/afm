@@ -124,7 +124,7 @@ func TestMesh_PassiveMessagesHaveTheirOwnInboxCap(t *testing.T) {
 		}
 		mustApply(t, &as, autoResultControl(uint64(i+1), fmt.Sprintf("p%d", i), th, "b", []string{"a"}, nil, "result"))
 	}
-	if err := dispatchControlKind(&as, autoResultControl(9999, "p-over", "th-2", "b", []string{"a"}, nil, "one too many"), true); err == nil {
+	if err := applyKind(&as, autoResultControl(9999, "p-over", "th-2", "b", []string{"a"}, nil, "one too many"), true); err == nil {
 		t.Fatal("a passive message past MaxInboxPassive must be refused")
 	}
 	mustApply(t, &as, meshThreadOpenedControl("th-3", []string{"a", "b"}))

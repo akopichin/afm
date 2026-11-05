@@ -508,8 +508,18 @@ func meshRejected(code assistants.ErrorCode, format string, args ...any) error {
 
 // applyMeshMessageSent projects one mesh_message_sent control record: validates the message's shape and
 // thread-membership (agentcomm.ValidateMessage) BEFORE mutating anything, then records one Message plus one
-// agentcomm.DeliveryAccepted receipt and one Inbox entry per recipient, all in the same call.
-func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
+// agentcomm.DeliveryAccepted receipt and one Inbox entry per recipient, all in the same call, and queues it as a
+// request of each on_message helper it starts work for (queueOnMessageRequests). That request may still be
+// refused after the message is recorded, but only while admitting — on a copy that the refusal discards.
+func applyMeshMessageSent(rs *RunState, c *Control, dryRun bool) error {
+	if dryRun {
+		// Whether the message continues a helper's request depends on the waits it resolves: decide on a copy.
+		scratch := *rs
+		scratch.Assistants = rs.Assistants.deepClone()
+		scratch.Assistants.admitting = true
+		return applyMeshMessageSent(&scratch, c, false)
+	}
+	as := &rs.Assistants
 	id := agentcomm.MessageID(c.Target.MessageID)
 	if id == "" {
 		return errors.New("mesh_message_sent: empty target message_id")
@@ -573,12 +583,14 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	if len(as.Mesh.MessagesByThread[threadID]) >= limit {
 		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages", threadID, limit)
 	}
-	if err := as.Mesh.CheckInboxCapacity(recipients, msg.AutoResult); err != nil {
-		return err
+	limited := recipients
+	if !msg.AutoResult {
+		// An on_message helper's room depends on whether the message opens a request or continues one, which is
+		// known once its waits are resolved: queueOnMessageRequests checks it.
+		limited = slices.DeleteFunc(slices.Clone(recipients), func(r agentcomm.ParticipantID) bool { return as.onMessageHelper(r) != nil })
 	}
-
-	if dryRun {
-		return nil
+	if err := as.Mesh.CheckInboxCapacity(limited, msg.AutoResult); err != nil {
+		return err
 	}
 
 	as.Mesh.Messages[id] = &msg
@@ -594,10 +606,15 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	// this message satisfies — reply_to the message it answers, or addressed_message in its thread for one of
 	// its recipients — in the SAME commit as the message itself. See resolvePendingWaits's doc comment for why
 	// this cannot be decided by the orchestrator from a pre-commit snapshot.
+	woken := map[agentcomm.ParticipantID]bool{}
 	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
-		return as.meshWaitSatisfied(w)
+		if !as.meshWaitSatisfied(w) {
+			return false
+		}
+		woken[w.Waiter] = true
+		return true
 	})
-	return nil
+	return rs.queueOnMessageRequests(msg, woken, as.admittingNewRecord(dryRun))
 }
 
 // checkLoopTickMessage prevents client messages from impersonating scheduler self-ticks.

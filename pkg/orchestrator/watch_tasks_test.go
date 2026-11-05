@@ -436,7 +436,7 @@ func TestCompletionHelper_PauseWhileWaitingForTheSlotRequeuesTheTurn(t *testing.
 	<-slot
 
 	requeued := waitForTaskStatus(t, store, helper, assistants.StatusQueued, 2*time.Second)
-	if requeued.StatusReason != "re-queued: parent result not ready" {
+	if requeued.StatusReason != completionNotReadyReason {
 		t.Fatalf("requeue reason = %q", requeued.StatusReason)
 	}
 	o.concurrency.WaitAgents()

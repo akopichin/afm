@@ -70,6 +70,14 @@ type TaskState struct {
 	// possibly woken only by a passive result — produces one. A turn that ends any other way clears them; its
 	// finish answers them. Derived from the same task_status_changed records as TurnInbox, live and on replay.
 	OpenRequests []agentcomm.MessageID `json:"open_requests,omitempty"`
+	// PendingRequests through LastOutcome are an on_message helper's request queue (on_message.go): requests waiting
+	// in arrival order, the one its turns work on and the seq that made it active, and how the latest one ended.
+	// Projected from mesh_message_sent and task_status_changed records, live and on replay.
+	PendingRequests []agentcomm.MessageID `json:"pending_requests,omitempty"`
+	ActiveRequest   agentcomm.MessageID   `json:"active_request,omitempty"`
+	ActiveSinceSeq  uint64                `json:"active_since_seq,omitempty"`
+	LastRequest     agentcomm.MessageID   `json:"last_request,omitempty"`
+	LastOutcome     RequestOutcome        `json:"last_outcome,omitempty"`
 	// TurnReadonlyEnforcement is the read-only guarantee the latest turn actually ran under — the environment's
 	// at its start (TaskStatusChangedPayload.ReadonlyEnforcement), which can differ from the admission-time
 	// ProfileSnapshot.ReadonlyEnforcement after a resume in another environment. "" before the first recorded
@@ -325,18 +333,21 @@ func (as AssistantsState) deepClone() AssistantsState {
 // applyOperationCommitted applies every Effect bundled into one ApplyRunOperation call (T2.4) as a single
 // all-or-nothing batch: it mutates a deepClone() scratch copy effect-by-effect (so a LATER effect can see an
 // EARLIER one's result within the same batch — e.g. creating a parent and its children in one operation),
-// and only replaces the real *as with the scratch copy if every effect succeeded. If any effect fails, *as
+// and only replaces rs.Assistants with the scratch copy if every effect succeeded. If any effect fails, rs
 // is left completely untouched — TestOperation_AllEffectsCommittedTogether's in-memory half (the durable
 // half is that appendControlLocked never even reaches the journal write unless validateControlForRunState,
 // which calls this with dryRun, already proved the whole batch succeeds).
-func applyOperationCommitted(as *AssistantsState, c *Control, dryRun bool) error {
+func applyOperationCommitted(rs *RunState, c *Control, dryRun bool) error {
 	var p operationCommittedPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("decode operation_committed payload: %w", err)
 	}
 
-	scratch := as.deepClone()
-	scratch.admitting = dryRun
+	// Effects change only the assistants projection; the rest of rs is shared read-only (a stage's status decides
+	// whether its on_message helper takes new requests).
+	scratch := *rs
+	scratch.Assistants = rs.Assistants.deepClone()
+	scratch.Assistants.admitting = dryRun
 	for i, e := range p.Effects {
 		if e.Kind == kindOperationCommitted {
 			return fmt.Errorf("operation effect %d: nested operation_committed is not allowed", i)
@@ -361,7 +372,7 @@ func applyOperationCommitted(as *AssistantsState, c *Control, dryRun bool) error
 	if dryRun {
 		return nil
 	}
-	*as = scratch
+	rs.Assistants = scratch.Assistants
 	return nil
 }
 
@@ -493,6 +504,20 @@ type TaskStatusChangedPayload struct {
 	// why it cannot (PauseReason). Absent on every other record, in which case the task's earlier Quota is
 	// carried (taskQuotaAfter); an older binary ignores it.
 	Quota *QuotaWait `json:"quota,omitempty"`
+	// RequestID — an on_message helper's request this record is about: the one a turn start (running with Turn)
+	// works on, or the one RequestOutcome ends. RequestOutcome — on the record that ends that request. Both absent
+	// on every other task and in older journals.
+	RequestID      string         `json:"request_id,omitempty"`
+	RequestOutcome RequestOutcome `json:"request_outcome,omitempty"`
+}
+
+// TaskResultPayload is the task_result record's payload: the helper's Result and, for an on_message helper, the
+// server's binding of it — the request it answers and the turn that produced it. The model never writes the
+// binding, and a reader of the plain Result ignores it.
+type TaskResultPayload struct {
+	assistants.Result
+	RequestID string `json:"request_id,omitempty"`
+	Turn      uint64 `json:"turn,omitempty"`
 }
 
 // QuotaTargetHelper marks a usage-limit park of a helper task's turn: unlike a stage, a task has no phases.
@@ -547,7 +572,7 @@ func dispatchControl(rs *RunState, c *Control, dryRun bool) error {
 		if err := applyStageGraphAdded(rs, c, dryRun); err != nil {
 			return err
 		}
-	} else if err := dispatchControlKind(as, c, dryRun); err != nil {
+	} else if err := dispatchControlKind(rs, c, dryRun); err != nil {
 		return err
 	}
 	if !dryRun {
@@ -563,11 +588,12 @@ func dispatchControl(rs *RunState, c *Control, dryRun bool) error {
 	return nil
 }
 
-// dispatchControlKind applies a single kind's handler to as, WITHOUT touching the idempotency index — the
-// index belongs to the outer record only (dispatchControl), not to each inner Effect of an
+// dispatchControlKind applies a single kind's handler to rs.Assistants, WITHOUT touching the idempotency index —
+// the index belongs to the outer record only (dispatchControl), not to each inner Effect of an
 // operation_committed batch (applyOperationCommitted calls this directly, once per effect, with the SAME
 // outer operation_id implicitly handled once at the top level).
-func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
+func dispatchControlKind(rs *RunState, c *Control, dryRun bool) error {
+	as := &rs.Assistants
 	switch c.Kind {
 	case kindTaskCreated:
 		return applyTaskCreated(as, c, dryRun)
@@ -590,7 +616,7 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 	case kindRootGenerationBumped:
 		return applyRootGenerationBumped(as, c, dryRun)
 	case kindOperationCommitted:
-		return applyOperationCommitted(as, c, dryRun)
+		return applyOperationCommitted(rs, c, dryRun)
 	case kindDiscussionMessage:
 		return applyDiscussionMessage(as, c, dryRun)
 	case kindProposalCreated:
@@ -612,7 +638,7 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 	case kindMeshThreadClosed:
 		return applyMeshThreadClosed(as, c, dryRun)
 	case kindMeshMessageSent:
-		return applyMeshMessageSent(as, c, dryRun)
+		return applyMeshMessageSent(rs, c, dryRun)
 	case kindMeshMessageDelivered:
 		return applyMeshMessageDelivered(as, c, dryRun)
 	case kindMeshMessageAcked:
@@ -755,10 +781,15 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("task %s: decode task_status_changed payload: %w", id, err)
 	}
+	status := assistants.TaskStatus(p.Status)
+	if as.admittingNewRecord(dryRun) {
+		if err := checkRequestProgress(t, p, status); err != nil {
+			return fmt.Errorf("task %s: %w", id, err)
+		}
+	}
 	if dryRun {
 		return nil
 	}
-	status := assistants.TaskStatus(p.Status)
 	t.Status = status
 	t.StatusReason = p.Reason
 	if status == assistants.StatusRunning && t.StartedAt.IsZero() {
@@ -784,6 +815,7 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	default: // a stale turn number ends nothing
 	}
 	t.Quota = taskQuotaAfter(t.Quota, p, status, p.Turn != 0 && p.Turn == t.Turn)
+	advanceRequests(t, p, status, c.Seq)
 	as.resolveTaskResultWaits(id)
 	return nil
 }
@@ -813,15 +845,16 @@ func (q *QuotaWait) parked() bool { return q != nil && (!q.Until.IsZero() || q.P
 
 // carriedRequests is t's OpenRequests once its current turn ends in status: a turn that ends waiting for a
 // colleague or for its children keeps them and adds the requests among the turn's own messages — neither
-// passive results nor replies, which answer something rather than ask; any other end clears them. Always a new
-// slice — a snapshot may share the task's current one.
+// passive results nor replies, which answer something rather than ask, nor an on_message helper's queued
+// requests, which their own outcome answers; any other end clears them. Always a new slice — a snapshot may
+// share the task's current one.
 func carriedRequests(ms MeshState, t *TaskState, status assistants.TaskStatus) []agentcomm.MessageID {
 	if status != assistants.StatusWaitingPeer && status != assistants.StatusWaitingChildren {
 		return nil
 	}
 	out := slices.Clone(t.OpenRequests)
 	for _, id := range t.TurnInbox {
-		if m := ms.Messages[id]; m != nil && !m.AutoResult && m.Kind != agentcomm.MessageKindReply && !slices.Contains(out, id) {
+		if m := ms.Messages[id]; m != nil && !m.AutoResult && m.Kind != agentcomm.MessageKindReply && !slices.Contains(out, id) && !t.queuedRequest(id) {
 			out = append(out, id)
 		}
 	}
@@ -877,8 +910,8 @@ func applyTaskHoldCleared(as *AssistantsState, c *Control, dryRun bool) error {
 	return nil
 }
 
-// applyTaskResult validates a task_result effect's target task exists and its payload decodes as an
-// assistants.Result. Unlike every other task_* kind it does not mutate the bulk of TaskState — the full
+// applyTaskResult validates a task_result effect's target task exists and its payload decodes as a
+// TaskResultPayload. Unlike every other task_* kind it does not mutate the bulk of TaskState — the full
 // result's content (summary/findings/evidence/...) has nowhere to live in the projection; it is carried
 // durably only in the control stream itself, which Store.TaskEvents already returns verbatim per target
 // task_id — exactly what the dashboard's per-task event-history page (GET /api/assistants/{id}/events) reads.
@@ -890,7 +923,7 @@ func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
 	if !ok {
 		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
 	}
-	var p assistants.Result
+	var p TaskResultPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("task %s: decode task_result payload: %w", id, err)
 	}

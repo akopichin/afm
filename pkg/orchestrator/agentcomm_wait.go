@@ -1036,7 +1036,7 @@ func stageWaitsOnlyForCallbackHelpers(rs state.RunState, waiter agentcomm.Partic
 	for _, p := range targets {
 		switch {
 		case isOwnPendingCompletionPass(rs, stageID, p):
-		case isOwnOneShotHelper(rs, stageID, p) && waitsOnlyForAnswersTo(rs, p, waiter, candidate):
+		case isOwnHelper(rs, stageID, p) && waitsOnlyForAnswersTo(rs, p, waiter, candidate):
 			callbacks++
 		default:
 			return false
@@ -1055,15 +1055,14 @@ func isOwnPendingCompletionPass(rs state.RunState, stageID string, p agentcomm.P
 	return found && t.RootStageID == stageID && completionPassPending(rs, t)
 }
 
-// isOwnOneShotHelper reports whether p is a helper of stage stageID's current root generation that runs one turn
-// rather than watching the stage.
-func isOwnOneShotHelper(rs state.RunState, stageID string, p agentcomm.ParticipantID) bool {
-	id, ok := strings.CutPrefix(string(p), meshHelperPrefix)
+// isOwnHelper reports whether participant p is a helper answering stage stageID's agent (stageOwnHelper).
+func isOwnHelper(rs state.RunState, stageID string, p agentcomm.ParticipantID) bool {
+	id, ok := agentcomm.HelperTaskID(p)
 	if !ok {
 		return false
 	}
-	t, found := rs.Assistants.Tasks[assistants.TaskID(id)]
-	return found && isStageSpawnedHelper(rs, stageID, t) && !isWatcherTrigger(t.Trigger)
+	t, found := rs.Assistants.Tasks[id]
+	return found && stageOwnHelper(rs, stageID, t)
 }
 
 // waitsOnlyForAnswersTo reports whether every pending wait of helper, and candidate if it is the helper's, is a

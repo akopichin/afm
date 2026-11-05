@@ -115,15 +115,19 @@ stages:
 ```
 
 Object fields are `profile` (required), `title`, `instruction`, `mode`
-(`advisory` or `required`), `trigger` (`one_shot`, `checkpoints`, or
-`on_completion`), `skills`, and `skills_dir`. Omitted mode and trigger default to
+(`advisory` or `required`), `trigger` (`one_shot`, `checkpoints`,
+`on_completion`, or `on_message`), `skills`, and `skills_dir`. Omitted mode and trigger default to
 `advisory` and `one_shot`. `skills` and `skills_dir` follow the
 [agent skills](#agent-skills) rules; a helper does not inherit its stage's skills.
 Profiles must be defined in `collaboration.profiles`; an unknown profile stops
 `afm run` at preflight. Each profile can appear only once per stage. The field is
 valid on execution stages (including `agents: [auto]`), but not on `script:` or
-planning-only stages. See [Helpers and collaboration](collaboration.md) for
-completion gates and behavior when collaboration is disabled.
+planning-only stages. A helper with `trigger: on_message` rests until it is sent
+a message and then answers each one in its own turn; see
+[Helpers that wait for messages](collaboration.md#helpers-that-wait-for-messages)
+and [`examples/on-message-helper/`](https://github.com/akopichin/afm/tree/main/examples/on-message-helper).
+See [Helpers and collaboration](collaboration.md) for completion gates and
+behavior when collaboration is disabled.
 
 ## Flow fields (top level)
 

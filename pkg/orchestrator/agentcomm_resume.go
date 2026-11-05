@@ -217,7 +217,7 @@ func peerContinuation(rs state.RunState, stageID string, hint bus.EventType) (bu
 		return bus.EventPeerReplied, true
 	case ended:
 		return bus.EventPeerWaitEnded, true
-	case wakingExceptBatchAnswers(mesh, waiter):
+	case wakingExceptBatchAnswers(rs, waiter):
 		return bus.EventPeerQuestion, true
 	default:
 		return "", false
@@ -267,12 +267,17 @@ func episodeOutcome(mesh state.MeshState, episode []agentcomm.WaitID) (ready, en
 	return ready, ended
 }
 
-// wakingExceptBatchAnswers is HasWakingUnreadFor without the recipients' answers to the requests of a batch that
-// is still open: those wait in the inbox for the turn that continues the stage once the batch has ended, and must not
-// start one earlier.
-func wakingExceptBatchAnswers(mesh state.MeshState, waiter agentcomm.ParticipantID) bool {
+// wakingExceptBatchAnswers is HasWakingUnreadFor without what must not start a turn of waiter now: answers to the
+// requests of a batch still open, which wait for the turn after the whole batch, and the requests an on_message
+// helper has queued, each of which gets a turn of its own.
+func wakingExceptBatchAnswers(rs state.RunState, waiter agentcomm.ParticipantID) bool {
+	mesh := rs.Assistants.Mesh
+	var queued []agentcomm.MessageID
+	if taskID, ok := agentcomm.HelperTaskID(waiter); ok && rs.Assistants.Tasks[taskID] != nil {
+		queued = rs.Assistants.Tasks[taskID].PendingRequests
+	}
 	open := openBatches(mesh, waiter)
-	if len(open) == 0 {
+	if len(open) == 0 && len(queued) == 0 {
 		return mesh.HasWakingUnreadFor(waiter)
 	}
 	requests := map[agentcomm.MessageID]bool{}
@@ -283,6 +288,9 @@ func wakingExceptBatchAnswers(mesh state.MeshState, waiter agentcomm.Participant
 	}
 	filtered := mesh
 	filtered.Inbox = map[agentcomm.ParticipantID][]agentcomm.MessageID{waiter: slices.DeleteFunc(slices.Clone(mesh.Inbox[waiter]), func(id agentcomm.MessageID) bool {
+		if slices.Contains(queued, id) {
+			return true
+		}
 		m := mesh.Messages[id]
 		if m == nil || m.InReplyTo == nil || !requests[*m.InReplyTo] {
 			return false
@@ -572,7 +580,7 @@ func (o *Orchestrator) hasWakingUnread(participant agentcomm.ParticipantID) bool
 // turn" — the resume this triggers is CAS-protected exactly like T5.3's, so a redundant call here racing a
 // live trigger, or a second recovery pass, is always a silent no-op, never a second turn).
 func (o *Orchestrator) maybeResumeAwaitingPeerQuestion(ctx context.Context, participant agentcomm.ParticipantID) {
-	if !o.hasOpenMeshWaitFor(participant) || !wakingExceptBatchAnswers(o.opts.Store.Snapshot().Assistants.Mesh, participant) {
+	if !o.hasOpenMeshWaitFor(participant) || !wakingExceptBatchAnswers(o.opts.Store.Snapshot(), participant) {
 		return
 	}
 	if stageID, ok := stageIDFromMeshParticipant(participant); ok {

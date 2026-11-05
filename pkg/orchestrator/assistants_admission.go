@@ -38,7 +38,7 @@ type admittedTask struct {
 	Title   string
 	Trigger assistants.Trigger
 	// Status is the status the task starts in: queued (it runs now), watching (a watcher waits for its first
-	// pass), or "" — waiting_parent, when its stage has not started yet.
+	// pass, an on_message helper for its first request), or "" — waiting_parent, when its stage has not started yet.
 	Status  assistants.TaskStatus
 	Effects []state.Effect
 	Expect  state.Preconditions
@@ -81,6 +81,9 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	default:
 		return admittedTask{}, fmt.Errorf("assistants: unhandled scope %q", scope)
 	}
+	if err := rejectOnMessageTopLevel(req.Trigger, scope, req.StageID, stageActive); err != nil {
+		return admittedTask{}, err
+	}
 
 	if o.opts.AssistantsRegistry == nil {
 		return admittedTask{}, attachRejected(assistants.CodeFeatureDisabled, "no assistant profiles configured")
@@ -121,10 +124,11 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	task.Effects = []state.Effect{created}
 
 	// A run agent and a helper on a running stage start at once; a watcher waits in watching for its collector
-	// (fireWatcherTask starts every pass, the first included); a helper on a pending stage waits for it.
+	// (fireWatcherTask starts every pass, the first included), an on_message helper for a message addressed to
+	// it; a helper on a pending stage waits for the stage.
 	if scope == assistants.ScopeRun || stageActive {
 		task.Status = assistants.StatusQueued
-		if isWatcherTrigger(task.Trigger) {
+		if isWatcherTrigger(task.Trigger) || task.Trigger == assistants.TriggerOnMessage {
 			task.Status = assistants.StatusWatching
 		}
 		statusEff, err := taskStatusEffect(task.ID, task.Status, "")

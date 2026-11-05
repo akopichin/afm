@@ -39,6 +39,12 @@ This is what makes long runs reliable:
   migrated `state.json`, has no recorded past, so it is reported as incomplete
   rather than as `0s`. An offline CLI transition made on a crashed run
   is also a record, so it moves that boundary.
+- **Queues are projections too.** The request queue of an
+  [`on_message` helper](../collaboration.md#helpers-that-wait-for-messages) is
+  not stored anywhere else: it is derived from the message and task-status
+  records, so a resume or an offline read reconstructs the same waiting and
+  active requests as the live run (see the
+  [journal policy](../collaboration-journal.md#additive-fields)).
 - **Unique run ids.** `<run-name>-<timestamp>-<rand4hex>`, where `<run-name>` is
   the `--worktree` name when supplied and the flow name otherwise. The random suffix
   avoids collisions even within the same second.

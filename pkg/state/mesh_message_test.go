@@ -49,7 +49,7 @@ func TestMesh_ThreadTitleOverridePreservesOpeningDescriptorAndClone(t *testing.T
 	as := setupMeshThread(t, "a", "b")
 	update := &Control{Kind: "mesh_thread_title_updated", SchemaVersion: ControlSchemaVersion, Seq: 8,
 		Actor: Actor{Kind: "user"}, Target: Target{ThreadID: "th-1"}, Payload: json.RawMessage(`{"title":"Review"}`)}
-	if err := dispatchControlKind(&as, update, false); err != nil {
+	if err := applyKind(&as, update, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := as.Mesh.ThreadTitles["th-1"]; got.Title != "Review" || got.Seq != 8 {
@@ -64,13 +64,13 @@ func TestMesh_ThreadTitleOverridePreservesOpeningDescriptorAndClone(t *testing.T
 		t.Fatal("clone shares title map")
 	}
 	update.Seq, update.Payload = 10, json.RawMessage(`{"title":"","expected_title_seq":8}`)
-	if err := dispatchControlKind(&as, update, false); err != nil {
+	if err := applyKind(&as, update, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := as.Mesh.ThreadTitles["th-1"]; got.Title != "" || got.Seq != 10 {
 		t.Fatalf("cleared override = %+v", got)
 	}
-	if err := dispatchControlKind(&as, meshThreadOpenedControl("th-1", []string{"a", "b"}), false); err != nil {
+	if err := applyKind(&as, meshThreadOpenedControl("th-1", []string{"a", "b"}), false); err != nil {
 		t.Fatalf("original open after rename: %v", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestMesh_ThreadTitleUpdateValidatesDurableTransition(t *testing.T) {
 			as := setupMeshThread(t, "a")
 			c := &Control{Kind: kindMeshThreadTitleUpdated, SchemaVersion: ControlSchemaVersion, Seq: 4,
 				Actor: Actor{Kind: tc.actor}, Target: Target{ThreadID: tc.thread}, Payload: json.RawMessage(tc.payload)}
-			if err := dispatchControlKind(&as, c, false); err == nil {
+			if err := applyKind(&as, c, false); err == nil {
 				t.Fatal("invalid update accepted")
 			}
 			if len(as.Mesh.ThreadTitles) != 0 {
@@ -133,7 +133,7 @@ func TestMesh_MessageToNonMemberRejected(t *testing.T) {
 	mustApply(t, &as, meshParticipantAddedControl("ghost", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)))
 
 	c := meshMessageSentControl(1, "m1", "th-1", "a", []string{"ghost"}, string(agentcomm.MessageKindMessage), nil, "hi")
-	if err := dispatchControlKind(&as, c, false); err == nil {
+	if err := applyKind(&as, c, false); err == nil {
 		t.Fatal("message addressed to a non-member of the thread: want error, got nil")
 	}
 	if len(as.Mesh.Messages) != 0 {
@@ -151,7 +151,7 @@ func TestMesh_MessageInReplyToUnknownRejected(t *testing.T) {
 	as := setupMeshThread(t, "a", "b")
 
 	c := meshMessageSentControl(1, "m1", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindReply), strp("nope"), "re: x")
-	if err := dispatchControlKind(&as, c, false); err == nil {
+	if err := applyKind(&as, c, false); err == nil {
 		t.Fatal("in_reply_to naming an unknown message id: want error, got nil")
 	}
 	if len(as.Mesh.Messages) != 0 {
@@ -185,7 +185,7 @@ func TestMesh_DuplicateMessageSentIsNoop(t *testing.T) {
 	mustApply(t, &as, meshMessageSentControl(1, "m1", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one"))
 
 	dup := meshMessageSentControl(2, "m1", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one-again")
-	if err := dispatchControlKind(&as, dup, false); err == nil {
+	if err := applyKind(&as, dup, false); err == nil {
 		t.Fatal("re-applying mesh_message_sent with the same message id: want error, got nil")
 	}
 	if len(as.Mesh.Messages) != 1 {
@@ -243,7 +243,7 @@ func TestMesh_ReceiptLifecycle(t *testing.T) {
 func TestMesh_MessageSentDryRunMutatesNothing(t *testing.T) {
 	as := setupMeshThread(t, "a", "b")
 	c := meshMessageSentControl(1, "m1", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "q")
-	if err := dispatchControlKind(&as, c, true); err != nil {
+	if err := applyKind(&as, c, true); err != nil {
 		t.Fatalf("dryRun apply: %v", err)
 	}
 	if len(as.Mesh.Messages) != 0 {
@@ -274,7 +274,7 @@ func TestMesh_MessageSentRejectsAtMaxThreadMessages(t *testing.T) {
 	}
 
 	seq++
-	err := dispatchControlKind(&as, meshMessageSentControl(seq, "m-overflow", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
+	err := applyKind(&as, meshMessageSentControl(seq, "m-overflow", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
 	if err == nil {
 		t.Fatal("thread already at MaxThreadMessages: want an explicit rejection, got nil error")
 	}
@@ -294,7 +294,7 @@ func TestMesh_MessageSentRejectsAtThreadBudget(t *testing.T) {
 	for i := range 3 {
 		mustApply(t, &as, meshMessageSentControl(uint64(i+1), fmt.Sprintf("m%d", i), "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "q"))
 	}
-	err := dispatchControlKind(&as, meshMessageSentControl(4, "m-over", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), true)
+	err := applyKind(&as, meshMessageSentControl(4, "m-over", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), true)
 	var rej *OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != assistants.CodeBudgetExceeded {
 		t.Fatalf("4th message in a 3-message thread: err = %v, want budget_exceeded", err)
@@ -349,7 +349,7 @@ func TestMesh_MessageSentRejectsAtMaxInboxUnread(t *testing.T) {
 	seq++
 	mustApply(t, &as, meshThreadOpenedControl(overflowThread, []string{"a", "qa"}))
 	seq++
-	err := dispatchControlKind(&as, meshMessageSentControl(seq, "m-overflow", overflowThread, "a", []string{"qa"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
+	err := applyKind(&as, meshMessageSentControl(seq, "m-overflow", overflowThread, "a", []string{"qa"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
 	if err == nil {
 		t.Fatal("qa already at MaxInboxUnread: want an explicit rejection, got nil error")
 	}
@@ -369,7 +369,7 @@ func TestMesh_InboxCapacityCountsOnlyMessagesWaitingForHandover(t *testing.T) {
 	var seq uint64
 	send := func(id, thread, from, to string) error {
 		seq++
-		return dispatchControlKind(&as, meshMessageSentControl(seq, id, thread, from, []string{to}, string(agentcomm.MessageKindMessage), nil, "q"), false)
+		return applyKind(&as, meshMessageSentControl(seq, id, thread, from, []string{to}, string(agentcomm.MessageKindMessage), nil, "q"), false)
 	}
 	for i := range agentcomm.MaxInboxUnread {
 		thread := fmt.Sprintf("th-%d", i)

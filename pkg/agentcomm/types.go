@@ -10,7 +10,8 @@ const ProtocolVersion = 1
 // ParticipantID is a server-assigned id, stable and unique within one run. Higher layers mint it
 // in one of a few conventional forms — "user", "stage:<stageID>", "helper:<taskID>",
 // "run:<profileID>", "side:<runID>" — but this package treats it as an opaque string: parsing or
-// constructing that convention is the orchestrator's job, not this package's.
+// constructing that convention is the orchestrator's job, except a helper's id (helper_id.go), which
+// pkg/state maps to its task as well.
 type ParticipantID string
 
 // ParticipantKind says what role a participant plays. It never changes for a given

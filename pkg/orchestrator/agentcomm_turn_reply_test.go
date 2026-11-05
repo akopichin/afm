@@ -221,7 +221,7 @@ func TestTurnReply_OwnReplyRacingTheFinishWins(t *testing.T) {
 		t.Fatalf("turn replies planned = %d, want 1", len(replies))
 	}
 	sendAs(t, o, "op-own", res.ThreadID, res.ParticipantID, meshUserParticipantID, "my own answer", res.MessageID, false)
-	resultEff, err := taskResultEffect(res.TaskID, result)
+	resultEff, err := taskResultEffect(res.TaskID, state.TaskResultPayload{Result: result})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/server"
 )
@@ -360,16 +361,19 @@ func newAgentWaitStatusCmd() *cobra.Command {
 // newAgentSpawnCmd registers `afm agent spawn`: a stage agent starts a temporary helper of a profile for one
 // instruction. It returns at once with the task, participant and message ids; the message id is the request the
 // helper answers, so wait for it like for any other (`wait --condition reply_to_all --message-ids ...` for several).
-// Nothing else is the agent's to choose — the stage, the command and the model follow from the caller and the profile.
+// With --trigger on_message the helper is created waiting for messages and no request is sent, so there is no message
+// id: send it a message yourself. Nothing else is the agent's to choose — the stage, the command and the model follow
+// from the caller and the profile.
 func newAgentSpawnCmd() *cobra.Command {
-	var profile, title, instruction string
+	var profile, title, instruction, trigger string
 	var requestID *string
 	c := &cobra.Command{
 		Use:   "spawn",
 		Short: "Start a temporary helper of a profile for one instruction (stage agents only)",
 		Long: "Start a one-shot advisory helper. It returns task_id, participant_id and message_id: the message is the request " +
 			"the helper answers. Wait for it with `afm agent wait --condition reply_to --message-id <message_id>`, or for several helpers " +
-			"at once with --condition reply_to_all --message-ids <id1,id2,...>. Read the full result with `afm agent helper-result --task-id <task_id>`.",
+			"at once with --condition reply_to_all --message-ids <id1,id2,...>. Read the full result with `afm agent helper-result --task-id <task_id>`. " +
+			"With --trigger on_message the helper waits for messages instead: no request is sent and there is no message_id.",
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
@@ -379,7 +383,13 @@ func newAgentSpawnCmd() *cobra.Command {
 						return nil, newAgentCLIError("invalid_request", "%s is required", r.flag)
 					}
 				}
+				if trigger != "" && trigger != string(assistants.TriggerOneShot) && trigger != string(assistants.TriggerOnMessage) {
+					return nil, newAgentCLIError("invalid_request", "--trigger must be %q or %q, got %q", assistants.TriggerOneShot, assistants.TriggerOnMessage, trigger)
+				}
 				reqBody := map[string]any{"request_id": *requestID, "profile_id": profile, "title": title, "instruction": instruction}
+				if trigger != "" {
+					reqBody["trigger"] = trigger
+				}
 				var out server.MeshSpawnReceipt
 				if err := c2.do("POST", "spawn", reqBody, &out); err != nil {
 					return nil, err
@@ -391,15 +401,17 @@ func newAgentSpawnCmd() *cobra.Command {
 	c.Flags().StringVar(&profile, "profile", "", "profile id of the helper (required)")
 	c.Flags().StringVar(&title, "title", "", "short title of the helper's task (required)")
 	c.Flags().StringVar(&instruction, "instruction", "", "what the helper must do (required)")
+	c.Flags().StringVar(&trigger, "trigger", "", "one_shot (default): answer the instruction once; on_message: wait for messages and answer each")
 	requestID = requestIDFlag(c)
 	return c
 }
 
 // newAgentHelperResultCmd registers `afm agent helper-result`: the status of one helper you spawned and, once it
 // finished, its full result (verdict, findings, evidence) — the inbox reply only summarises it. A helper that is
-// still running shows its status and no result; one that failed shows status_reason.
+// still running shows its status and no result; one that failed shows status_reason. With --message-id it shows
+// how that request of an on_message helper stands (pending, active, result, failed) and its own answer.
 func newAgentHelperResultCmd() *cobra.Command {
-	var taskID string
+	var taskID, messageID string
 	c := &cobra.Command{
 		Use:          "helper-result",
 		Short:        "Read the status and full result of a helper you spawned",
@@ -409,8 +421,12 @@ func newAgentHelperResultCmd() *cobra.Command {
 				if strings.TrimSpace(taskID) == "" {
 					return nil, newAgentCLIError("invalid_request", "--task-id is required")
 				}
+				query := "helper?task_id=" + url.QueryEscape(taskID)
+				if messageID != "" {
+					query += "&message_id=" + url.QueryEscape(messageID)
+				}
 				var out map[string]any
-				if err := c2.do("GET", "helper?task_id="+url.QueryEscape(taskID), nil, &out); err != nil {
+				if err := c2.do("GET", query, nil, &out); err != nil {
 					return nil, err
 				}
 				return out, nil
@@ -418,6 +434,7 @@ func newAgentHelperResultCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&taskID, "task-id", "", "task id printed by `afm agent spawn` (required)")
+	c.Flags().StringVar(&messageID, "message-id", "", "id of your request to an on_message helper: show where it stands and its answer")
 	return c
 }
 

@@ -47,7 +47,7 @@ func TestMesh_MessageRejectionsAreTyped(t *testing.T) {
 			if tc.prep != nil {
 				tc.prep(&as)
 			}
-			err := dispatchControlKind(&as, tc.c, false)
+			err := applyKind(&as, tc.c, false)
 			var rej *OperationRejectedError
 			if !errors.As(err, &rej) {
 				t.Fatalf("err = %v, want *OperationRejectedError", err)

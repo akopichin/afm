@@ -157,26 +157,30 @@ func toMeshWaitReceipt(r orchestrator.WaitReceipt) server.MeshWaitReceipt {
 	return out
 }
 
-// Spawn starts a helper for the token's stage agent; the body names only the profile, the title and the instruction.
+// Spawn starts a helper for the token's stage agent; the body names only the profile, the title, the instruction
+// and the trigger.
 func (a agentMeshActions) Spawn(ctx context.Context, requestID, actor string, req server.MeshSpawnRequest) (server.MeshSpawnReceipt, error) {
 	res, err := a.orch.SpawnHelper(ctx, orchestrator.SpawnHelperRequest{
-		OperationID: requestID, ProfileID: assistants.ProfileID(req.ProfileID), Title: req.Title, Instruction: req.Instruction, Actor: meshActor(actor),
+		OperationID: requestID, ProfileID: assistants.ProfileID(req.ProfileID), Title: req.Title, Instruction: req.Instruction,
+		Trigger: assistants.Trigger(req.Trigger), Actor: meshActor(actor),
 	})
 	if err != nil {
 		return server.MeshSpawnReceipt{}, err
 	}
-	return server.MeshSpawnReceipt{TaskID: string(res.TaskID), ParticipantID: string(res.ParticipantID), MessageID: string(*res.MessageID)}, nil
+	receipt := server.MeshSpawnReceipt{TaskID: string(res.TaskID), ParticipantID: string(res.ParticipantID)}
+	if res.MessageID != nil { // an on_message helper is created without a request
+		receipt.MessageID = string(*res.MessageID)
+	}
+	return receipt, nil
 }
 
-// HelperResult reads one helper of the token's stage.
-func (a agentMeshActions) HelperResult(_ context.Context, actor, taskID string) (server.MeshHelperResult, error) {
-	view, err := a.orch.HelperResult(meshActor(actor), assistants.TaskID(taskID))
+// HelperResult reads one helper of the token's stage, or one request of it.
+func (a agentMeshActions) HelperResult(_ context.Context, actor, taskID, messageID string) (server.MeshHelperResult, error) {
+	view, err := a.orch.HelperResult(meshActor(actor), assistants.TaskID(taskID), agentcomm.MessageID(messageID))
 	if err != nil {
 		return server.MeshHelperResult{}, err
 	}
-	return server.MeshHelperResult{
-		TaskID: string(view.TaskID), Title: view.Title, Status: string(view.Status), StatusReason: view.StatusReason, Result: view.Result,
-	}, nil
+	return server.MeshHelperResultOf(view), nil
 }
 
 func (a agentMeshActions) CancelWait(ctx context.Context, requestID, actor string, req server.MeshCancelWaitRequest) error {

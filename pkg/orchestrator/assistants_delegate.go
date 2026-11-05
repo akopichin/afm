@@ -97,6 +97,9 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 	if len(children) > assistants.MaxDelegateChildren {
 		return nil, fmt.Errorf("assistants: %d children exceeds the cap of %d", len(children), assistants.MaxDelegateChildren)
 	}
+	if err := rejectOnMessageDelegation(children, continuation); err != nil {
+		return nil, err
+	}
 	// A retry of an already-committed admission replays it, whatever changed since (the config, the parent's status).
 	if op, committed, err := o.opts.Store.CommittedOperation(operationID, opKindAttachChildren); err != nil || committed {
 		if err != nil {
@@ -628,13 +631,19 @@ func (o *Orchestrator) settleAssistantsAfterRestart() {
 	}
 }
 
-// resumeAssistantsAfterRestart is recoverAssistants' second half: it starts what the restart left ready.
+// resumeAssistantsAfterRestart is recoverAssistants' second half: it starts what the restart left ready. First it
+// closes the on_message helpers whose close the crash cut off: closing needs no model, so it does not wait for
+// collaboration to be enabled, just as it does not live.
 func (o *Orchestrator) resumeAssistantsAfterRestart(ctx context.Context) {
+	rs := o.opts.Store.Snapshot()
+	ids := slices.Sorted(maps.Keys(rs.Assistants.Tasks))
+	for _, id := range ids {
+		o.settleOnMessageTask(id)
+	}
 	if !o.opts.AssistantsEnabled {
 		return
 	}
-	rs := o.opts.Store.Snapshot()
-	for _, id := range slices.Sorted(maps.Keys(rs.Assistants.Tasks)) {
+	for _, id := range ids {
 		t := rs.Assistants.Tasks[id]
 		switch t.Status {
 		case assistants.StatusQueued:
@@ -658,6 +667,10 @@ func (o *Orchestrator) resumeAssistantsAfterRestart(ctx context.Context) {
 			// The crash may have come between the stage's result and the pass it owes this helper.
 			if isCompletionHelper(t.Task) {
 				o.issueCompletionPasses(ctx, t.RootStageID)
+			}
+			// Or between a request and its wake.
+			if state.IsOnMessageHelper(t.Task) {
+				o.wakeOnMessageTask(ctx, id)
 			}
 		default:
 			// waiting_parent/paused/terminal: nothing for a fresh process to do on its own —

@@ -69,7 +69,7 @@ func TestMesh_WaitResolvedTwiceIsNoop(t *testing.T) {
 		t.Fatal("first resolution did not take effect")
 	}
 
-	if err := dispatchControlKind(&as, meshWaitResolvedControl("w1", string(agentcomm.WaitExpired), "late deadline"), false); err != nil {
+	if err := applyKind(&as, meshWaitResolvedControl("w1", string(agentcomm.WaitExpired), "late deadline"), false); err != nil {
 		t.Fatalf("second resolution of an already-resolved wait must not error: %v", err)
 	}
 	if as.Mesh.Waits["w1"].Status != agentcomm.WaitReady {
@@ -89,7 +89,7 @@ func TestMesh_WaitCancelIsIdempotent(t *testing.T) {
 	if as.Mesh.Waits["w1"].Status != agentcomm.WaitCancelled {
 		t.Fatal("cancel did not take effect")
 	}
-	if err := dispatchControlKind(&as, meshWaitResolvedControl("w1", string(agentcomm.WaitCancelled), "repeated cancel"), false); err != nil {
+	if err := applyKind(&as, meshWaitResolvedControl("w1", string(agentcomm.WaitCancelled), "repeated cancel"), false); err != nil {
 		t.Fatalf("repeated cancel must not error: %v", err)
 	}
 	if as.Mesh.Waits["w1"].Status != agentcomm.WaitCancelled {

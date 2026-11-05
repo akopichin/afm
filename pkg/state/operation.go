@@ -482,7 +482,7 @@ func (rs RunState) ProjectEffects(effects []Effect) (RunState, error) {
 	// applyOperationCommitted works on its own deep copy and replaces projected.Assistants with it only on
 	// success, so rs keeps every map it shares with projected untouched.
 	c := &Control{Kind: kindOperationCommitted, SchemaVersion: ControlSchemaVersion, Payload: payload}
-	if err := applyOperationCommitted(&projected.Assistants, c, false); err != nil {
+	if err := applyOperationCommitted(&projected, c, false); err != nil {
 		return RunState{}, err
 	}
 	return projected, nil

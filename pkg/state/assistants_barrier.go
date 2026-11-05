@@ -107,11 +107,21 @@ func (as AssistantsState) RequiredBlocker(stageID string) (TaskState, bool) {
 // longer tracks it at all — this check is the only thing left that still does. An open-but-empty thread is not
 // a task at all, so it was never a blocker here either way.
 //
+// An on_message helper is judged by its request queue, not its status: waiting for a message it is idle like a
+// run agent, while an accepted request holds the run in any status, queued and held included.
+//
 // ok=false means nothing currently blocks a run-level completion decision. Map iteration order is irrelevant:
 // only whether SOME blocker exists matters to the caller, never which one.
 func (as AssistantsState) RunBlocker() (TaskState, bool) {
 	for _, t := range as.Tasks {
-		if t == nil || t.Status.Terminal() || t.Status == assistants.StatusQueued {
+		if t == nil || t.Status.Terminal() {
+			continue
+		}
+		if IsOnMessageHelper(t.Task) {
+			if OnMessageIdle(*t) {
+				continue
+			}
+		} else if t.Status == assistants.StatusQueued {
 			continue
 		}
 		return *t, true
@@ -126,10 +136,15 @@ func (as AssistantsState) RunBlocker() (TaskState, bool) {
 // from RequiredBlocker (gate already satisfied, or nothing required attached) is "no decision pending" — a
 // race between the stage's status and this read, not a durable state. Used both by isIdle (state.go) and by
 // pkg/server's StageView (Этап 7, T7.9) to decide whether awaiting_assistants counts as dashboard attention.
+// An idle on_message blocker needs a person — a new request or a decision — unless its last request passed,
+// which the system closes on its own; while a request is open it is machine work.
 func (as AssistantsState) NeedsHumanDecision(stageID string) bool {
 	blocker, ok := as.RequiredBlocker(stageID)
 	if !ok {
 		return false
+	}
+	if OnMessageIdle(blocker) {
+		return blocker.LastOutcome != RequestOutcomeResult || blocker.LastVerdict != assistants.VerdictPass
 	}
 	switch blocker.Status {
 	case assistants.StatusFailed, assistants.StatusCancelled, assistants.StatusPaused:

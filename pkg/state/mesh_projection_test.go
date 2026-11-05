@@ -32,7 +32,7 @@ func meshThreadOpenedControl(id string, members []string) *Control {
 func TestMesh_ParticipantAddedProjects(t *testing.T) {
 	as := newAssistantsState()
 	c := meshParticipantAddedControl("user", string(agentcomm.KindUser), string(agentcomm.ScopeRun))
-	if err := dispatchControlKind(&as, c, false); err != nil {
+	if err := applyKind(&as, c, false); err != nil {
 		t.Fatalf("dispatchControlKind: %v", err)
 	}
 	p, ok := as.Mesh.Participants[agentcomm.ParticipantID("user")]
@@ -50,11 +50,11 @@ func TestMesh_ParticipantAddedProjects(t *testing.T) {
 func TestMesh_DuplicateParticipantRejected(t *testing.T) {
 	as := newAssistantsState()
 	c := meshParticipantAddedControl("user", string(agentcomm.KindUser), string(agentcomm.ScopeRun))
-	if err := dispatchControlKind(&as, c, false); err != nil {
+	if err := applyKind(&as, c, false); err != nil {
 		t.Fatalf("first add: %v", err)
 	}
 	c2 := meshParticipantAddedControl("user", string(agentcomm.KindHelper), string(agentcomm.ScopeStage))
-	if err := dispatchControlKind(&as, c2, false); err == nil {
+	if err := applyKind(&as, c2, false); err == nil {
 		t.Fatal("duplicate participant id: want error, got nil")
 	}
 	// First participant's fields must be untouched by the rejected second attempt.
@@ -69,7 +69,7 @@ func TestMesh_ThreadOpenedProjects(t *testing.T) {
 	mustApply(t, &as, meshParticipantAddedControl("b", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)))
 
 	c := meshThreadOpenedControl("th-1", []string{"a", "b"})
-	if err := dispatchControlKind(&as, c, false); err != nil {
+	if err := applyKind(&as, c, false); err != nil {
 		t.Fatalf("dispatchControlKind: %v", err)
 	}
 	th, ok := as.Mesh.Threads[agentcomm.ThreadID("th-1")]
@@ -88,7 +88,7 @@ func TestMesh_ThreadOpenedUnknownMemberRejected(t *testing.T) {
 	as := newAssistantsState()
 	mustApply(t, &as, meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
 	c := meshThreadOpenedControl("th-1", []string{"a", "ghost"})
-	if err := dispatchControlKind(&as, c, false); err == nil {
+	if err := applyKind(&as, c, false); err == nil {
 		t.Fatal("thread with unknown member: want error, got nil")
 	}
 	if _, ok := as.Mesh.Threads["th-1"]; ok {
@@ -102,13 +102,13 @@ func TestMesh_ThreadClosedTwiceRejected(t *testing.T) {
 	mustApply(t, &as, meshThreadOpenedControl("th-1", []string{"a"}))
 
 	closeCtl := &Control{Kind: kindMeshThreadClosed, SchemaVersion: ControlSchemaVersion, Target: Target{ThreadID: "th-1"}}
-	if err := dispatchControlKind(&as, closeCtl, false); err != nil {
+	if err := applyKind(&as, closeCtl, false); err != nil {
 		t.Fatalf("first close: %v", err)
 	}
 	if as.Mesh.Threads["th-1"].Status != agentcomm.ThreadClosed {
 		t.Fatal("thread not closed")
 	}
-	if err := dispatchControlKind(&as, closeCtl, false); err == nil {
+	if err := applyKind(&as, closeCtl, false); err == nil {
 		t.Fatal("closing an already-closed thread: want error, got nil")
 	}
 }
@@ -129,7 +129,7 @@ func TestMesh_UnknownKindFailsClosed(t *testing.T) {
 func TestMesh_DryRunMutatesNothing(t *testing.T) {
 	as := newAssistantsState()
 	c := meshParticipantAddedControl("user", string(agentcomm.KindUser), string(agentcomm.ScopeRun))
-	if err := dispatchControlKind(&as, c, true); err != nil {
+	if err := applyKind(&as, c, true); err != nil {
 		t.Fatalf("dryRun apply: %v", err)
 	}
 	if len(as.Mesh.Participants) != 0 || len(as.Mesh.ParticipantOrder) != 0 {
@@ -139,7 +139,7 @@ func TestMesh_DryRunMutatesNothing(t *testing.T) {
 	mustApply(t, &as, meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
 	mustApply(t, &as, meshParticipantAddedControl("b", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)))
 	threadCtl := meshThreadOpenedControl("th-1", []string{"a", "b"})
-	if err := dispatchControlKind(&as, threadCtl, true); err != nil {
+	if err := applyKind(&as, threadCtl, true); err != nil {
 		t.Fatalf("dryRun thread: %v", err)
 	}
 	if len(as.Mesh.Threads) != 0 {
@@ -182,10 +182,18 @@ func TestMesh_CloneIsDeep(t *testing.T) {
 	}
 }
 
+// applyKind runs dispatchControlKind for a test that holds only the assistants projection: a run without stages.
+func applyKind(as *AssistantsState, c *Control, dryRun bool) error {
+	rs := RunState{Assistants: *as}
+	err := dispatchControlKind(&rs, c, dryRun)
+	*as = rs.Assistants
+	return err
+}
+
 // mustApply applies c to as, failing the test immediately on error.
 func mustApply(t *testing.T, as *AssistantsState, c *Control) {
 	t.Helper()
-	if err := dispatchControlKind(as, c, false); err != nil {
+	if err := applyKind(as, c, false); err != nil {
 		t.Fatalf("dispatchControlKind(%s): %v", c.Kind, err)
 	}
 }
@@ -262,7 +270,7 @@ func TestMesh_LoopTickMayBeAddressedToItsOwnCreator(t *testing.T) {
 
 func TestMesh_OrdinarySelfSendStaysRejected(t *testing.T) {
 	as := loopTickAs(t, "agent-1", "agent-1")
-	err := dispatchControlKind(&as, loopTickControl(10, loopTickThread, "", "agent-1", "agent-1"), false)
+	err := applyKind(&as, loopTickControl(10, loopTickThread, "", "agent-1", "agent-1"), false)
 	requireRejected(t, err, assistants.CodeInvalidRequest)
 	if len(as.Mesh.Messages) != 0 {
 		t.Fatal("a rejected self-send left a message behind")
@@ -285,7 +293,7 @@ func TestMesh_LoopMarkerMustMatchItsLoop(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			as := loopTickAs(t, tc.creator, tc.target)
-			requireRejected(t, dispatchControlKind(&as, tc.control, false), assistants.CodeInvalidRequest)
+			requireRejected(t, applyKind(&as, tc.control, false), assistants.CodeInvalidRequest)
 			if len(as.Mesh.Messages) != 0 {
 				t.Fatal("a rejected tick left a message behind")
 			}
@@ -298,7 +306,7 @@ func TestMesh_LoopTickOfAnotherThreadIsRejected(t *testing.T) {
 	payload, _ := json.Marshal(MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeRun), Members: []string{"agent-1", "agent-2"}})
 	mustApply(t, &as, &Control{Kind: kindMeshThreadOpened, SchemaVersion: ControlSchemaVersion, Actor: Actor{Kind: "system"}, Target: Target{ThreadID: "th-chat"}, Payload: payload})
 
-	requireRejected(t, dispatchControlKind(&as, loopTickControl(10, "th-chat", "loop-1", "agent-1", "agent-2"), false), assistants.CodeInvalidRequest)
+	requireRejected(t, applyKind(&as, loopTickControl(10, "th-chat", "loop-1", "agent-1", "agent-2"), false), assistants.CodeInvalidRequest)
 }
 
 func TestMesh_LoopTickToAnotherTargetKeepsItsMarker(t *testing.T) {

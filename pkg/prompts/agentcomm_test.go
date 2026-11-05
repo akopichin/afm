@@ -619,3 +619,51 @@ func TestAgentCommHelpersBlock_ListsIDTitleAndStatusOnly(t *testing.T) {
 		t.Fatalf("a title must not close the block:\n%s", block)
 	}
 }
+
+// A stage agent learns how to use an on_message helper: spawn without a request, one request per message id,
+// the answer of exactly that request, and that AFM returns the helper to waiting.
+func TestAgentComm_StageAgentIsTaughtOnMessageHelpers(t *testing.T) {
+	stage := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, CanSpawnHelpers: true})
+	for _, want := range []string{
+		"--trigger on_message",
+		"afm agent send --to <helper alias> --kind request",
+		"--condition reply_to --message-id <message_id>",
+		"afm agent helper-result --task-id <task_id> --message-id <message_id>",
+		"`pending`, `active`, `result` or `failed`",
+		"returns it to waiting by itself",
+		"new thread",
+	} {
+		if !strings.Contains(stage, want) {
+			t.Errorf("a stage agent's block lacks %q:\n%s", want, stage)
+		}
+	}
+}
+
+func TestAgentCommHelpersBlock_MarksOnMessageHelpers(t *testing.T) {
+	block := AgentCommHelpersBlock([]SpawnedHelper{
+		{TaskID: "t-1", Title: "Review A", Status: "completed"},
+		{TaskID: "t-2", Title: "Specialist", Status: "watching", OnMessage: true},
+	}, 0)
+	if !strings.Contains(block, `- t-1 "Review A": completed`) || !strings.Contains(block, `- t-2 "Specialist" (on_message): watching`) {
+		t.Fatalf("block does not mark only the on_message helper:\n%s", block)
+	}
+	if !strings.Contains(block, "--message-id") {
+		t.Fatalf("block does not say how to read one request:\n%s", block)
+	}
+}
+
+// The turn protocol of an on_message helper: the current request, a result per request, no standing wait.
+func TestOnMessageTurnBlock_ExplainsTheTurnProtocol(t *testing.T) {
+	block := OnMessageTurnBlock()
+	for _, want := range []string{
+		"current request",
+		"<inbox>",
+		"returns you to waiting by itself",
+		"Do not register an `afm agent wait`",
+		"assigned skills",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("turn block lacks %q:\n%s", want, block)
+		}
+	}
+}

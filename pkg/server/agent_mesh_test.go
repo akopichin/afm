@@ -57,6 +57,7 @@ type fakeAgentMeshActions struct {
 	spawnErr       error
 	helperActor    string
 	helperTaskID   string
+	helperMessage  string
 	helperResult   MeshHelperResult
 	helperErr      error
 	loops          []orchestrator.LoopView
@@ -151,13 +152,17 @@ func (f *fakeAgentMeshActions) Spawn(ctx context.Context, requestID, actor strin
 	if f.spawnErr != nil {
 		return MeshSpawnReceipt{}, f.spawnErr
 	}
-	return MeshSpawnReceipt{TaskID: "t-" + requestID, ParticipantID: "helper:t-" + requestID, MessageID: "mm-" + requestID}, nil
+	receipt := MeshSpawnReceipt{TaskID: "t-" + requestID, ParticipantID: "helper:t-" + requestID}
+	if req.Trigger != "on_message" { // an on_message helper is created without a request
+		receipt.MessageID = "mm-" + requestID
+	}
+	return receipt, nil
 }
 
-func (f *fakeAgentMeshActions) HelperResult(ctx context.Context, actor, taskID string) (MeshHelperResult, error) {
+func (f *fakeAgentMeshActions) HelperResult(ctx context.Context, actor, taskID, messageID string) (MeshHelperResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.helperActor, f.helperTaskID = actor, taskID
+	f.helperActor, f.helperTaskID, f.helperMessage = actor, taskID, messageID
 	return f.helperResult, f.helperErr
 }
 
@@ -728,6 +733,28 @@ func TestAgentMesh_Spawn_NeedsRequestIDProfileTitleAndInstruction(t *testing.T) 
 	}
 }
 
+// An on_message helper is spawned with no request: the trigger reaches the Service and the receipt has no
+// message_id.
+func TestAgentMesh_Spawn_OnMessageTriggerReachesTheServiceAndReceiptHasNoMessageID(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := postAgentMesh(t, srv, "tok-A", "spawn", map[string]any{
+		"request_id": "r1", "profile_id": "reviewer", "title": "Review", "instruction": "look", "trigger": "on_message",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (%s)", w.Code, w.Body.String())
+	}
+	if want := (MeshSpawnRequest{ProfileID: "reviewer", Title: "Review", Instruction: "look", Trigger: "on_message"}); fake.lastSpawn != want {
+		t.Fatalf("Service got %+v, want %+v", fake.lastSpawn, want)
+	}
+	want := `{"task_id":"t-r1","participant_id":"helper:t-r1"}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
+	}
+}
+
 // The stage is the token's, and nothing else about the helper is the client's to choose: a stage, scope, mode,
 // command, model or actor in the body is ignored.
 func TestAgentMesh_Spawn_StageComesFromTheTokenAndExtraFieldsAreIgnored(t *testing.T) {
@@ -737,7 +764,7 @@ func TestAgentMesh_Spawn_StageComesFromTheTokenAndExtraFieldsAreIgnored(t *testi
 
 	w := postAgentMesh(t, srv, "tok-A", "spawn", map[string]any{
 		"request_id": "r1", "profile_id": "reviewer", "title": "Review", "instruction": "look",
-		"stage_id": "s2", "scope": "run", "mode": "required", "trigger": "watcher", "command": "rm -rf /", "model": "x",
+		"stage_id": "s2", "scope": "run", "mode": "required", "watcher": true, "command": "rm -rf /", "model": "x",
 		"actor": "user", "sender_id": "user", "capabilities": []string{"write"},
 	})
 	if w.Code != http.StatusOK {
@@ -803,6 +830,33 @@ func TestAgentMesh_HelperResult_ReadsForTheTokenActorByTaskID(t *testing.T) {
 	w = getAgentMesh(srv, "tok-A", "helper?task_id=t-2")
 	if got, want := strings.TrimSpace(w.Body.String()), `{"task_id":"t-2","title":"Other","status":"running"}`; w.Code != http.StatusOK || got != want {
 		t.Fatalf("HTTP %d, body = %s, want %s", w.Code, got, want)
+	}
+}
+
+// A message id narrows the answer to one request of an on_message helper; the caller is still the token's actor.
+func TestAgentMesh_HelperResult_PassesTheMessageIDAndShowsTheRequest(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	fake.helperResult = MeshHelperResult{
+		TaskID: "t-1", Title: "Spec", Status: "watching", Generation: 2,
+		Request: &MeshHelperRequest{MessageID: "mm-7", State: "result", Turn: 3},
+		Result:  json.RawMessage(`{"summary":"done"}`),
+	}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := getAgentMesh(srv, "tok-A", "helper?task_id=t-1&message_id=mm-7")
+	if w.Code != http.StatusOK || fake.helperActor != "stage:s1" || fake.helperMessage != "mm-7" {
+		t.Fatalf("HTTP %d, actor %q, message %q", w.Code, fake.helperActor, fake.helperMessage)
+	}
+	want := `{"task_id":"t-1","title":"Spec","status":"watching","generation":2,"request":{"message_id":"mm-7","state":"result","turn":3},"result":{"summary":"done"}}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
+	}
+
+	// Without the parameter the helper's last result is asked for, as before.
+	getAgentMesh(srv, "tok-A", "helper?task_id=t-1")
+	if fake.helperMessage != "" {
+		t.Fatalf("message id = %q, want none", fake.helperMessage)
 	}
 }
 

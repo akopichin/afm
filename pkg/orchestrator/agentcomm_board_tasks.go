@@ -328,8 +328,8 @@ func (o *Orchestrator) messageBody(body string) string {
 }
 
 // assignableParticipant checks that id can take a new assignment now: a known agent that can receive
-// messages, is not resting in a state no message wakes it from and has the board task protocol in its context
-// (the Assistant has not).
+// messages, is not resting in a state no message wakes it from — an on_message helper's watching is not one — and
+// has the board task protocol in its context (the Assistant has not).
 func assignableParticipant(rs state.RunState, id agentcomm.ParticipantID) error {
 	p, ok := resolveParticipant(rs, id)
 	switch {
@@ -343,7 +343,7 @@ func assignableParticipant(rs state.RunState, id agentcomm.ParticipantID) error 
 		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s cannot take work (%s)", id, p.UnreachableReason)}
 	}
 	if taskID, ok := participantTask(rs, id); ok {
-		if t := rs.Assistants.Tasks[taskID]; t != nil && (t.Status == assistants.StatusWatching || t.Status == assistants.StatusWaitingParent) {
+		if t := rs.Assistants.Tasks[taskID]; t != nil && ((t.Status == assistants.StatusWatching && !state.IsOnMessageHelper(t.Task)) || t.Status == assistants.StatusWaitingParent) {
 			return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s is %s: passive helper is not woken for new work", id, t.Status)}
 		}
 	}

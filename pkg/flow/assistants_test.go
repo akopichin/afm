@@ -293,6 +293,46 @@ stages:
 	}
 }
 
+func TestStageAssistants_OnMessageTrigger(t *testing.T) {
+	yamlDoc := `
+name: t
+stages:
+  - id: s1
+    agents: [auto]
+    assistants:
+      - profile: qa
+        trigger: on_message
+`
+	f, err := flow.ParseFile(writeTemp(t, yamlDoc))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if got := f.Stages[0].Assistants[0].Trigger; got != assistants.TriggerOnMessage {
+		t.Fatalf("Trigger = %q, want %q", got, assistants.TriggerOnMessage)
+	}
+}
+
+func TestStageAssistants_InvalidTriggerErrorListsEveryValue(t *testing.T) {
+	yamlDoc := `
+name: t
+stages:
+  - id: s1
+    agents: [auto]
+    assistants:
+      - profile: reviewer
+        trigger: on_complete
+`
+	_, err := flow.ParseFile(writeTemp(t, yamlDoc))
+	if err == nil {
+		t.Fatal("ParseFile: want error, got nil")
+	}
+	for _, trigger := range []assistants.Trigger{assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage} {
+		if !strings.Contains(err.Error(), string(trigger)) {
+			t.Fatalf("error = %q, want it to list %q", err.Error(), trigger)
+		}
+	}
+}
+
 func TestStageAssistants_SameProfileAcrossDifferentStagesIsValid(t *testing.T) {
 	yamlDoc := `
 name: t

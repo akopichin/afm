@@ -538,8 +538,8 @@
         },
         "trigger": {
           "type": "string",
-          "enum": ["", "one_shot", "checkpoints", "on_completion"],
-          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion."
+          "enum": ["", "one_shot", "checkpoints", "on_completion", "on_message"],
+          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion. on_message: waits for messages addressed to it and answers each in its own turn."
         },
         "skills": { "$ref": "#/definitions/skillNames" },
         "skills_dir": { "$ref": "#/definitions/skillsDir" }

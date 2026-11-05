@@ -441,11 +441,13 @@ func (o *Orchestrator) announceMessage(req SendRequest, messageID agentcomm.Mess
 // (notifyAndResumeNewlyReadyWaits owns that case) may still need a bounded turn to read and answer it — a
 // genuine counter-question, not the reply it is waiting for. A role attached with no first message sits
 // queued until somebody writes to it: its first addressed message starts it (maybeScheduleTask no-ops for
-// anything not queued).
+// anything not queued). An on_message helper resting in watching is put in the queue for the request first
+// (wakeOnMessageTask).
 func (o *Orchestrator) wakeRecipients(runCtx context.Context, recipients []agentcomm.ParticipantID) {
 	for _, r := range recipients {
 		o.maybeResumeAwaitingPeerQuestion(runCtx, r)
 		if taskID, ok := o.taskIDFromMeshParticipant(r); ok {
+			o.wakeOnMessageTask(runCtx, taskID)
 			o.maybeScheduleTask(runCtx, taskID)
 		}
 	}

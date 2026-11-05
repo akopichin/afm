@@ -245,7 +245,8 @@ stages:
 
 A single name (`assistants: reviewer`) or a single object also works. List order
 is preserved. The object accepts `profile` plus optional `title`, `instruction`,
-`mode`, `trigger`, `skills`, and `skills_dir`. Defaults are `advisory` and
+`mode`, `trigger` (`one_shot`, `checkpoints`, `on_completion` or `on_message`),
+`skills`, and `skills_dir`. Defaults are `advisory` and
 `one_shot`; the mode and trigger choices have the same meaning as in the dashboard
 below. `skills` and `skills_dir` work as for
 [stage agents](flow-reference.md#agent-skills); a helper does not inherit its
@@ -365,6 +366,9 @@ Choose when it runs:
 - **On stage completion** starts only after the stage's own result is ready,
   and then runs one final pass. See
   [When an on-completion helper starts](#when-an-on-completion-helper-starts).
+- **On message** waits idle until someone sends it a message, answers each
+  one in its own turn and stays attached. See
+  [Helpers that wait for messages](#helpers-that-wait-for-messages).
 
 Attached helpers appear as child rows in the stage rail. Select one to see its
 status, verdict (when it gave one), findings, delegation breadcrumb, and, for
@@ -507,6 +511,182 @@ named, but the stage's agent does not read it. The dashboard has no separate Dis
 proposals are still recorded by the run. In the Assistant, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
+
+### Helpers that wait for messages
+
+A helper with `trigger: on_message` is a standing helper of one stage. It
+starts no process when it is attached: it rests in the status `watching`
+(**Waiting for message** in the dashboard), uses no command slot and has no
+pending wait. Each message addressed to it is a **request**: the helper runs one
+turn for it, saves a result bound to that request, replies to the sender and
+rests again. The same task answers any number of requests, and what the helper
+does is decided by its profile, its instruction, its skills and the message
+itself. The trigger does not ask for a verdict and does not change what the
+helper may do.
+
+```yaml
+stages:
+  - id: build
+    agents: [auto]
+    assistants:
+      - profile: reviewer
+        title: Reviewer on call
+        instruction: Answer each question about the change in the request.
+        trigger: on_message
+```
+
+It differs from the other triggers:
+
+| Trigger | Runs | Typical use |
+|---|---|---|
+| `one_shot` | once, right after it is attached | one question or review |
+| `checkpoints` | at the stage's checkpoints, several times | a watcher of the stage's output |
+| `on_completion` | one final pass when the stage result is ready | a report on the finished stage |
+| `on_message` | once per request, whenever one arrives | a colleague the stage agent or you ask repeatedly |
+| `team:` run agent | on every message, for the whole run | a reviewer shared by several stages |
+
+`on_message` is for a stage's top-level helper only. A run agent already answers
+every message, and a helper delegated by another helper (`children` or a
+`continuation`) resumes when its children finish, so both are refused with
+`invalid_request`. A stage that has not started cannot take one either: attach it
+after the stage starts (the declared `assistants:` entries attach for you).
+
+#### Attach and ask
+
+Declare it in `assistants:`, choose **On message** in the **Trigger** menu of
+the **Attach helper** dialog (a short hint says that the helper waits idle until
+it is sent a message and stays attached afterwards), or let the stage agent
+start one:
+
+```sh
+afm agent spawn --profile reviewer --title "Reviewer on call" \
+  --instruction "Answer each question about the change." --trigger on_message
+```
+
+`--trigger` accepts `one_shot` (the default) or `on_message`. An `on_message`
+spawn returns `task_id` and `participant_id` but **no `message_id`**, because
+nothing has been asked yet. Repeating the command with the same `--request-id`
+returns the same task. Then send each request to the helper's alias from
+`afm agent list`:
+
+```sh
+afm agent send --to reviewer-on-call --kind request --body "Is the retry loop safe?"
+afm agent wait --condition reply_to --message-id <message_id>
+afm agent helper-result --task-id <task_id> --message-id <message_id>
+```
+
+Any message addressed to the helper is a request: `afm agent send`, a message
+from you that mentions it, a Board task assigned to it or a `/loop` tick. A mention
+that does not address it, and the automatic reply that another agent's turn
+posted for it, are not.
+
+The result comes back as the reply to that request, so a `reply_to` wait on the
+request ends with it. The helper does not wait for more messages itself: afm
+returns it to waiting after each result, and its prompt says not to register an
+endless wait. `afm agent helper-result --task-id <task_id>` without
+`--message-id` shows the helper's **last** result, which may answer an earlier
+request. With `--message-id` it shows how that request stands in
+`request.state` — `pending`, `active`, `result` or `failed` — with the turn that
+ran it, the reason when it failed and, for `result`, that request's own answer.
+A stage agent can read the helpers of its own stage and attempt, declared,
+attached or spawned. Anyone else, and an earlier attempt, gets *not found*.
+
+#### Requests are answered in order
+
+Requests are queued durably and handled one at a time, in the order they were
+accepted: a request sent while another is running waits and never runs in
+parallel. A restart of afm keeps the queue. A turn that was running when afm
+stopped runs again for the same request, so an action it took outside afm may
+repeat. At most 200 requests may wait (the same limit as an inbox); once 200 wait, the
+next message is refused with `budget_exceeded` and is not accepted. A thread
+holds 200 messages, a request and its automatic reply counting separately, so for
+a long series of requests start another helper, which opens a new thread.
+
+A turn that fails ends only its own request: the request has no result and no
+verdict, the failure and its reason are reported to the sender, and the helper
+rests again and takes the next request. A turn stopped by a provider usage limit
+keeps its request and resumes after the wait.
+
+While a request runs, the helper may ask the stage agent (or anyone else) a
+question with `afm agent send` and end its turn. It registers a callback wait
+without a `wait_cycle` refusal, and the answer continues the same request. A
+**new** message that is not an answer to the helper's own question waits for its
+turn.
+
+#### Pause, Continue and restart
+
+**Pause** of the task or of its stage keeps the requests but starts no turn;
+messages sent meanwhile are accepted and wait. **Continue** starts one turn for
+the oldest waiting request, or nothing when there is none. A paused task with a
+waiting request keeps the run open, as in [Use helpers in the dashboard](#use-helpers-in-the-dashboard).
+
+#### When it is closed
+
+A helper that is waiting for a message does not keep `afm run` open by itself
+and counts as idle time. What it holds depends on the mode:
+
+- A request the helper has accepted keeps **`afm run`** open until it is
+  answered, also while the request is queued or paused. It does not keep the
+  **stage** from finishing: an `advisory` helper never blocks its stage, with or
+  without requests.
+- A `required` helper blocks the **stage**, even while it waits and before its
+  first request, until a request passes or the gate is waived (see
+  [Required helpers](#required-helpers)).
+
+- When the stage becomes `done`, a resting helper is closed without a model
+  call: the task is `completed` with the reason *closed: stage <id> is done*, no
+  result and no verdict. A request it has already accepted is still answered
+  after the stage is done, the run waits for it, and the helper is closed
+  afterwards.
+- From then on a **new** message to it is refused with `invalid_status`
+  (*cannot receive messages*), nothing is queued, and no process starts. Replies
+  to a question the helper itself asked during an accepted request are still
+  delivered.
+- **Restart with note** (a new attempt of the stage) cancels the helper of the
+  earlier attempt through the usual path; a result it finishes late is ignored.
+- A stage that **fails** cancels nothing: new requests are refused while it
+  is failed, requests already accepted are finished, and an idle helper does
+  not keep the run open. **Retry** of the stage opens it for requests again.
+
+#### Required helpers
+
+With `mode: required` the stage waits in `awaiting_assistants` until the helper
+has a request that **passed**. The helper's last request decides:
+
+- The last request ended with a `pass` verdict: afm closes the helper itself and
+  the stage becomes `done` (the stage's dependents then start). The helper gets no
+  final pass.
+- The last request ended with `needs_changes`, `inconclusive` or a failure, or
+  nothing has been asked yet: the stage stays in `awaiting_assistants` and the
+  dashboard raises the attention **A helper task needs your decision**. The helper
+  view shows **Last request … failed** or the verdict. Send a new request to the
+  helper, or **Waive…** the gate with a reason.
+- A new request makes an earlier `pass` insufficient until it is answered. A
+  required answer without a verdict is rejected as described in
+  [Helper answers and protocol errors](#helper-answers-and-protocol-errors).
+
+#### In the dashboard
+
+An `on_message` helper's task view shows **On message** instead of the pass
+counter and checkpoint fields. While it rests it shows **Waiting for message**
+and **Last request: <id> · answered** (or **failed**). While it works it adds
+**Active request: <id> · turn N** and **Queued requests: N**. A result is
+labelled **Request <id> · turn N**, and while a later request is running the
+older result is marked **Result of a previous request**. Finishing a turn does
+not change your selection or focus.
+
+#### Compatibility
+
+The queue and the request each result belongs to are written as optional fields
+of existing journal records and are rebuilt by replay, so earlier journals read
+as before. A flow with `trigger: on_message` needs this version of afm: an
+older binary rejects the value, and an older dashboard shows the helper without
+the request fields. See
+[Additive fields](collaboration-journal.md#additive-fields).
+
+Full example: [`examples/on-message-helper/`](https://github.com/akopichin/afm/tree/main/examples/on-message-helper)
+— a stage agent keeps one `on_message` helper and sends it two different
+questions in turn.
 
 ### Selected helper activity
 

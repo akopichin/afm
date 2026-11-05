@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { assistantBlockingExplanation, parseAssistantResult, type AssistantTask } from './assistant-task'
+import {
+  assistantBlockingExplanation,
+  assistantTaskStatusLabel,
+  parsePendingRequestCount,
+  parseAssistantResult,
+  type AssistantTask,
+} from './assistant-task'
 
 function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
@@ -65,5 +71,29 @@ describe('parseAssistantResult', () => {
 
   it.each([['an unknown string', 'great'], ['an empty string', ''], ['null', null], ['a number', 1]])('rejects %s as a verdict', (_, verdict) => {
     expect(parseAssistantResult({ verdict, summary: 'ok' })).toBeNull()
+  })
+})
+
+describe('on_message task fields', () => {
+  it('labels a watching on_message helper as waiting for a message', () => {
+    expect(assistantTaskStatusLabel(makeTask({ trigger: 'on_message', status: 'watching' }))).toBe('Waiting for message')
+    expect(assistantTaskStatusLabel(makeTask({ trigger: 'checkpoints', status: 'watching' }))).toBe('Watching')
+  })
+
+  it('reads the queue length from a count or from a list of request ids', () => {
+    expect(parsePendingRequestCount(3)).toBe(3)
+    expect(parsePendingRequestCount(['mm-1', 'mm-2'])).toBe(2)
+    expect(parsePendingRequestCount(undefined)).toBeUndefined()
+    expect(parsePendingRequestCount('3')).toBeUndefined()
+    expect(parsePendingRequestCount(-1)).toBeUndefined()
+  })
+
+  it('parses the request id and turn of a result, and tolerates their absence', () => {
+    const parsed = parseAssistantResult({ summary: 'ok', request_id: 'mm-1', turn: 2 })
+    expect(parsed?.requestId).toBe('mm-1')
+    expect(parsed?.turn).toBe(2)
+    const plain = parseAssistantResult({ summary: 'ok' })
+    expect(plain?.requestId).toBeUndefined()
+    expect(plain?.turn).toBeUndefined()
   })
 })

@@ -469,7 +469,7 @@ func TestMesh_AllKindsRegisteredAndDispatchable(t *testing.T) {
 			}
 			as := newAssistantsState()
 			c := build(t, &as)
-			if err := dispatchControlKind(&as, c, false); err != nil {
+			if err := applyKind(&as, c, false); err != nil {
 				t.Fatalf("dispatchControlKind(%s): %v", kind, err)
 			}
 		})

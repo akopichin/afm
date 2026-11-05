@@ -166,7 +166,7 @@ export function AssistantTaskView({
         <span className="assistant-task-view-status" data-status={task.status}>{label}</span>
       </div>
       {task.status === 'queued' && task.quota !== undefined && <QuotaCountdown quota={task.quota} />}
-      <TaskActions task={task} passed={result?.verdict === 'pass'} />
+      <TaskActions task={task} passed={resultPassed(task, result)} />
       {isWatcher && (
         <div className="assistant-task-view-watch" data-trigger={task.trigger}>
           <span className="assistant-task-view-watch-trigger">
@@ -180,6 +180,8 @@ export function AssistantTaskView({
           )}
         </div>
       )}
+
+      {task.trigger === 'on_message' && <OnMessageBlock task={task} />}
 
       <AssistantActivityStatus
         last={activity.entries[activity.entries.length - 1] ?? null}
@@ -197,6 +199,38 @@ export function AssistantTaskView({
       >
         <TaskOutcome task={task} result={result} isError={isError} isTerminal={isTerminal} />
       </AssistantActivityFeed>
+    </div>
+  )
+}
+
+// resultPassed — закрывает ли вердикт pass гейт Waive. У on_message упавший запрос не пишет task_result,
+// поэтому старый pass не считается, если после него принят или идёт новый запрос либо последний исход failed.
+function resultPassed(task: AssistantTask, result: AssistantResult | null): boolean {
+  if (result?.verdict !== 'pass') return false
+  if (task.trigger !== 'on_message') return true
+  const newerRequest = task.activeRequestId !== undefined || (task.queuedRequests ?? 0) > 0
+  return !newerRequest && task.lastOutcome !== 'failed' && result.requestId === task.lastRequestId
+}
+
+// OnMessageBlock — состояние запросов helper'а on_message: что делает сейчас, сколько запросов ждёт и чем
+// закончился последний. Исход failed виден текстом и значком, а не только цветом.
+function OnMessageBlock({ task }: { task: AssistantTask }): ReactElement {
+  const failed = task.lastOutcome === 'failed'
+  return (
+    <div className="assistant-task-view-watch assistant-task-view-on-message" data-trigger="on_message">
+      <span className="assistant-task-view-watch-trigger">On message</span>
+      {task.activeRequestId !== undefined && (
+        <span className="assistant-task-view-active-request">
+          {`Active request: ${task.activeRequestId}${task.turn !== undefined ? ` · turn ${task.turn}` : ''}`}
+        </span>
+      )}
+      <span className="assistant-task-view-queued-requests">{`Queued requests: ${task.queuedRequests ?? 0}`}</span>
+      {task.lastRequestId !== undefined && (
+        <span className="assistant-task-view-last-request" data-outcome={task.lastOutcome}>
+          {failed && <span aria-hidden="true">⚠ </span>}
+          {`Last request: ${task.lastRequestId}${task.lastOutcome !== undefined ? ` · ${task.lastOutcome === 'failed' ? 'failed' : 'answered'}` : ''}`}
+        </span>
+      )}
     </div>
   )
 }
@@ -224,6 +258,7 @@ function TaskOutcome({ task, result, isError, isTerminal }: { task: AssistantTas
     </div>
   ) : result !== null ? (
     <div className="assistant-task-result">
+      {result.requestId !== undefined && <ResultRequestLabel task={task} result={result} />}
       {/* Verdict is text + icon, never color alone — same rule as required/advisory above. */}
       {(result.verdict !== undefined || result.repaired) && (
         <div className="assistant-task-verdict" data-verdict={result.verdict}>
@@ -281,6 +316,18 @@ function TaskOutcome({ task, result, isError, isTerminal }: { task: AssistantTas
   ) : task.status === 'paused' && task.statusReason !== '' ? (
     <div className="assistant-task-view-empty empty-hint">{task.statusReason}</div>
   ) : null
+}
+
+// ResultRequestLabel привязывает результат к запросу, который его дал: пока идёт уже следующий запрос,
+// прежний ответ остаётся на экране и не должен выглядеть ответом на новый.
+function ResultRequestLabel({ task, result }: { task: AssistantTask; result: AssistantResult }): ReactElement {
+  const isPrevious = task.activeRequestId !== undefined && task.activeRequestId !== result.requestId
+  return (
+    <div className="assistant-task-result-request" data-previous={isPrevious}>
+      <span>{`Request ${result.requestId}${result.turn !== undefined ? ` · turn ${result.turn}` : ''}`}</span>
+      {isPrevious && <span className="assistant-task-result-previous">Result of a previous request</span>}
+    </div>
+  )
 }
 
 // RawAnswerExpander lets a human see the raw text behind a protocol_error failure — lazily: the fetch only

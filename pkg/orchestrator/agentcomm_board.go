@@ -218,7 +218,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 }
 
 // planNoticeTo plans one message from sender to recipient in a fresh/reused conversation thread.
-// skip != "" means it cannot be delivered now (unreachable, inbox full, thread full) — not an error.
+// skip != "" means it cannot be delivered now (unreachable, inbox or request queue full, thread full) — not an error.
 // The message id is derived from opID and the recipient, so a retry plans the same message.
 // ownThread opens a new thread named by opID instead of reusing the sender's conversation with recipient:
 // a notice that must not be lost to that conversation's full message budget asks for it.
@@ -230,7 +230,7 @@ func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, reci
 	case !p.Reachable:
 		return plannedMessage{}, fmt.Sprintf("%s cannot receive messages (%s)", recipient, p.UnreachableReason), nil
 	}
-	if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}, false); err != nil {
+	if err := rs.CheckNewMessageRoom(recipient); err != nil {
 		return plannedMessage{}, err.Error(), nil
 	}
 	send := SendRequest{Sender: sender, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body}

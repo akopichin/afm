@@ -117,13 +117,14 @@ func (o *Orchestrator) commitLoopTickFrom(ctx context.Context, rs state.RunState
 // loopRestartReason is the status reason of a helper a tick put back in the queue.
 const loopRestartReason = "loop tick"
 
-// loopRestartStatus requeues only successful resting helpers; running and waiting tasks use normal delivery.
+// loopRestartStatus requeues only successful resting helpers; running and waiting tasks use normal delivery, and so
+// does an on_message helper, whose tick is a request like any other message.
 func loopRestartStatus(rs state.RunState, target agentcomm.ParticipantID) (assistants.TaskID, assistants.TaskStatus) {
 	if !strings.HasPrefix(string(target), meshHelperPrefix) {
 		return "", ""
 	}
 	t, ok := loopTargetTask(rs, target)
-	if !ok || (t.Status != assistants.StatusCompleted && t.Status != assistants.StatusWatching) {
+	if !ok || state.IsOnMessageHelper(t.Task) || (t.Status != assistants.StatusCompleted && t.Status != assistants.StatusWatching) {
 		return "", ""
 	}
 	return t.ID, t.Status
@@ -338,7 +339,7 @@ func loopOverForGood(rs state.RunState, l state.LoopState) bool {
 
 // loopTargetReady skips busy, held and unread targets while allowing durable waits and resting helpers.
 // A required helper whose own decision gate remains open cannot restart, nor can an on_completion helper whose
-// stage has no result yet.
+// stage has no result yet or a closed on_message helper, which takes no more requests.
 func loopTargetReady(rs state.RunState, l state.LoopState) bool {
 	t, ok := loopTargetTask(rs, l.TargetID)
 	if !ok {
@@ -353,7 +354,7 @@ func loopTargetReady(rs state.RunState, l state.LoopState) bool {
 	case assistants.StatusWatching:
 		return !completionHelperGated(rs, t)
 	case assistants.StatusCompleted:
-		return !taskNeedsHumanDecision(t)
+		return !state.IsOnMessageHelper(t.Task) && !taskNeedsHumanDecision(t)
 	case assistants.StatusQueued:
 		return idleRunAgent(rs, t)
 	}

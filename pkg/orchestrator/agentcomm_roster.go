@@ -26,7 +26,7 @@ import (
 const (
 	meshUserParticipantID = agentcomm.UserParticipantID
 	meshStagePrefix       = "stage:"
-	meshHelperPrefix      = "helper:"
+	meshHelperPrefix      = agentcomm.HelperParticipantPrefix
 	// meshRunPrefix is meshRunParticipantID's own prefix (agentcomm_attach.go) — named here, next to its
 	// stage/helper siblings, so taskIDFromMeshParticipant's reverse lookup (agentcomm_resume.go) can recognize
 	// it without a second, drifting copy of the literal.
@@ -46,7 +46,7 @@ func meshStageParticipantID(stageID string) agentcomm.ParticipantID {
 }
 
 func meshHelperParticipantID(taskID assistants.TaskID) agentcomm.ParticipantID {
-	return agentcomm.ParticipantID(meshHelperPrefix + string(taskID))
+	return agentcomm.HelperParticipantID(taskID)
 }
 
 // meshParticipantForTask resolves task's OWN mesh participant identity: meshRunParticipantID(task.ID) for a
@@ -314,14 +314,15 @@ func taskEndedReason(id assistants.TaskID, t *state.TaskState) string {
 }
 
 // taskActivity says what a task's participant is doing now. idle — a queued run agent with nothing to read
-// (idleRunAgent); any other queued task is about to start, so it counts as working.
+// (idleRunAgent) or an on_message helper without a request; any other queued task is about to start, so it
+// counts as working.
 func taskActivity(t *state.TaskState, idle bool) agentcomm.Activity {
 	switch {
 	case t.Status.Terminal():
 		return agentcomm.ActivityDone
 	case t.Status == assistants.StatusPaused || len(t.Holds) > 0:
 		return agentcomm.ActivityPaused
-	case idle:
+	case idle || state.OnMessageIdle(*t):
 		return agentcomm.ActivityIdle
 	case t.Status == assistants.StatusWaitingPeer, t.Status == assistants.StatusWaitingChildren, t.Status == assistants.StatusWaitingParent:
 		return agentcomm.ActivityWaiting
@@ -344,7 +345,7 @@ func resolveParticipant(rs state.RunState, id agentcomm.ParticipantID) (agentcom
 		}
 		return stageParticipant(rs, stageID, rs.StageNames[stageID]), true
 	case strings.HasPrefix(string(id), meshHelperPrefix):
-		taskID := assistants.TaskID(strings.TrimPrefix(string(id), meshHelperPrefix))
+		taskID, _ := agentcomm.HelperTaskID(id)
 		t, ok := rs.Assistants.Tasks[taskID]
 		if !ok {
 			return agentcomm.Participant{}, false

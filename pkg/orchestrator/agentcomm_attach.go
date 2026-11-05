@@ -43,6 +43,7 @@ type AttachAndSendRequest struct {
 	Scope        assistants.Scope // zero value = assistants.ScopeStage, same convention as assistants.Task.Scope
 	StageID      string           // required for ScopeStage; must be empty for ScopeRun
 	Mode         assistants.Mode
+	Trigger      assistants.Trigger // zero value = one_shot, same as AttachRequest.Trigger
 	Title        string
 	Instruction  string
 	FirstMessage *string // nil = no first message; the task is still created and addressable
@@ -291,7 +292,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 	treq := topLevelTaskRequest{
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: req.Scope, StageID: req.StageID,
-		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Origin: req.Origin, Actor: req.Actor,
+		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Trigger: req.Trigger, Origin: req.Origin, Actor: req.Actor,
 		Skills: req.Skills, SkillsDir: req.SkillsDir,
 	}
 	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindAttachAndSend); err != nil || committed {

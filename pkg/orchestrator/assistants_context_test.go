@@ -8,6 +8,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/prompts"
 )
 
 // contextTestFixture builds a minimal orchestrator + stage + task good enough to exercise
@@ -194,5 +195,31 @@ func TestContext_DelegateFormOnlyForDelegateCapableProfile(t *testing.T) {
 	}
 	if !strings.Contains(tc.Prompt, `"kind": "delegate"`) {
 		t.Fatalf("prompt must contain the delegate form for a delegate-capable profile:\n%s", tc.Prompt)
+	}
+}
+
+// An on_message helper's turn is told which request it answers and that AFM, not it, takes it back to waiting; a
+// one-shot helper's context does not carry that text.
+func TestContext_OnMessageHelperKnowsItsTurnProtocol(t *testing.T) {
+	o, stage, task := contextTestFixture(t)
+	oneShot, err := o.buildTaskContext(task, stage)
+	if err != nil {
+		t.Fatalf("buildTaskContext: %v", err)
+	}
+
+	task.Scope, task.Trigger = assistants.ScopeStage, assistants.TriggerOnMessage
+	onMessage, err := o.buildTaskContext(task, stage)
+	if err != nil {
+		t.Fatalf("buildTaskContext: %v", err)
+	}
+
+	if !strings.Contains(onMessage.Prompt, prompts.OnMessageTurnBlock()) {
+		t.Fatalf("an on_message helper's context lacks the turn protocol:\n%s", onMessage.Prompt)
+	}
+	if strings.Contains(oneShot.Prompt, "returns you to waiting by itself") {
+		t.Fatalf("a one-shot helper's context must not carry the on_message protocol:\n%s", oneShot.Prompt)
+	}
+	if onMessage.Version == oneShot.Version {
+		t.Fatal("the turn protocol is part of the context, so it must change the context version")
 	}
 }

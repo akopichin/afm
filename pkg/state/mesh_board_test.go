@@ -38,7 +38,7 @@ func TestMesh_BoardStaleExpectedVersionRejected(t *testing.T) {
 
 	// Publishing again with expected_version 0 is now stale: the key's current version is 1.
 	c := meshBoardPublishedControl("k", "a", "final", 0, nil)
-	if err := dispatchControlKind(&as, c, false); !errors.Is(err, ErrBoardStaleRevision) {
+	if err := applyKind(&as, c, false); !errors.Is(err, ErrBoardStaleRevision) {
 		t.Fatalf("err = %v, want ErrBoardStaleRevision", err)
 	}
 	if as.Mesh.Board["k"].Version != 1 || as.Mesh.Board["k"].Status != "draft" {
@@ -53,7 +53,7 @@ func TestMesh_BoardNonAuthorizedRepublishRejected(t *testing.T) {
 	mustApply(t, &as, meshBoardPublishedControl("k", "a", "draft", 0, nil)) // version 1, author a
 
 	c := meshBoardPublishedControl("k", "stranger", "final", 1, nil)
-	if err := dispatchControlKind(&as, c, true); !errors.Is(err, ErrBoardNotAuthorized) {
+	if err := applyKind(&as, c, true); !errors.Is(err, ErrBoardNotAuthorized) {
 		t.Fatalf("err = %v, want ErrBoardNotAuthorized", err)
 	}
 	if as.Mesh.Board["k"].Version != 1 {
@@ -61,7 +61,7 @@ func TestMesh_BoardNonAuthorizedRepublishRejected(t *testing.T) {
 	}
 
 	mustApply(t, &as, legacyBoardGrantControl("k2", "a", "b"))
-	if err := dispatchControlKind(&as, meshBoardPublishedControl("k2", "b", "final", 1, nil), true); !errors.Is(err, ErrBoardNotAuthorized) {
+	if err := applyKind(&as, meshBoardPublishedControl("k2", "b", "final", 1, nil), true); !errors.Is(err, ErrBoardNotAuthorized) {
 		t.Fatalf("publish by a participant named in authorized_by: err = %v, want ErrBoardNotAuthorized", err)
 	}
 
@@ -99,7 +99,7 @@ func TestMesh_ReplayKeepsLegacyBoardGrant(t *testing.T) {
 func TestMesh_BoardArtifactRefOutsidePrefixRejected(t *testing.T) {
 	as := newAssistantsState()
 	c := meshBoardPublishedControl("k", "a", "draft", 0, []string{"/etc/passwd"})
-	if err := dispatchControlKind(&as, c, false); !errors.Is(err, ErrBoardArtifactRefOutsideRun) {
+	if err := applyKind(&as, c, false); !errors.Is(err, ErrBoardArtifactRefOutsideRun) {
 		t.Fatalf("err = %v, want ErrBoardArtifactRefOutsideRun", err)
 	}
 	if _, ok := as.Mesh.Board["k"]; ok {

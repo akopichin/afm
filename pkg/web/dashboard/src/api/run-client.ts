@@ -214,7 +214,7 @@ export type AttachHelperRequest = {
   title: string
   instruction: string
   mode: 'advisory' | 'required'
-  trigger: 'one_shot' | 'checkpoints' | 'on_completion'
+  trigger: 'one_shot' | 'checkpoints' | 'on_completion' | 'on_message'
 }
 
 // Task-level lifecycle mutations — POST /api/assistants/{id}/{action}. Distinct from the stage-level
@@ -271,6 +271,12 @@ export type AssistantTaskWire = {
   // watch_passes/watch_last_checkpoint_seq (T5.6) — present only for a checkpoints/on_completion watcher task.
   watch_passes?: number
   watch_last_checkpoint_seq?: number
+  // Запросы on_message-помощника (omitempty): pending_requests — число или список id запросов в очереди.
+  active_request_id?: string
+  pending_requests?: number | string[]
+  last_request_id?: string
+  last_outcome?: string
+  turn?: number
   // blocks_root_completion (Этап 7, T7.5/T7.9) — whether an unresolved instance of this task would block the
   // ROOT STAGE's own completion (vs. only its immediate parent helper). See
   // pkg/server/assistants.go's AssistantTaskView.BlocksRootCompletion.

@@ -75,12 +75,15 @@ const (
 	// TriggerOnCompletion — помощник приглашается, когда порождающая его
 	// работа завершена.
 	TriggerOnCompletion Trigger = "on_completion"
+	// TriggerOnMessage — помощник верхнего уровня стадии ждёт адресованного ему сообщения и после каждого хода
+	// снова ждёт. Детям и continuation недоступен: Valid его принимает, отказ — при admission.
+	TriggerOnMessage Trigger = "on_message"
 )
 
 // Valid reports whether t is a recognized Trigger, or empty (meaning "use Attach's own default").
 func (t Trigger) Valid() bool {
 	switch t {
-	case "", TriggerOneShot, TriggerCheckpoints, TriggerOnCompletion:
+	case "", TriggerOneShot, TriggerCheckpoints, TriggerOnCompletion, TriggerOnMessage:
 		return true
 	default:
 		return false

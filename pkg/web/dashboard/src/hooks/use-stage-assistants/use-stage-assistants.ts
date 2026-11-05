@@ -3,7 +3,9 @@ import { listStageAssistants, type AssistantTaskWire } from '../../api/run-clien
 import { parseStageQuota } from '../../types/stage'
 import {
   isAssistantTaskMode,
+  isAssistantRequestOutcome,
   isAssistantTaskStatus,
+  parsePendingRequestCount,
   type AssistantTask,
   type AssistantTaskNode,
 } from '../../types/assistant-task'
@@ -42,6 +44,11 @@ function toAssistantTask(raw: AssistantTaskWire): AssistantTask {
     waived: raw.waived === true,
     waiverReason: raw.waiver_reason ?? '',
     quota: parseStageQuota(raw.quota),
+    activeRequestId: raw.active_request_id !== '' ? raw.active_request_id : undefined,
+    queuedRequests: parsePendingRequestCount(raw.pending_requests),
+    lastRequestId: raw.last_request_id !== '' ? raw.last_request_id : undefined,
+    lastOutcome: isAssistantRequestOutcome(raw.last_outcome) ? raw.last_outcome : undefined,
+    turn: typeof raw.turn === 'number' ? raw.turn : undefined,
   }
 }
 
@@ -96,7 +103,7 @@ function tasksSignature(tasks: AssistantTask[]): string {
   return tasks
     .map(
       (t) =>
-        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}|${t.blocksRootCompletion}|${t.waived}|${quotaSignature(t)}`,
+        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}|${t.blocksRootCompletion}|${t.waived}|${quotaSignature(t)}|${t.activeRequestId ?? ''}|${t.queuedRequests ?? ''}|${t.lastRequestId ?? ''}|${t.lastOutcome ?? ''}|${t.turn ?? ''}`,
     )
     .join('\n')
 }

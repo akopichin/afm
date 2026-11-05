@@ -391,8 +391,8 @@ type Orchestrator struct {
 	markerNoticeDecidedHook func(stageID string)
 
 	// sweepGate, startupReleaseHook — тест-сеймы: начало фоновой проверки неотвечаемых ожиданий и момент перед
-	// стартовой проверкой. settlePlannedHook — окно между планом отмены ожиданий (старт хода, проверка) и его
-	// коммитом: тест меняет состояние именно там.
+	// стартовой проверкой. settlePlannedHook — окно между планом отмены ожиданий (старт хода, проверка) или
+	// закрытия on_message-помощника и его коммитом: тест меняет состояние именно там.
 	sweepGate          func()
 	startupReleaseHook func()
 	settlePlannedHook  func()
@@ -408,9 +408,9 @@ type Orchestrator struct {
 	// статусу и самим Revise, чтобы тест мог вклинить конкурентный Pause. nil в продакшене.
 	feedbackDeliveryDecidedHook func(stageID string)
 
-	// taskRequeueBarrier — тест-сейм перед requeue-commit (running->queued) в spawnTask, когда ход возвращается в
-	// очередь (held, стадия без результата или hold провайдера): тест вклинивает в это окно Continue, чей запуск ещё
-	// не сработает, или провал стадии.
+	// taskRequeueBarrier — тест-сейм перед requeue-commit (running->queued) хода, процесс которого не стартовал
+	// (held, стадия без результата или на паузе, hold провайдера): тест вклинивает в это окно Continue, чей запуск
+	// ещё не сработает, или провал стадии.
 	taskRequeueBarrier func(taskID assistants.TaskID)
 	// taskRequeuePreDeferHook — тест-сейм: вызывается в runHelperTask's requeue-while-running ветке СРАЗУ
 	// после синхронного maybeScheduleTask (который уже мог успеть застартовать СЛЕДУЮЩУЮ попытку в новой
@@ -762,6 +762,14 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		// every transition rather than only completion/failure.
 		if o.opts.AssistantsEnabled {
 			o.redeliverPendingFeedbackIntents(o.runContext(context.Background()), stageID)
+		}
+		// A paused stage held the requests of its on_message helpers: whatever it leaves the pause for, they may run.
+		if o.opts.AssistantsEnabled && from == state.StatusPaused {
+			o.resumeOnMessageHelpers(o.runContext(context.Background()), stageID)
+		}
+		// Done, or awaiting its helpers, the stage may no longer need its resting on_message helpers.
+		if to == state.StatusAwaitingAssistants || to == state.StatusDone {
+			o.settleOnMessageHelpers(stageID)
 		}
 	}
 	return to, seq, ok

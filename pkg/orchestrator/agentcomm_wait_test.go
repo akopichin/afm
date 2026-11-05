@@ -940,10 +940,10 @@ func TestWakingExceptBatchAnswers_ReplyOfANonRecipientStillWakes(t *testing.T) {
 		}
 	}
 
-	if wakingExceptBatchAnswers(reply(reviewer), waiter) {
+	if wakingExceptBatchAnswers(state.RunState{Assistants: state.AssistantsState{Mesh: reply(reviewer)}}, waiter) {
 		t.Fatal("the reviewer's answer to its own request woke the stage before the batch ended")
 	}
-	if !wakingExceptBatchAnswers(reply(human), waiter) {
+	if !wakingExceptBatchAnswers(state.RunState{Assistants: state.AssistantsState{Mesh: reply(human)}}, waiter) {
 		t.Fatal("the human's reply to a request meant for the reviewer was held back: it does not answer the item, so it must wake")
 	}
 }

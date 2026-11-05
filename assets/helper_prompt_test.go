@@ -2,6 +2,7 @@ package assets_test
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/assets"
@@ -29,5 +30,18 @@ func TestHelperPromptExamplesDecode(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The result contract is read by helpers of every trigger: it must tie a result to the current request only.
+func TestHelperResultPromptAnswersTheCurrentRequest(t *testing.T) {
+	text, _, err := assets.ReadPrompt("helper-result.md", "")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	for _, want := range []string{"current request", "returns you to waiting by itself", "assigned skills"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("helper-result.md lacks %q", want)
+		}
 	}
 }

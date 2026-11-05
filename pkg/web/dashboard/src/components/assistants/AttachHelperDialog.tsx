@@ -102,9 +102,15 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
                   <option value="one_shot">One shot</option>
                   <option value="on_completion">On stage completion</option>
                   <option value="checkpoints">At checkpoints</option>
+                  <option value="on_message">On message</option>
                 </select>
               </label>
             </div>
+            {trigger === 'on_message' && (
+              <p className="attach-helper-hint">
+                The helper waits idle until it is sent a message; each message is one turn, and the helper stays attached afterwards.
+              </p>
+            )}
           </>
         )}
         {error !== null && (

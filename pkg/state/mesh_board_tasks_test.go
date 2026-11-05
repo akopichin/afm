@@ -526,10 +526,10 @@ func TestBoardTaskFormatRulesOnlyAdmitNewRecords(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			as := newAssistantsState()
 			seedBoardTask(t, &as, true)
-			if err := dispatchControlKind(&as, c, true); err == nil {
+			if err := applyKind(&as, c, true); err == nil {
 				t.Fatal("a new record breaking the format rule was admitted")
 			}
-			if err := dispatchControlKind(&as, c, false); err != nil {
+			if err := applyKind(&as, c, false); err != nil {
 				t.Fatalf("replay of a journaled record: %v", err)
 			}
 		})
@@ -559,7 +559,7 @@ func TestBoardTaskKeyFormatOnlyAdmitsCreate(t *testing.T) {
 	}
 	for name, c := range changes {
 		t.Run(name, func(t *testing.T) {
-			if err := dispatchControlKind(&as, c, true); err != nil {
+			if err := applyKind(&as, c, true); err != nil {
 				t.Fatalf("admitting a change of a task with an older-format key: %v", err)
 			}
 		})
@@ -568,7 +568,7 @@ func TestBoardTaskKeyFormatOnlyAdmitsCreate(t *testing.T) {
 	created := onOldKey(kindMeshBoardTaskCreated, "user", MeshBoardTaskCreatedPayload{Title: "T"})
 	fresh := newAssistantsState()
 	mustApply(t, &fresh, &Control{Kind: kindMeshBoardProtocolSet, SchemaVersion: ControlSchemaVersion, Payload: []byte(`{"protocol":"typed_v1"}`)})
-	if err := dispatchControlKind(&fresh, created, true); err == nil {
+	if err := applyKind(&fresh, created, true); err == nil {
 		t.Fatal("creating a task with an invalid key was admitted")
 	}
 }

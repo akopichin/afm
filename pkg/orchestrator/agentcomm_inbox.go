@@ -38,7 +38,7 @@ const (
 // prompt-assembly time, so a crash or a failed start between building this prompt and spawning the process
 // leaves the messages at "accepted" and they are re-injected, unchanged, on the next attempt.
 func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (block string, markDelivered func()) {
-	block, _, markDelivered = o.renderInbox(participant, nil)
+	block, _, markDelivered = o.renderInbox(participant, nil, nil)
 	return block, markDelivered
 }
 
@@ -46,9 +46,9 @@ func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (b
 // agent was handed but never finished (see turnInboxFileName). They are already delivered, yet that turn's
 // input would otherwise be lost to its retry. The budget goes to three groups in turn — the unfinished input,
 // then waking messages, then passive turn results (Message.AutoResult) — each oldest first, so results that
-// arrived while the agent was idle never push out the message that starts its turn. It returns the ids it
-// rendered, in that order.
-func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinished []agentcomm.MessageID) (block string, rendered []agentcomm.MessageID, markDelivered func()) {
+// arrived while the agent was idle never push out the message that starts its turn. Messages in later are left for
+// a later turn. It returns the ids it rendered, in that order.
+func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinished, later []agentcomm.MessageID) (block string, rendered []agentcomm.MessageID, markDelivered func()) {
 	if o.opts.Store == nil {
 		// Some tests build a bare Orchestrator literal to exercise a single concern (e.g. browser/mesh Config
 		// wiring) without a real Store — nothing to read, so there is nothing pending and nothing to deliver.
@@ -61,7 +61,7 @@ func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinish
 	for _, id := range mesh.Inbox[participant] {
 		m := mesh.Messages[id]
 		switch {
-		case m == nil:
+		case m == nil, slices.Contains(later, id):
 		case slices.Contains(unfinished, id):
 			again = append(again, m)
 		case mesh.Receipts[id][participant] != agentcomm.DeliveryAccepted:
@@ -275,11 +275,21 @@ func (o *Orchestrator) markInboxDelivered(participant agentcomm.ParticipantID, i
 }
 
 // agentCommInboxForTask is renderInbox's helper-task-scoped wrapper, used by buildTaskContext (T4.3): the
-// task's unfinished turn input (if any) is rendered again together with its pending messages.
+// task's unfinished turn input (if any) is rendered again together with its pending messages. An on_message
+// helper's turn is handed its request even when it read it ahead, and none of the requests waiting behind it.
 func (o *Orchestrator) agentCommInboxForTask(taskID assistants.TaskID) (block string, rendered []agentcomm.MessageID, markDelivered func()) {
 	participant := o.taskMeshParticipant(taskID)
-	block, rendered, markDelivered = o.renderInbox(participant, o.unfinishedTurnInput(taskID))
-	return block + boardTasksBlockFor(o.opts.Store.Snapshot(), participant), rendered, markDelivered
+	rs := o.opts.Store.Snapshot()
+	unfinished := o.unfinishedTurnInput(taskID)
+	var later []agentcomm.MessageID
+	if t, ok := rs.Assistants.Tasks[taskID]; ok {
+		if request := onMessageTurnRequest(t); request != "" {
+			unfinished = append(slices.Clone(unfinished), request)
+			later = slices.DeleteFunc(slices.Clone(t.PendingRequests), func(id agentcomm.MessageID) bool { return id == request })
+		}
+	}
+	block, rendered, markDelivered = o.renderInbox(participant, unfinished, later)
+	return block + boardTasksBlockFor(rs, participant), rendered, markDelivered
 }
 
 // maxListedBoardTasks bounds the <your_board_tasks> block, which repeats on every turn.
@@ -325,15 +335,17 @@ func (o *Orchestrator) unfinishedTurnInput(taskID assistants.TaskID) []agentcomm
 	return o.loadTurnInbox(taskID)
 }
 
-// startTurn records, before the process starts, the start of taskID's next turn and the messages handed to it
-// (inbox), and the read-only guarantee it runs under. It is a running→running task_status_changed with Turn/TurnInbox — the record kind that already marks
+// startTurn records, right before the process starts, the start of taskID's next turn, the messages handed to it
+// (inbox), the on_message request it works on ("" for any other task) and the read-only guarantee it runs under. It is
+// a running→running task_status_changed with Turn/TurnInbox — the record kind that already marks
 // a task's progress, which an older binary still reads — never a new kind it would reject. turn-inbox.json is
-// refreshed as a cache of the same list. ok=false: the task is no longer running (cancelled meanwhile) or the
-// journal failed (handleTaskOperationErr ends the run); the turn must not start.
-func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.MessageID) (turn, holdEpoch uint64, ok bool) {
+// refreshed as a cache of the same list. An error means the turn must not start: the task is no longer running
+// (cancelled meanwhile), the stage of an on_message helper paused or moved on (errOnMessageGated: the commit is the
+// fence against its Pause), or the journal failed (handleTaskOperationErr ends the run).
+func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.MessageID, request agentcomm.MessageID) (turn, holdEpoch uint64, err error) {
 	t, found := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
 	if !found {
-		return 0, 0, false
+		return 0, 0, fmt.Errorf("assistants: unknown task %q", taskID)
 	}
 	turn = t.Turn + 1
 	ids := make([]string, len(inbox))
@@ -341,27 +353,32 @@ func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.Mes
 		ids[i] = string(id)
 	}
 	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{
-		Status: string(assistants.StatusRunning), Turn: turn, TurnInbox: ids,
+		Status: string(assistants.StatusRunning), Turn: turn, TurnInbox: ids, RequestID: string(request),
 		ReadonlyEnforcement: o.currentReadonlyEnforcement(t.Task),
 	})
 	if err != nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.taskTurnFailure(taskID, "assistants: record the turn", err.Error()))
-		return 0, 0, false
+		return 0, 0, err
 	}
 	op := state.Operation{
-		ID:      fmt.Sprintf("task-turn:%s:%d:%s", taskID, turn, randomOpSuffix()),
-		Kind:    "start_turn",
-		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusRunning}},
+		ID:   fmt.Sprintf("task-turn:%s:%d:%s", taskID, turn, randomOpSuffix()),
+		Kind: "start_turn",
+		Expect: state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusRunning}, Check: func(cur *state.RunState) error {
+			if onMessageGated(*cur, cur.Assistants.Tasks[taskID]) {
+				return errOnMessageGated
+			}
+			return nil
+		}},
 		Effects: []state.Effect{eff},
 	}
 	if _, err := o.opts.Store.ApplyRunOperation(op, nil); err != nil {
 		o.handleTaskOperationErr(err)
-		return 0, 0, false
+		return 0, 0, err
 	}
 	if err := o.saveTurnInbox(taskID, inbox); err != nil {
 		log.Printf("assistants: task %s: write the turn-inbox cache: %v", taskID, err)
 	}
-	return turn, t.HoldEpoch, true
+	return turn, t.HoldEpoch, nil
 }
 
 // turnInboxFileName is a cache of the latest unfinished turn's input (state.TaskState.TurnInbox) for a human

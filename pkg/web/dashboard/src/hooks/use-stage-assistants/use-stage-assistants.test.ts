@@ -118,6 +118,41 @@ describe('useStageAssistants', () => {
     expect(result.current.s1).toBe(first) // same reference — not rebuilt
   })
 
+  it('maps the on_message request fields and refreshes the summary when only they change', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const idle = wire({ id: 'h1', trigger: 'on_message', status: 'watching' })
+    const working = wire({
+      id: 'h1', trigger: 'on_message', status: 'running', active_request_id: 'mm-2', pending_requests: ['mm-3', 'mm-4'],
+      last_request_id: 'mm-1', last_outcome: 'failed', turn: 2,
+    })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ tasks: [idle] }))
+
+    const { result } = renderHook(() => useStageAssistants(['s1'], true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.s1?.tasks[0]).toMatchObject({ trigger: 'on_message' })
+    expect(result.current.s1?.tasks[0]?.activeRequestId).toBeUndefined()
+
+    fetchSpy.mockResolvedValue(jsonResponse({ tasks: [{ ...working, status: 'watching' }] }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(result.current.s1?.tasks[0]).toMatchObject({
+      activeRequestId: 'mm-2', queuedRequests: 2, lastRequestId: 'mm-1', lastOutcome: 'failed', turn: 2,
+    })
+  })
+
+  it('accepts a numeric pending_requests and drops an unknown last_outcome', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({ tasks: [wire({ id: 'h1', trigger: 'on_message', pending_requests: 4, last_outcome: 'weird' })] }),
+    )
+    const { result } = renderHook(() => useStageAssistants(['s1'], true))
+    await waitFor(() => expect(result.current.s1).toBeDefined())
+    expect(result.current.s1?.tasks[0]?.queuedRequests).toBe(4)
+    expect(result.current.s1?.tasks[0]?.lastOutcome).toBeUndefined()
+  })
+
   it('projects a queued task\'s durable usage-limit park into task.quota (camelCase), absent otherwise', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
       tasks: [

@@ -222,8 +222,9 @@ func whyCannotAnswer(rs state.RunState, cond agentcomm.WaitCondition, p agentcom
 const leftUnansweredReason = "read the message and its turn ended without a reply"
 
 // leftUnanswered reports whether task agent p read request id and is idle without having answered it: every
-// turn is a new session and its result answers only the waking message. A request still in the turn input, or
-// owed by an earlier turn that yielded, is not left; nor is any in a journal from before turns were recorded.
+// turn is a new session and its result answers only the waking message. A request still in the turn input, owed
+// by an earlier turn that yielded, or queued for an on_message helper's turn of its own (read ahead or not) is not
+// left; nor is any in a journal from before turns were recorded.
 func leftUnanswered(rs state.RunState, id agentcomm.MessageID, p agentcomm.ParticipantID) bool {
 	if r := rs.Assistants.Mesh.Receipts[id][p]; r != agentcomm.DeliveryDelivered && r != agentcomm.DeliveryAcknowledged {
 		return false
@@ -241,7 +242,7 @@ func leftUnanswered(rs state.RunState, id agentcomm.MessageID, p agentcomm.Parti
 		return false
 	}
 	return !t.Status.Terminal() && !slices.Contains(t.TurnInbox, id) && !slices.Contains(t.OpenRequests, id) &&
-		!rs.Assistants.Mesh.MessageAnsweredByRecipient(id)
+		id != t.ActiveRequest && !slices.Contains(t.PendingRequests, id) && !rs.Assistants.Mesh.MessageAnsweredByRecipient(id)
 }
 
 // latestTurnResult is the newest turn result p posted to requester, "" if none: the only one requester can open.

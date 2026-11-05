@@ -95,6 +95,9 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	if skillsBlock != "" {
 		b.WriteString(skillsBlock + "\n")
 	}
+	if state.IsOnMessageHelper(task) {
+		b.WriteString(prompts.OnMessageTurnBlock())
+	}
 	b.WriteString(o.outputContractBlock(task))
 	// Agent Mesh Phase 4, T4.3: the SAME agent_communication source stage agents get (agentCommBlockFor),
 	// sitting with the output contract as afm's own instruction (unfenced) — unlike the sections above,
@@ -118,6 +121,9 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	parts := []string{stage.ID, generation, roleInstructions, instruction, workspace, plan, artifacts, prevResult, childResults, followUp, inboxBlock}
 	if skillsBlock != "" { // appended only when present, so a context without skills keeps its earlier version
 		parts = append(parts, skillsBlock)
+	}
+	if state.IsOnMessageHelper(task) {
+		parts = append(parts, prompts.OnMessageTurnBlock())
 	}
 	version := computeContextVersion(parts...)
 	return TaskContext{Prompt: prompt, Version: version, markInboxDelivered: markInboxDelivered, inboxIDs: inboxIDs}, nil
@@ -236,14 +242,18 @@ func (o *Orchestrator) previousTaskResultJSON(taskID assistants.TaskID) string {
 // latestTaskResultJSON is the last task_result payload in events (newest first), as indented JSON — "" if none.
 func latestTaskResultJSON(events []state.TaskEvent) string {
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Kind != taskResultEffectKind {
-			continue
+		if events[i].Kind == taskResultEffectKind {
+			return indentJSON(events[i].Payload)
 		}
-		var out bytes.Buffer
-		if err := json.Indent(&out, events[i].Payload, "", "  "); err != nil {
-			return string(events[i].Payload)
-		}
-		return out.String()
 	}
 	return ""
+}
+
+// indentJSON is payload as indented JSON, or verbatim when it is not valid JSON.
+func indentJSON(payload json.RawMessage) string {
+	var out bytes.Buffer
+	if err := json.Indent(&out, payload, "", "  "); err != nil {
+		return string(payload)
+	}
+	return out.String()
 }

@@ -69,6 +69,14 @@ type AssistantTaskView struct {
 	// waits (RFC3339 until/reset_at), the provider/window/source, and pause_reason when the limit cannot be waited
 	// out (the task is then held until a human continues it). Absent for a task that is not parked.
 	Quota *QuotaView `json:"quota,omitempty"`
+	// ActiveRequestID..Turn — an on_message helper's request queue (state.TaskState): the request its turns work on,
+	// how many requests wait behind it, how the latest finished one ended, and the number of the latest turn. All
+	// absent for a helper that has none, so other triggers' payloads stay as they were.
+	ActiveRequestID string `json:"active_request_id,omitempty"`
+	PendingRequests int    `json:"pending_requests,omitempty"`
+	LastRequestID   string `json:"last_request_id,omitempty"`
+	LastOutcome     string `json:"last_outcome,omitempty"`
+	Turn            uint64 `json:"turn,omitempty"`
 }
 
 // AssistantEventView is one entry of a task's event history page — GET /api/assistants/{id}/events.

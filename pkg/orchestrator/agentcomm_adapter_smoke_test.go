@@ -227,14 +227,12 @@ func (a smokeMeshActions) Spawn(ctx context.Context, requestID, actor string, re
 	return server.MeshSpawnReceipt{TaskID: string(res.TaskID), ParticipantID: string(res.ParticipantID), MessageID: string(*res.MessageID)}, nil
 }
 
-func (a smokeMeshActions) HelperResult(_ context.Context, actor, taskID string) (server.MeshHelperResult, error) {
-	view, err := a.orch.HelperResult(smokeMeshActor(actor), assistants.TaskID(taskID))
+func (a smokeMeshActions) HelperResult(_ context.Context, actor, taskID, messageID string) (server.MeshHelperResult, error) {
+	view, err := a.orch.HelperResult(smokeMeshActor(actor), assistants.TaskID(taskID), agentcomm.MessageID(messageID))
 	if err != nil {
 		return server.MeshHelperResult{}, err
 	}
-	return server.MeshHelperResult{
-		TaskID: string(view.TaskID), Title: view.Title, Status: string(view.Status), StatusReason: view.StatusReason, Result: view.Result,
-	}, nil
+	return server.MeshHelperResultOf(view), nil
 }
 
 func (a smokeMeshActions) PublishBoard(ctx context.Context, requestID, actor string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {

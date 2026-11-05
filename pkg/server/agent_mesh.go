@@ -37,12 +37,13 @@ type AgentMeshActions interface {
 	// that id as a group. One of another participant is refused as unknown.
 	WaitStatus(ctx context.Context, actor, id string) ([]MeshWaitReceipt, error)
 	CancelWait(ctx context.Context, requestID, actor string, req MeshCancelWaitRequest) error
-	// Spawn starts a one-shot helper of actor's stage. Only a stage agent may; the helper's stage, scope, mode and
+	// Spawn starts a one-shot (or, on request, on_message) helper of actor's stage. Only a stage agent may; the helper's stage, scope, mode and
 	// executor all follow from the actor and the profile.
 	Spawn(ctx context.Context, requestID, actor string, req MeshSpawnRequest) (MeshSpawnReceipt, error)
-	// HelperResult reads the status and the last committed result of a helper actor's stage spawned. A task of
-	// another stage is refused as unknown.
-	HelperResult(ctx context.Context, actor, taskID string) (MeshHelperResult, error)
+	// HelperResult reads the status and the last committed result of a helper of actor's stage, or, with a
+	// messageID, how that request of an on_message helper stands and its answer. A task of another stage is
+	// refused as unknown.
+	HelperResult(ctx context.Context, actor, taskID, messageID string) (MeshHelperResult, error)
 	PublishBoard(ctx context.Context, requestID, actor string, req MeshPublishRequest) (agentcomm.BoardEntry, error)
 	Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error)
 	// BoardTask makes one change to a typed board task as actor.
@@ -116,29 +117,54 @@ type MeshCancelWaitRequest struct {
 }
 
 // MeshSpawnRequest is POST /api/agent-mesh/spawn's body: the helper's profile, its task's title and its
-// instruction — nothing else is the agent's to choose.
+// instruction, and optionally its trigger (one_shot by default, or on_message) — nothing else is the agent's
+// to choose.
 type MeshSpawnRequest struct {
 	ProfileID   string `json:"profile_id"`
 	Title       string `json:"title"`
 	Instruction string `json:"instruction"`
+	Trigger     string `json:"trigger,omitempty"`
 }
 
-// MeshSpawnReceipt names what a spawn created. MessageID is the request the helper answers: wait for it like for
-// any other request.
+// MeshSpawnReceipt names what a spawn created. MessageID is the request a one-shot helper answers: wait for it
+// like for any other request. An on_message helper is created without a request, so it has none.
 type MeshSpawnReceipt struct {
 	TaskID        string `json:"task_id"`
 	ParticipantID string `json:"participant_id"`
-	MessageID     string `json:"message_id"`
+	MessageID     string `json:"message_id,omitempty"`
 }
 
-// MeshHelperResult is GET /api/agent-mesh/helper's answer. Result is the helper's last committed result,
-// absent while it runs and when it ended without one (StatusReason then says why).
+// MeshHelperResult is GET /api/agent-mesh/helper's answer. Result is the helper's last committed result (with
+// message_id: that request's answer), absent while it runs and when it ended without one (StatusReason then says
+// why). Request is set only when message_id was asked for.
 type MeshHelperResult struct {
-	TaskID       string          `json:"task_id"`
-	Title        string          `json:"title"`
-	Status       string          `json:"status"`
-	StatusReason string          `json:"status_reason,omitempty"`
-	Result       json.RawMessage `json:"result,omitempty"`
+	TaskID       string             `json:"task_id"`
+	Title        string             `json:"title"`
+	Status       string             `json:"status"`
+	StatusReason string             `json:"status_reason,omitempty"`
+	Generation   uint64             `json:"generation,omitempty"`
+	Request      *MeshHelperRequest `json:"request,omitempty"`
+	Result       json.RawMessage    `json:"result,omitempty"`
+}
+
+// MeshHelperRequest is one request of an on_message helper: pending, active, result or failed (Reason says why).
+type MeshHelperRequest struct {
+	MessageID string `json:"message_id"`
+	State     string `json:"state"`
+	Turn      uint64 `json:"turn,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// MeshHelperResultOf is the wire form of what the orchestrator read, shared by every adapter of the Service.
+func MeshHelperResultOf(view orchestrator.HelperResultView) MeshHelperResult {
+	out := MeshHelperResult{
+		TaskID: string(view.TaskID), Title: view.Title, Status: string(view.Status), StatusReason: view.StatusReason,
+		Generation: view.Generation, Result: view.Result,
+	}
+	if r := view.Request; r != nil {
+		out.Request = &MeshHelperRequest{MessageID: string(r.ID), State: string(r.State), Turn: r.Turn, Reason: r.Reason}
+	}
+	return out
 }
 
 type MeshPublishRequest struct {
@@ -575,7 +601,7 @@ func (s *Server) handleAgentMeshHelperResult(w http.ResponseWriter, r *http.Requ
 		writeAssistantErrCode(w, http.StatusBadRequest, "task_id_required")
 		return
 	}
-	result, err := s.agentMesh.HelperResult(r.Context(), actor, taskID)
+	result, err := s.agentMesh.HelperResult(r.Context(), actor, taskID, r.URL.Query().Get("message_id"))
 	if err != nil {
 		s.writeAssistantError(w, err)
 		return

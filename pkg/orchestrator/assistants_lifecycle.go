@@ -276,6 +276,9 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	end := helperTurnEnd{waiter: o.taskMeshParticipant(taskID)}
 	end.waitsBefore = o.meshWaitStatusesOf(end.waiter)
 	beforeFP, beforeOK := o.fingerprintFn(o.projectDir())
+	if !o.startHelperTurn(ctx, taskID, task, &turn) {
+		return
+	}
 	end.outcome, end.err = o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), turn.exec.Command, turn.ctx.Prompt, turn.logFile, turn.resultFile)
 	// Marking delivered here also covers a runner that never calls OnDelivered. Only a turn that ran to its end
 	// consumed its input (committed with its outcome); a cut-short turn is retried with the same messages.
@@ -325,7 +328,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			if o.helperOutputCommitHook != nil {
 				o.helperOutputCommitHook()
 			}
-			finishErr := o.finishTaskTurnReplyingGuarded(taskID, end.consumed, assistants.StatusRunning, assistants.StatusFailed, o.helperTurnFailure("assistants: persist recovery", task, turn.exec, err.Error()), nil, o.helperTurnGuard(taskID, task, turn), nil)
+			finishErr := o.failHelperTurn(ctx, taskID, task, turn, end.consumed, o.helperTurnFailure("assistants: persist recovery", task, turn.exec, err.Error()), nil, o.helperTurnGuard(taskID, task, turn))
 			if finishErr != nil && !o.helperOutputCurrent(taskID, task, turn) {
 				o.interruptHelperOutput(ctx, taskID, task, turn)
 			}
@@ -350,6 +353,15 @@ type helperTurn struct {
 	holdEpoch  uint64
 	logFile    string
 	resultFile string
+	request    agentcomm.MessageID // the on_message request the turn works on; "" for any other task
+}
+
+// resultPayload is the task_result payload of the turn's result: an on_message turn binds it to its request.
+func (t helperTurn) resultPayload(result assistants.Result) state.TaskResultPayload {
+	if t.request == "" {
+		return state.TaskResultPayload{Result: result}
+	}
+	return state.TaskResultPayload{Result: result, RequestID: string(t.request), Turn: t.number}
 }
 
 // helperTurnEnd is what the entry method observed around the agent call; classification and commit read it.
@@ -363,12 +375,21 @@ type helperTurnEnd struct {
 	waitsBefore      map[agentcomm.WaitID]agentcomm.WaitStatus
 }
 
-// prepareHelperTurn creates the task's workspace and context and starts the turn. It reports false when the
-// turn must not run: the task already failed here (finishTaskFrom) or the turn did not start.
+// prepareHelperTurn creates the task's workspace and context for its next turn, which startHelperTurn then starts. It
+// reports false when the turn must not run: the task already failed here (finishTaskFrom) or rests again.
 func (o *Orchestrator) prepareHelperTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task) (helperTurn, bool) {
 	exec := o.taskExecution(o.opts.Store.Snapshot(), task)
 	fail := func(what, detail string) {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.helperTurnFailure(what, task, exec, detail))
+	}
+	// An on_message turn works on one request; with none due it does not start, and the helper rests again.
+	var request agentcomm.MessageID
+	if current, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
+		request = onMessageTurnRequest(current)
+	}
+	if state.IsOnMessageHelper(task) && request == "" {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWatching, errNoRequestDue.Error())
+		return helperTurn{}, false
 	}
 	dir := o.taskDir(taskID)
 	if err := ensureTaskWorkspace(dir, o.taskScratchDir(taskID)); err != nil {
@@ -401,34 +422,42 @@ func (o *Orchestrator) prepareHelperTurn(ctx context.Context, taskID assistants.
 		fail("assistants: persist context", werr.Error())
 		return helperTurn{}, false
 	}
-	number, holdEpoch, started := o.startTurn(taskID, tc.inboxIDs)
-	if !started {
-		return helperTurn{}, false
-	}
+	return helperTurn{
+		exec: exec,
+		dir:  dir, ctx: tc,
+		logFile: filepath.Join(dir, "agent.log"), resultFile: filepath.Join(dir, rawResultFileName), request: request,
+	}, true
+}
 
-	resultFile := filepath.Join(dir, rawResultFileName)
+// startHelperTurn records the start of turn right before its process, only the stale answer is cleared in between. An
+// on_message helper whose stage paused or moved on since its command slot was granted does not start: its task goes
+// back to the queue with the request, which the stage's Continue starts.
+func (o *Orchestrator) startHelperTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn *helperTurn) bool {
+	number, holdEpoch, err := o.startTurn(taskID, turn.ctx.inboxIDs, turn.request)
+	if errors.Is(err, errOnMessageGated) {
+		o.requeueBeforeStart(ctx, taskID, onMessageStagePausedReason)
+	}
+	if err != nil {
+		return false
+	}
+	turn.number, turn.holdEpoch = number, holdEpoch
 	// The path is per-task, but a watch/continuation task re-runs under the SAME id (fireWatcherTask ->
 	// maybeScheduleTask -> runHelperTask), and the executor only overwrites resultFile when the turn produced
 	// nonempty text (RunHelperAgent, pkg/executor/hardening.go). Without clearing it first, a textless turn
 	// would silently serve an EARLIER turn's answer as if it were this one's.
-	if rerr := os.Remove(resultFile); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+	if rerr := os.Remove(turn.resultFile); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 		// The turn already started, so a Pause in this window supersedes it: requeue instead of failing.
-		started := helperTurn{number: number, holdEpoch: holdEpoch}
 		if o.helperOutputCommitHook != nil {
 			o.helperOutputCommitHook()
 		}
 		err := o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed,
-			o.helperTurnFailure("assistants: clear stale raw answer", task, exec, rerr.Error()), nil, o.helperTurnGuard(taskID, task, started), nil)
-		if err != nil && !o.helperOutputCurrent(taskID, task, started) {
-			o.interruptHelperOutput(ctx, taskID, task, started)
+			o.helperTurnFailure("assistants: clear stale raw answer", task, turn.exec, rerr.Error()), nil, o.helperTurnGuard(taskID, task, *turn), nil)
+		if err != nil && !o.helperOutputCurrent(taskID, task, *turn) {
+			o.interruptHelperOutput(ctx, taskID, task, *turn)
 		}
-		return helperTurn{}, false
+		return false
 	}
-	return helperTurn{
-		exec: exec,
-		dir:  dir, ctx: tc, number: number, holdEpoch: holdEpoch,
-		logFile: filepath.Join(dir, "agent.log"), resultFile: resultFile,
-	}, true
+	return true
 }
 
 // classifyHelperFailure ends, parks or hands over a turn without an acceptable answer and reports whether it did.
@@ -446,10 +475,14 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 			o.interruptHelperOutput(ctx, taskID, task, turn)
 		}
 	}
-	fail := func(what, detail string) {
+	fail := func(what, detail string, cause error) {
 		beforeCommit()
 		reason := o.helperTurnFailure(what, task, turn.exec, detail)
-		interruptIfSuperseded(o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil))
+		interruptIfSuperseded(o.failHelperTurn(ctx, taskID, task, turn, consumed, reason, cause, guard))
+	}
+	failProcess := func(err error) {
+		what, detail := processFailure(err)
+		fail(what, detail, err)
 	}
 
 	// The run itself is shutting down (Ctrl+C): an invocation it cut short did not fail. The task stays
@@ -475,7 +508,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 		if end.finalizedByOther {
 			return true
 		}
-		fail(processFailure(err))
+		failProcess(err)
 		return true
 	}
 	switch {
@@ -484,7 +517,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 		// subprocess reaching here must not clobber it with a second, contradictory status.
 		return true
 	case outcome.TimedOut:
-		fail("helper agent timed out", "")
+		fail("helper agent timed out", "", nil)
 		return true
 	case !outcome.ProcessOK:
 		// Pause/clarify cancels runCtx just like a crash; its marker survives a concurrent Continue.
@@ -495,7 +528,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 			o.requeuePausedTurn(ctx, taskID)
 			return true
 		}
-		fail(processFailure(outcome.ProcessErr))
+		failProcess(outcome.ProcessErr)
 		return true
 	}
 
@@ -511,7 +544,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 	}
 	if outcome.ProtocolErr != nil {
 		beforeCommit()
-		interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, o.helperProtocolReason(task, turn.exec, outcome.ProtocolErr.Error()), unacceptedAnswer{}, guard))
+		interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, turn, consumed, o.helperProtocolReason(task, turn.exec, outcome.ProtocolErr.Error()), unacceptedAnswer{}, guard))
 		return true
 	}
 	return false
@@ -628,9 +661,9 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 		reason := o.helperTurnFailure(what, task, turn.exec, detail)
 		if answered {
 			answer := unacceptedAnswer{text: end.outcome.RawText, path: filepath.Join(turn.dir, fmt.Sprintf("turn-%d-output.raw.json", turn.number))}
-			interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, reason, answer, guard))
+			interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, turn, consumed, reason, answer, guard))
 		} else {
-			interruptIfSuperseded(o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil))
+			interruptIfSuperseded(o.failHelperTurn(ctx, taskID, task, turn, consumed, reason, nil, guard))
 		}
 	}
 	if !o.helperOutputCurrent(taskID, task, turn) {
@@ -703,7 +736,7 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	// The decoded result is attached as a SECOND effect of the SAME finish operation — never a separate
 	// ApplyRunOperation call — so the journal never has a window where status says "completed" but the
 	// result event does not exist yet (see finishTaskFrom's extra doc comment).
-	resultEff, eerr := taskResultEffect(taskID, result)
+	resultEff, eerr := taskResultEffect(taskID, turn.resultPayload(result))
 	if eerr != nil {
 		fail("assistants: marshal result event", eerr.Error(), false)
 		return
@@ -739,11 +772,20 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 			o.taskFinalPass.Delete(taskID)
 		}
 	}
-	finish := func(status assistants.TaskStatus, reason string, replies []plannedMessage) {
-		err := o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, status, reason, replies, guard, committed, resultEff)
+	finished := func(err error) {
 		if err != nil && restoreLatest() {
 			interruptIfSuperseded(err)
 		}
+	}
+	finish := func(status assistants.TaskStatus, reason string, replies []plannedMessage) {
+		finished(o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, status, reason, replies, guard, committed, resultEff))
+	}
+
+	// An on_message helper answers the request it worked on, in the commit of its result, and rests for the next one.
+	if turn.request != "" {
+		replies := o.planTurnReplies(taskID, turn.number, turnReplyBody(taskID, turn.number, result))
+		finished(o.finishOnMessageRequest(ctx, taskID, turn, state.RequestOutcomeResult, "", replies, guard, committed, resultEff))
+		return
 	}
 
 	// A watcher's successful turn rests in "watching" unless it is its final pass: always for a stage's own
@@ -835,33 +877,50 @@ func taskQuotaReason(q state.QuotaWait) string {
 	return "usage limit: waiting until " + q.Until.UTC().Format(time.RFC3339)
 }
 
-// failAnsweredTurn ends a turn that ran to its end but whose answer cannot be accepted (reason says why). A
-// helper task fails; retrying it is the human's call. A run agent is a standing role, and one bad answer must
-// not end it: it goes back to idle, reachable for the next message. Either way the message that woke the turn
-// gets a passive reply saying why there is no result, with the unvalidated answer — so a colleague waiting for
-// that reply is answered and keeps the work, not left waiting on an agent that will never write again.
-func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn uint64, reason string, answer unacceptedAnswer, guard func(*state.RunState) error) error {
+// failAnsweredTurn ends a turn whose answer cannot be accepted (consumed: the turn's number if it ran to its end). A
+// helper task fails, a run agent goes idle and an on_message helper fails only the turn's request; the requester
+// gets a passive reply with why and the unvalidated answer, so nobody waits on an agent that will not write again.
+func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, consumed uint64, reason string, answer unacceptedAnswer, guard func(*state.RunState) error) error {
+	if turn.request != "" {
+		return o.failOnMessageRequest(ctx, taskID, task, turn, reason, answer, guard)
+	}
 	reason = o.sanitizeTaskReason(reason) // the reply and the idle reason below use the same recorded value
 	standing := task.Scope == assistants.ScopeRun
 	// turn 0 consumed nothing: going idle would hand the same input straight back to a new turn.
-	if turn == 0 || (!standing && task.CreatedBy != assistants.OriginStageAgent) {
-		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil)
+	if consumed == 0 || (!standing && task.CreatedBy != assistants.OriginStageAgent) {
+		return o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil)
 	}
+	replies := o.failureReplies(taskID, task, consumed, reason, standing, answer)
+	if !standing {
+		return o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, replies, guard, nil)
+	}
+	if err := o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), replies, guard, nil); err != nil {
+		return err
+	}
+	o.maybeScheduleTask(ctx, taskID)
+	return nil
+}
+
+// failHelperTurn ends turn, which failed for reason with no answer to show (cause, when the process failed). An
+// on_message helper fails only the turn's request and takes the next one; a process that never started fails the
+// task as before, as does a failure of any other task — the helper keeps its requests for the Retry.
+func (o *Orchestrator) failHelperTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, consumed uint64, reason string, cause error, guard func(*state.RunState) error) error {
+	if turn.request != "" && !errors.Is(cause, executor.ErrAgentStart) {
+		return o.failOnMessageRequest(ctx, taskID, task, turn, reason, unacceptedAnswer{}, guard)
+	}
+	return o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil)
+}
+
+// failureReplies plans the passive replies that end turn of taskID with why it failed and its unvalidated answer;
+// standing says whether writing again starts another turn.
+func (o *Orchestrator) failureReplies(taskID assistants.TaskID, task assistants.Task, turn uint64, reason string, standing bool, answer unacceptedAnswer) []plannedMessage {
 	agent := task.Title
 	if agent == "" {
 		agent = string(task.ProfileID)
 	}
 	answer.text = o.RedactSecrets(answer.text)
 	body := turnFailureBody(taskID, turn, o.RedactSecrets(agent), reason, standing, answer)
-	replies := o.planTurnReplies(taskID, turn, body)
-	if !standing {
-		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason, replies, guard, nil)
-	}
-	if err := o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), replies, guard, nil); err != nil {
-		return err
-	}
-	o.maybeScheduleTask(ctx, taskID)
-	return nil
+	return o.planTurnReplies(taskID, turn, body)
 }
 
 // parkYieldedTurn parks a yielded task in waiting_peer — ending turn, which consumed its input — and closes the ready-before-park window: a reply (or a

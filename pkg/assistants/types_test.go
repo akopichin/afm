@@ -32,6 +32,7 @@ func TestTrigger_Valid(t *testing.T) {
 		{TriggerOneShot, true},
 		{TriggerCheckpoints, true},
 		{TriggerOnCompletion, true},
+		{TriggerOnMessage, true},
 		{"bogus", false},
 	}
 	for _, tc := range cases {

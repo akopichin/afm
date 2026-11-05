@@ -66,6 +66,20 @@ describe('AttachHelperDialog', () => {
     )
   })
 
+  test('attaches an on_message helper and explains that it waits for messages', async () => {
+    const attachSpy = vi.spyOn(runClient, 'attachAssistant').mockResolvedValue({ taskId: 't-3' })
+    const { onAttached } = renderDialog()
+
+    expect(screen.queryByText(/waits idle until it is sent a message/i)).toBeNull()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Trigger' }), { target: { value: 'on_message' } })
+    expect(screen.getByText(/waits idle until it is sent a message/i)).toBeTruthy()
+
+    fireEvent.change(screen.getByPlaceholderText('What should this helper do?'), { target: { value: 'Answer review questions' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Attach helper' }))
+    await waitFor(() => expect(onAttached).toHaveBeenCalledWith('t-3'))
+    expect(attachSpy).toHaveBeenCalledWith('impl', expect.objectContaining({ trigger: 'on_message', mode: 'advisory' }))
+  })
+
   test('surfaces a server error without closing', async () => {
     vi.spyOn(runClient, 'attachAssistant').mockRejectedValue(new Error('invalid_status'))
     const { onAttached } = renderDialog()

@@ -47,8 +47,13 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn
 		count = prev.(int) + 1
 	}
 	if count >= maxConsecutiveDelegationRejections {
-		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed,
-			o.taskTurnFailure(taskID, fmt.Sprintf("delegation_rejected %d times in a row (%s)", count, code), reason), nil, guard,
+		failure := o.taskTurnFailure(taskID, fmt.Sprintf("delegation_rejected %d times in a row (%s)", count, code), reason)
+		// An on_message helper fails only the request it delegated for, and takes the next one afresh.
+		if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok && onMessageTurnRequest(t) != "" {
+			delegating := helperTurn{number: turn, request: onMessageTurnRequest(t)}
+			return o.failOnMessageRequest(o.runContext(context.Background()), taskID, t.Task, delegating, failure, unacceptedAnswer{}, guard)
+		}
+		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, failure, nil, guard,
 			func(state.OperationResult) { o.taskDelegationRejects.Delete(taskID) })
 	}
 

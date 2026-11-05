@@ -52,13 +52,14 @@ type fakeCLIAgentMesh struct {
 	statusErr     error
 	waitErr       error
 
-	lastSpawn      server.MeshSpawnRequest
-	lastSpawnReqID string
-	spawnCalls     int
-	spawnErr       error
-	helperTaskID   string
-	helperResult   server.MeshHelperResult
-	helperErr      error
+	lastSpawn       server.MeshSpawnRequest
+	lastSpawnReqID  string
+	spawnCalls      int
+	spawnErr        error
+	helperTaskID    string
+	helperMessageID string
+	helperResult    server.MeshHelperResult
+	helperErr       error
 }
 
 func (f *fakeCLIAgentMesh) ResolveToken(token string) (string, bool) {
@@ -116,11 +117,14 @@ func (f *fakeCLIAgentMesh) Spawn(ctx context.Context, requestID, actor string, r
 	if f.spawnErr != nil {
 		return server.MeshSpawnReceipt{}, f.spawnErr
 	}
+	if req.Trigger == "on_message" { // an on_message helper is created without a request
+		return server.MeshSpawnReceipt{TaskID: "t-1", ParticipantID: "helper:t-1"}, nil
+	}
 	return server.MeshSpawnReceipt{TaskID: "t-1", ParticipantID: "helper:t-1", MessageID: "mm-1"}, nil
 }
 
-func (f *fakeCLIAgentMesh) HelperResult(ctx context.Context, actor, taskID string) (server.MeshHelperResult, error) {
-	f.helperTaskID = taskID
+func (f *fakeCLIAgentMesh) HelperResult(ctx context.Context, actor, taskID, messageID string) (server.MeshHelperResult, error) {
+	f.helperTaskID, f.helperMessageID = taskID, messageID
 	return f.helperResult, f.helperErr
 }
 
@@ -682,6 +686,32 @@ func TestAgentSpawn_SendsOnlyProfileTitleInstructionAndPrintsTheIDs(t *testing.T
 	}
 }
 
+// --trigger on_message reaches the Service, and the printed receipt has no message_id: no request was sent.
+func TestAgentSpawn_OnMessageTriggerIsSentAndPrintsNoMessageID(t *testing.T) {
+	fake := &fakeCLIAgentMesh{token: "tok-X", participant: "stage:s1"}
+
+	out, _, err := runAgentCLI(t, fake, newAgentSpawnCmd(), "--profile", "reviewer", "--title", "Cart Q&A", "--instruction", "answer questions about the cart",
+		"--trigger", "on_message", "--request-id", "req-1")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if want := (server.MeshSpawnRequest{ProfileID: "reviewer", Title: "Cart Q&A", Instruction: "answer questions about the cart", Trigger: "on_message"}); fake.lastSpawn != want {
+		t.Fatalf("Service got %+v, want %+v", fake.lastSpawn, want)
+	}
+	if _, hasMessage := out["message_id"]; hasMessage || out["task_id"] != "t-1" || out["participant_id"] != "helper:t-1" {
+		t.Fatalf("out = %v, want the task and participant ids and no message_id", out)
+	}
+}
+
+func TestAgentSpawn_RejectsAnUnknownTriggerBeforeTheService(t *testing.T) {
+	fake := &fakeCLIAgentMesh{token: "tok-X", participant: "stage:s1"}
+
+	_, errOut, err := runAgentCLI(t, fake, newAgentSpawnCmd(), "--profile", "reviewer", "--title", "T", "--instruction", "I", "--trigger", "checkpoints")
+	if err == nil || errOut["error"] != "invalid_request" || !strings.Contains(errOut["message"].(string), "--trigger") || fake.spawnCalls != 0 {
+		t.Fatalf("stderr %v, err %v, calls %d, want invalid_request naming --trigger and no Service call", errOut, err, fake.spawnCalls)
+	}
+}
+
 func TestAgentSpawn_RequiresProfileTitleAndInstructionBeforeTheService(t *testing.T) {
 	full := map[string]string{"--profile": "reviewer", "--title": "T", "--instruction": "I"}
 	for i, flag := range []string{"--profile", "--title", "--instruction"} {
@@ -728,6 +758,26 @@ func TestAgentHelperResult_PrintsStatusAndTheFullResult(t *testing.T) {
 	}
 }
 
+// --message-id narrows helper-result to one request of an on_message helper and prints where that request stands.
+func TestAgentHelperResult_MessageIDSelectsOneRequest(t *testing.T) {
+	fake := &fakeCLIAgentMesh{token: "tok-X", participant: "stage:s1", helperResult: server.MeshHelperResult{
+		TaskID: "t-1", Title: "Spec", Status: "watching",
+		Request: &server.MeshHelperRequest{MessageID: "mm-7", State: "failed", Turn: 2, Reason: "agent crashed"},
+	}}
+	out, _, err := runAgentCLI(t, fake, newAgentHelperResultCmd(), "--task-id", "t-1", "--message-id", "mm-7")
+	if err != nil || fake.helperMessageID != "mm-7" {
+		t.Fatalf("helper-result: %v, message %q", err, fake.helperMessageID)
+	}
+	request, _ := out["request"].(map[string]any)
+	if request["message_id"] != "mm-7" || request["state"] != "failed" || request["reason"] != "agent crashed" {
+		t.Fatalf("out = %v, want the failed request", out)
+	}
+
+	if _, _, err := runAgentCLI(t, fake, newAgentHelperResultCmd(), "--task-id", "t-1"); err != nil || fake.helperMessageID != "" {
+		t.Fatalf("without --message-id: %v, message %q, want none", err, fake.helperMessageID)
+	}
+}
+
 func TestAgentHelperResult_NeedsTaskIDAndShowsTheServersRefusal(t *testing.T) {
 	fake := &fakeCLIAgentMesh{token: "tok-X", participant: "stage:s1"}
 	if _, errOut, err := runAgentCLI(t, fake, newAgentHelperResultCmd()); err == nil || errOut["error"] != "invalid_request" {
@@ -758,7 +808,7 @@ func TestAgentMeshActions_SpawnAndHelperResultOverTheRealService(t *testing.T) {
 	if !errors.As(err, &rejected) || rejected.Code != assistants.CodeActorNotAllowed {
 		t.Fatalf("spawn by a non-stage participant: %v, want actor_not_allowed", err)
 	}
-	_, err = actions.HelperResult(ctx, "stage:impl", "t-nope")
+	_, err = actions.HelperResult(ctx, "stage:impl", "t-nope", "")
 	if !errors.As(err, &rejected) || rejected.Code != assistants.CodeNotFound {
 		t.Fatalf("helper-result of an unknown task: %v, want not_found", err)
 	}

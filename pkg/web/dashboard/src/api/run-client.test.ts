@@ -51,6 +51,16 @@ describe('run-client attachAssistant', () => {
     expect(body.request_id.length).toBeGreaterThan(0)
   })
 
+  test('sends the on_message trigger as is', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ task_id: 't-7' }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await attachAssistant('build', { profileId: 'reviewer', title: '', instruction: 'Answer questions.', mode: 'advisory', trigger: 'on_message' })
+
+    const [, init] = fetchMock.mock.calls[0]!
+    expect(JSON.parse(init.body)).toMatchObject({ trigger: 'on_message', mode: 'advisory' })
+  })
+
   test('throws FlowApiError on a rejected attach', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: 'invalid_status' }) })
     vi.stubGlobal('fetch', fetchMock)

@@ -50,6 +50,19 @@ export function isAssistantTaskMode(value: unknown): value is AssistantTaskMode 
   return value === 'advisory' || value === 'required'
 }
 
+// Исход последнего запроса on_message-помощника: ответ получен или ход упал.
+export type AssistantRequestOutcome = 'result' | 'failed'
+
+export function isAssistantRequestOutcome(value: unknown): value is AssistantRequestOutcome {
+  return value === 'result' || value === 'failed'
+}
+
+// parsePendingRequestCount читает pending_requests: сервер может прислать число или список id запросов.
+export function parsePendingRequestCount(raw: unknown): number | undefined {
+  if (typeof raw === 'number') return Number.isInteger(raw) && raw >= 0 ? raw : undefined
+  return Array.isArray(raw) ? raw.length : undefined
+}
+
 // AssistantTask — одна задача помощника, нормализованная из AssistantTaskView (camelCase, те же поля).
 export type AssistantTask = {
   id: string
@@ -79,15 +92,25 @@ export type AssistantTask = {
   // рисовать задачу как "blocks stage"/"blocks helper X" — см. assistantBlockingExplanation.
   waived: boolean
   waiverReason: string
+  // Состояние запросов helper'а с trigger on_message (зеркало server.AssistantTaskView). Поля optional: сервер
+  // отдаёт их omitempty, а остальные триггеры их не имеют.
+  activeRequestId?: string
+  queuedRequests?: number
+  lastRequestId?: string
+  lastOutcome?: AssistantRequestOutcome
+  turn?: number
   // quota — durable-парковка queued-задачи на сбросе лимита подписки (та же форма, что у stage.quota). Статус
   // остаётся queued (mesh identity и inbox сохраняются), поэтому «Usage limit» выводится из этого поля.
   quota?: StageQuota
 }
 
 // assistantTaskStatusLabel — подпись статуса задачи: queued с quota-парковкой читается «Usage limit» (или
-// «Quota exhausted»), остальные статусы — обычная подпись.
-export function assistantTaskStatusLabel(task: Pick<AssistantTask, 'status' | 'quota'>): string {
-  return task.status === 'queued' && task.quota !== undefined ? quotaTitle(task.quota) : ASSISTANT_TASK_STATUS_LABELS[task.status]
+// «Quota exhausted»), watching у on_message — «Waiting for message», остальные статусы — обычная подпись.
+export function assistantTaskStatusLabel(task: Pick<AssistantTask, 'status' | 'quota' | 'trigger'>): string {
+  if (task.status === 'queued' && task.quota !== undefined) return quotaTitle(task.quota)
+  // on_message в покое — не «наблюдает», а ждёт следующего сообщения.
+  if (task.status === 'watching' && task.trigger === 'on_message') return 'Waiting for message'
+  return ASSISTANT_TASK_STATUS_LABELS[task.status]
 }
 
 // AssistantTaskNode — AssistantTask плюс дети по дереву (ByParent-проекция). Глубина не ограничена данными —
@@ -191,6 +214,10 @@ export type AssistantResult = {
   // (markdown fence, surrounding prose, …) before it could be strictly decoded. The verdict is still the
   // assistant's own — repair never touches it.
   repaired: boolean
+  // requestId/turn — какой запрос on_message-помощника и какой ход дали этот результат; у остальных триггеров
+  // сервер их не присылает.
+  requestId?: string
+  turn?: number
 }
 
 export function parseAssistantResult(raw: unknown): AssistantResult | null {
@@ -213,6 +240,8 @@ export function parseAssistantResult(raw: unknown): AssistantResult | null {
     suggestedChange: typeof obj.suggested_change === 'string' ? obj.suggested_change : '',
     limitations: typeof obj.limitations === 'string' ? obj.limitations : '',
     repaired: obj.repaired === true,
+    requestId: typeof obj.request_id === 'string' && obj.request_id !== '' ? obj.request_id : undefined,
+    turn: typeof obj.turn === 'number' ? obj.turn : undefined,
   }
 }
 

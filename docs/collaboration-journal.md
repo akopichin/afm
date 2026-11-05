@@ -138,6 +138,20 @@ value.
   on the agent's behalf. Such a message waits in the recipient's inbox but never
   wakes it. A message from an older journal has no `auto_result` and is an
   ordinary message that wakes its recipient, exactly as before.
+- `request_id` and `request_outcome` on `task_status_changed` (omitted when
+  empty) belong to an `on_message` helper. `request_id` names the request
+  (a `mesh_message_sent` id) on the record that starts a turn for it and on the
+  record that ends it; `request_outcome` (`result` or `failed`) is set on the
+  record that ends the request. The helper's queue — waiting requests, the
+  active one, the last one and how it ended — is not stored: replay rebuilds it
+  from `mesh_message_sent` and these records, deciding on each message whether
+  it is a new request or the answer to a question the helper asked during the
+  active one. A journal from before `on_message` has neither field and no such
+  helper.
+- `request_id` and `turn` on `task_result` (omitted when empty) are written by
+  afm, never by the helper: the request an `on_message` helper's result answers
+  and the turn that produced it. Readers of the plain result ignore them; an
+  older result has none and answers the task as a whole.
 - `readonly_enforcement` on the `task_status_changed` record that starts a
   helper turn (`os` or `none`, omitted when empty) is the read-only guarantee
   the environment gave that turn. It can differ from the guarantee recorded

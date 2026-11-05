@@ -3,6 +3,28 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-04
+
+### Improvement: stage helpers that wait for messages (`trigger: on_message`)
+
+A stage helper can now stay attached and answer requests one by one. With
+`trigger: on_message` (in `assistants:`, the **Attach helper** dialog as **On
+message**, or `afm agent spawn --trigger on_message`) the helper starts no
+process until it is sent a message. Each message is a request: the helper runs
+one turn for it, saves a result bound to that request, replies to the sender and
+rests again as **Waiting for message**. Requests are queued durably and handled
+in order, also across **Pause** and a restart of afm; a failed turn fails only
+its own request. Read the answer to one request with
+`afm agent helper-result --task-id <id> --message-id <id>`. A resting helper
+does not keep the run open and is closed without a model call when its stage is
+done; after that it takes no new requests. A `required` helper lets the stage
+finish only after its last request passed, otherwise the stage waits for a new
+request or **Waive…**. `one_shot`, `checkpoints`, `on_completion` and `team:`
+agents are unchanged. A flow that uses the new trigger needs this version of
+afm. See
+[Helpers that wait for messages](docs/collaboration.md#helpers-that-wait-for-messages)
+and [`examples/on-message-helper/`](examples/on-message-helper/).
+
 ## 2026-11-03
 
 ### Fix: a stage agent no longer hangs waiting for its own `on_completion` helper

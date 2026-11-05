@@ -14,6 +14,7 @@ them write into these sources (e.g. the `basic` flow implements a JWT backend/fr
 | [`buttons/`](buttons/) | Predefined one-click stage actions in the dashboard stage header. |
 | [`verify/`](verify/) | AI-verify: a shell test gate followed by a read-only AI code review before a stage is marked done. |
 | [`agent-team-review/`](agent-team-review/) | A `team:` of two reviewer agents: the stage agent asks them for a review with `afm agent send`, waits for both answers, fixes the findings, then passes a verify gate. |
+| [`on-message-helper/`](on-message-helper/) | A stage helper with `trigger: on_message`: it waits for requests, answers each in its own turn with a result bound to the request, and is closed when the stage is done. |
 
 Copy one into a scratch project and run it there:
 

@@ -335,6 +335,8 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"assistants scalar", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: reviewer\n", true},
 		{"assistants list of names", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: [reviewer, qa]\n", true},
 		{"assistants object form", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: qa\n        title: QA gate\n        instruction: check coverage\n        mode: required\n        trigger: on_completion\n", true},
+		{"assistants trigger on_message", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: qa\n        trigger: on_message\n", true},
+		{"assistants trigger unknown", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: qa\n        trigger: on_messages\n", false},
 		{"assistants mixed list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - reviewer\n      - profile: qa\n        mode: required\n", true},
 		{"assistants mixed with script", "name: f\nstages:\n  - id: s\n    script: echo ok\n    assistants: reviewer\n", false},
 		{"assistants empty profile name", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: [\"\"]\n", false},

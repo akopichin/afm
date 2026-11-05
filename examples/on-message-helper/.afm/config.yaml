@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/config.schema.json
+# Project config for the on-message-helper example: the role of the helper that flow.yaml attaches.
+
+collaboration:
+  profiles:
+    # Replace with your own agent/model. On the host afm admits only the read-only codex-as-claude
+    # adapter for helpers; inside afm's Docker container any configured command or docker.agents
+    # recipe works (for example a type: codex recipe with another model).
+    notes:
+      title: Project notes
+      command: codex-as-claude
+      instructions: |
+        You answer questions about the project in the current directory. Each request is one
+        question: read the files you need and answer only that question, briefly. Do not change
+        files. You may leave the verdict out: you report facts, you do not judge.

@@ -97,14 +97,10 @@ func taskHoldEffect(kind string, taskID assistants.TaskID, owner, reason string)
 // among finishTaskFrom's extra effects without hand-duplicating the string (goconst).
 const taskResultEffectKind = "task_result"
 
-// taskResultEffect carries a completed task's decoded assistants.Result as a "task_result" effect's Payload —
-// bundled into the SAME ApplyRunOperation call as the task_status_changed-to-"completed" effect (see
-// finishTaskFrom's extra parameter and runHelperTask's call site) so both commit in one atomic control
-// record. assistants.Result's own json tags ARE the wire shape (verdict/summary/findings/evidence/
-// context_version/suggested_change/limitations) — no mirror payload struct needed, unlike
-// state.TaskCreatedPayload/TaskStatusChangedPayload/TaskHoldPayload above, since pkg/state's applyTaskResult
-// decodes directly into assistants.Result too.
-func taskResultEffect(taskID assistants.TaskID, result assistants.Result) (state.Effect, error) {
+// taskResultEffect is a turn's result as a "task_result" effect, committed in the same operation as the turn's finish
+// (finishTaskFrom's extra) so that a result never exists without its status; state.TaskResultPayload binds an
+// on_message helper's result to its request and turn.
+func taskResultEffect(taskID assistants.TaskID, result state.TaskResultPayload) (state.Effect, error) {
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_result payload: %w", err)
@@ -154,11 +150,25 @@ func (o *Orchestrator) taskHeld(taskID assistants.TaskID) bool {
 	return held
 }
 
-// taskCompletionGated is completionHelperGated for taskID in the current projection.
-func (o *Orchestrator) taskCompletionGated(taskID assistants.TaskID) bool {
+// completionNotReadyReason is the status reason of an on_completion helper's turn put back in the queue
+// because its stage has no result yet.
+const completionNotReadyReason = "re-queued: parent result not ready"
+
+// stageGateRequeueReason is why a turn of taskID that got its command slot must go back to the queue for its stage,
+// "" when it may run: an on_completion helper's stage lost its result, an on_message helper's stage paused.
+func (o *Orchestrator) stageGateRequeueReason(taskID assistants.TaskID) string {
 	rs := o.opts.Store.Snapshot()
-	t, ok := rs.Assistants.Tasks[taskID]
-	return ok && completionHelperGated(rs, t)
+	t := rs.Assistants.Tasks[taskID]
+	switch {
+	case t == nil:
+		return ""
+	case completionHelperGated(rs, t):
+		return completionNotReadyReason
+	case onMessageGated(rs, t):
+		return onMessageStagePausedReason
+	default:
+		return ""
+	}
 }
 
 // TaskQuota returns a copy of the usage-limit park of a queued task (state.TaskState.Quota) — nil for a task
@@ -215,8 +225,9 @@ func (o *Orchestrator) handleTaskOperationErr(err error) {
 // AttachAndSend), then a single durable ApplyRunOperation — task_created alone (parent stage still pending: nothing
 // to run yet, task stays "waiting_parent"), or task_created PLUS a status transition in the SAME atomic batch
 // when the parent stage is already active: to "queued" (immediately scheduled) for a plain one_shot task
-// (TestAttach_ToPendingStageStaysWaitingParent/TestLifecycle_HappyPath), or to "watching" (NOT scheduled —
-// its collector starts every pass) for a checkpoints/on_completion watcher (T5.4).
+// (TestAttach_ToPendingStageStaysWaitingParent/TestLifecycle_HappyPath), or to "watching" (NOT scheduled) for a
+// checkpoints/on_completion watcher, whose collector starts every pass, and for an on_message helper, which a
+// request addressed to it starts (wakeOnMessageTask).
 //
 // Known Этап-3 scope limit: a task attached while the stage is pending is never automatically promoted when
 // that stage later starts — Этап 3 is the one-shot, non-recursive MVP, and wiring that promotion means
@@ -315,6 +326,7 @@ func (o *Orchestrator) ContinueTask(ctx context.Context, taskID assistants.TaskI
 	runCtx := o.runContext(ctx)
 	descendants := o.descendantIDs(taskID)
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		o.wakeOnMessageTask(runCtx, taskID)
 		o.maybeScheduleTask(runCtx, taskID)
 		// A descendant held ONLY through the ancestor chain (no hold entry of its own) is now eligible again,
 		// but nothing else will ever re-trigger its scheduling — maybeScheduleTask's own "queued" precondition
@@ -382,14 +394,15 @@ func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
 // starts it: a resume (waiting_peer/waiting_children → queued, then queued → running in a separate operation)
 // or a message accepted during a run agent's last turn. Without this check the run loop could finalize the run
 // in between, and the start would then be rejected run_finalizing, losing the turn. Only an idle run agent
-// (idleRunAgent) is exempt. A held (paused) task is not: the hold defers its accepted work, it does not drop
-// it, so the run stays open — like a paused stage — until the human continues or cancels the task.
+// (idleRunAgent) and an on_message helper without a request are exempt. A held (paused) task is not: the hold
+// defers its accepted work, it does not drop it, so the run stays open — like a paused stage — until the human
+// continues or cancels the task.
 func queuedTurnDue(rs state.RunState) bool {
 	for _, t := range rs.Assistants.Tasks {
 		if t.Status != assistants.StatusQueued {
 			continue
 		}
-		if t.Scope == assistants.ScopeRun && idleRunAgent(rs, t) {
+		if (t.Scope == assistants.ScopeRun && idleRunAgent(rs, t)) || state.OnMessageIdle(*t) {
 			continue
 		}
 		return true
@@ -421,7 +434,7 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 	if o.completionPassDeferred(rs, t) {
 		return
 	}
-	if idleRunAgent(rs, t) {
+	if idleRunAgent(rs, t) || onMessageStartBlocked(rs, t) != nil {
 		return
 	}
 	// A turn never starts on another model or account than the task was admitted with: it fails with the reason.
@@ -458,6 +471,9 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 			// A Pause or Revise may have taken the stage's result away since the snapshot.
 			if completionHelperGated(*cur, cur.Assistants.Tasks[taskID]) {
 				return errCompletionGated
+			}
+			if err := onMessageStartBlocked(*cur, cur.Assistants.Tasks[taskID]); err != nil {
+				return err
 			}
 			if now, _ := leftWaits(*cur, agent); !slices.Equal(now, left) {
 				return errLeftWaitsChanged
@@ -512,34 +528,18 @@ func (o *Orchestrator) taskAdmissionHold(task assistants.Task) *executor.UsageLi
 // wrong for tasks, which do). After the requeue commits, maybeScheduleTask is retried once —
 // closing a lost-wakeup window where a concurrent ContinueTask's own reschedule attempt landed too early
 // (status still "running") and silently no-op'd, leaving the task stuck in "queued" with the hold already
-// cleared and nothing left to wake it (see the finish-queue block below for the full trace).
+// cleared and nothing left to wake it (requeueBeforeStart).
 func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, task assistants.Task) {
 	// The slot of the command the task runs: a helper inheriting its stage's command waits for the stage agent.
 	cmd := o.taskExecution(o.opts.Store.Snapshot(), task).Command
 	o.concurrency.SpawnOwned(ctx, concurrency.TaskOwnerKey(string(taskID)), cmd, nil, func(runCtx context.Context, lease *concurrency.Lease) {
 		if o.taskHeld(taskID) {
-			if o.taskRequeueBarrier != nil {
-				o.taskRequeueBarrier(taskID)
-			}
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused before start")
-			// A concurrent ContinueTask may have already cleared the hold and attempted to reschedule BEFORE
-			// this requeue committed (it would have seen status still "running" and silently no-op'd, per
-			// maybeScheduleTask's CAS precondition) — retry scheduling now that the task is actually "queued"
-			// again, closing that lost-wakeup window. Use the OUTER ctx (spawnTask's own parameter), not
-			// runCtx: runCtx belongs to the subprocess invocation that never actually started on this path.
-			// Called even while held: maybeScheduleTask still returns on the hold, but first ends the pass of a
-			// stage that failed meanwhile. Its queued-only CAS precondition keeps a redundant call a no-op.
-			o.maybeScheduleTask(ctx, taskID)
+			o.requeueBeforeStart(ctx, taskID, "re-queued: paused before start")
 			return
 		}
-		// The stage may have lost its result while the turn waited for the slot. Its Continue may already have
-		// found the task still running, so scheduling is retried once the requeue commits.
-		if o.taskCompletionGated(taskID) {
-			if o.taskRequeueBarrier != nil {
-				o.taskRequeueBarrier(taskID)
-			}
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: parent result not ready")
-			o.maybeScheduleTask(ctx, taskID)
+		// The stage may have lost its result or paused while the turn waited for the slot.
+		if reason := o.stageGateRequeueReason(taskID); reason != "" {
+			o.requeueBeforeStart(ctx, taskID, reason)
 			return
 		}
 		// Слот команды получен: hold мог появиться, пока задача ждала его (тот же возврат в queued, что и при паузе).
@@ -556,6 +556,17 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 		}
 		o.runHelperTask(runCtx, taskID, task)
 	})
+}
+
+// requeueBeforeStart puts a running task whose process has not started back in the queue for reason. A concurrent
+// Continue may have found it still running and scheduled nothing, so scheduling is retried once the requeue commits:
+// still held, maybeScheduleTask returns, but first ends the pass of a stage that failed meanwhile.
+func (o *Orchestrator) requeueBeforeStart(ctx context.Context, taskID assistants.TaskID, reason string) {
+	if o.taskRequeueBarrier != nil {
+		o.taskRequeueBarrier(taskID)
+	}
+	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, reason)
+	o.maybeScheduleTask(ctx, taskID)
 }
 
 // finishTaskFrom durably transitions a task to a terminal (or, for the requeue case above, non-terminal)
@@ -593,8 +604,22 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 }
 
 func (o *Orchestrator) finishTaskTurnReplyingGuarded(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, replies []plannedMessage, guard func(*state.RunState) error, committed func(state.OperationResult), extra ...state.Effect) error {
+	return o.finishTaskTurnRequest(taskID, turn, requestEnd{}, from, to, reason, replies, guard, committed, extra...)
+}
+
+// requestEnd is the on_message request a finish ends, and how; zero for a finish that ends none.
+type requestEnd struct {
+	id      agentcomm.MessageID
+	outcome state.RequestOutcome
+}
+
+// finishTaskTurnRequest is finishTaskTurnReplyingGuarded that also records, in the same status record, the end of
+// an on_message request.
+func (o *Orchestrator) finishTaskTurnRequest(taskID assistants.TaskID, turn uint64, end requestEnd, from, to assistants.TaskStatus, reason string, replies []plannedMessage, guard func(*state.RunState) error, committed func(state.OperationResult), extra ...state.Effect) error {
 	reason = o.sanitizeTaskReason(reason)
-	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(to), Reason: reason, Turn: turn})
+	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{
+		Status: string(to), Reason: reason, Turn: turn, RequestID: string(end.id), RequestOutcome: end.outcome,
+	})
 	if err != nil {
 		return err
 	}
@@ -678,9 +703,10 @@ func (o *Orchestrator) finishTaskTurnReplyingGuarded(taskID assistants.TaskID, t
 				// EventAgentCompleted).
 				o.concurrency.WakeEventLoop()
 			}
-			if to == assistants.StatusQueued {
-				// queued never holds the run open either (state.RunBlocker): a run agent going idle after its turn
-				// may be the last thing the run-level barrier was waiting on.
+			if to == assistants.StatusQueued || end.outcome != "" {
+				// queued never holds the run open either (state.RunBlocker), nor does an on_message helper resting with
+				// no request left: a run agent going idle or a helper's last request ending may be the last thing the
+				// run-level barrier was waiting on.
 				o.concurrency.WakeEventLoop()
 			}
 			// Mirrors Send/PostDiscussionMessage's own tail: this commit can be exactly what a pending mesh Wait

@@ -786,6 +786,11 @@ resizing still works, but the width is not retained.
   to every stage); **Attach helper to stage…** opens the stage's **Attach
   helper** dialog (a helper that works for this stage's agent). The second is
   shown only while the stage can take a helper.
+- In the **Attach helper** dialog, **Trigger** offers **On message**: the helper
+  waits idle until it is sent a message, answers each one in its own turn and
+  stays attached; its task view then shows **Waiting for message** and the last
+  request. See
+  [Helpers that wait for messages](collaboration.md#helpers-that-wait-for-messages).
 - Where there is no People panel (for example in `assistants` mode, or with
   collaboration on but no Agent Mesh), the stage header has an **Attach helper…**
   button instead, shown under the same condition. It opens the same dialog.

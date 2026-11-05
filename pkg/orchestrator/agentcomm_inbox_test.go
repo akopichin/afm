@@ -142,7 +142,7 @@ func TestMesh_InboxBudgetPutsUnfinishedThenWakingBeforePassive(t *testing.T) {
 	}
 	waking := send("op-iw-wake", "please look at the login page", false)
 
-	_, rendered, _ := o.renderInbox(h2, nil)
+	_, rendered, _ := o.renderInbox(h2, nil, nil)
 	if len(rendered) == 0 || rendered[0] != waking {
 		t.Fatalf("rendered = %v, want the waking message %s first", rendered, waking)
 	}
@@ -152,7 +152,7 @@ func TestMesh_InboxBudgetPutsUnfinishedThenWakingBeforePassive(t *testing.T) {
 
 	// A retry hands the unfinished turn's input again before anything new, even if it was a passive result.
 	unfinished := passive[len(passive)-1]
-	_, rendered, _ = o.renderInbox(h2, []agentcomm.MessageID{unfinished})
+	_, rendered, _ = o.renderInbox(h2, []agentcomm.MessageID{unfinished}, nil)
 	if len(rendered) < 2 || rendered[0] != unfinished || rendered[1] != waking {
 		t.Fatalf("rendered = %v, want the unfinished %s, then the waking %s", rendered, unfinished, waking)
 	}
