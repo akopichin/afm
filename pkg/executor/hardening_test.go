@@ -500,3 +500,55 @@ func TestRunHelperAgent_RedactsEscapedSecretInProse(t *testing.T) {
 		t.Errorf("RawText = %s, want the escaped secret masked", outcome.RawText)
 	}
 }
+
+// Строки расширения (user/tool_result, afm_final, system afm_stream, поле afm) не меняют то, что видит author и
+// replay наблюдений: парсер действий остаётся прежним.
+func TestParseToolAction_IgnoresStreamExtensionLines(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "activity", "ext_v1_complete.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type action struct{ tool, detail string }
+	want := []*action{
+		nil, // system afm_stream
+		{"text", "Looking"},
+		{"text", "Looking at the code."},
+		{"Bash", "go test ./..."},
+		nil, // user tool_result
+		{"text", `{"verdict":"pass"}`},
+		nil, // afm_final
+		nil, // result
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != len(want) {
+		t.Fatalf("fixture has %d lines, want %d", len(lines), len(want))
+	}
+	for i, line := range lines {
+		tool, detail, ok := executor.ParseToolAction(line, 0)
+		switch {
+		case want[i] == nil && ok:
+			t.Errorf("line %d produced an action %q %q", i, tool, detail)
+		case want[i] != nil && (!ok || tool != want[i].tool || detail != want[i].detail):
+			t.Errorf("line %d = (%q, %q, %v), want %+v", i, tool, detail, ok, *want[i])
+		default:
+		}
+	}
+}
+
+func TestRunAgent_ExtensionStreamKeepsAuthorActions(t *testing.T) {
+	dir := t.TempDir()
+	var got []string
+	ex := executor.New(executor.Config{
+		Command:     "bash",
+		ExtraArgs:   []string{"-c", "cat " + filepath.Join("testdata", "activity", "ext_v1_complete.jsonl")},
+		IdleTimeout: 10 * time.Second,
+		OnAction:    func(tool, detail string) { got = append(got, tool+"|"+detail) },
+	})
+	if err := ex.RunAgent(context.Background(), "implementation", "s1", "go", filepath.Join(dir, "a.log")); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"text|Looking", "text|Looking at the code.", "Bash|go test ./...", `text|{"verdict":"pass"}`}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("author actions = %q, want %q", got, want)
+	}
+}

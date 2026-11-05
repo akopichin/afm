@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -109,7 +110,7 @@ func TestCursorAgentAsClaude_TranslatesEventsAndReportsSuccess(t *testing.T) {
 	}
 
 	lines := nonEmptyLines(res.stdout)
-	var wantKinds = []string{`"type":"thinking"`, `"text":"Checking the directory."`, `"name":"Bash"`, `"name":"Glob"`, `"text":"All done."`, `"type":"result"`}
+	var wantKinds = []string{`"type":"thinking"`, `"text":"Checking the directory."`, `"name":"Bash"`, `"type":"tool_result"`, `"name":"Glob"`, `"text":"All done."`, `"type":"result"`}
 	if len(lines) != len(wantKinds) {
 		t.Fatalf("got %d lines, want %d:\n%s", len(lines), len(wantKinds), res.stdout)
 	}
@@ -118,17 +119,20 @@ func TestCursorAgentAsClaude_TranslatesEventsAndReportsSuccess(t *testing.T) {
 			t.Errorf("line %d = %s, want it to contain %s", i, lines[i], want)
 		}
 	}
+	if !strings.Contains(lines[3], `"tool_use_id":"c1"`) || !strings.Contains(lines[3], `"is_error":false`) || !strings.Contains(lines[3], `"exit_code":0`) {
+		t.Errorf("tool finish = %s, want the call's id, no error and exit code 0", lines[3])
+	}
 	if !strings.Contains(lines[0], `"thinking":"Let me look around."`) {
 		t.Errorf("thinking deltas were not joined: %s", lines[0])
 	}
 	if tool, detail, ok := ParseToolAction(lines[2], 0); !ok || tool != "Bash" || detail != "ls -la" {
 		t.Errorf("ParseToolAction(shell) = %q %q %v", tool, detail, ok)
 	}
-	if tool, detail, ok := ParseToolAction(lines[3], 0); !ok || tool != "Glob" || detail != "*.go" {
+	if tool, detail, ok := ParseToolAction(lines[4], 0); !ok || tool != "Glob" || detail != "*.go" {
 		t.Errorf("ParseToolAction(glob) = %q %q %v", tool, detail, ok)
 	}
-	if !strings.Contains(lines[5], `"subtype":"success"`) || strings.Contains(lines[5], "is_error") {
-		t.Errorf("result line = %s", lines[5])
+	if !strings.Contains(lines[6], `"subtype":"success"`) || strings.Contains(lines[6], "is_error") {
+		t.Errorf("result line = %s", lines[6])
 	}
 }
 
@@ -296,5 +300,92 @@ func TestCursorAgentAsClaude_TranslatesARealRecordedRun(t *testing.T) {
 	last := nonEmptyLines(res.stdout)
 	if !strings.Contains(last[len(last)-1], `"input_tokens":5817`) || !strings.Contains(last[len(last)-1], `"cache_read_input_tokens":13312`) {
 		t.Errorf("result usage = %s", last[len(last)-1])
+	}
+}
+
+func TestCursorAgentAsClaude_ToolFinishFollowsTheResultShape(t *testing.T) {
+	events := `{"type":"tool_call","subtype":"started","call_id":"ok","tool_call":{"shellToolCall":{"args":{"command":"true"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"ok","tool_call":{"shellToolCall":{"args":{"command":"true"},"result":{"success":{"exitCode":0}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"nonzero","tool_call":{"shellToolCall":{"args":{"command":"false"},"result":{"success":{"exitCode":2}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"bad","tool_call":{"readToolCall":{"args":{"path":"x"},"result":{"failure":{"message":"no such file"}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"bare","tool_call":{"globToolCall":{"args":{"globPattern":"*"}}}}
+{"type":"tool_call","subtype":"completed","tool_call":{"shellToolCall":{"args":{"command":"true"},"result":{"success":{"exitCode":0}}}}}
+{"type":"result","subtype":"success","is_error":false,"result":"done"}
+`
+	res := newFakeCursor(t, events, 0).run(t, nil)
+	if res.exitCode != 0 {
+		t.Fatalf("exit %d: %s", res.exitCode, res.stderr)
+	}
+	finishes := map[string]map[string]any{}
+	for _, l := range decodeLines(res.stdout) {
+		if b := contentBlock(l); b != nil && b["type"] == "tool_result" {
+			finishes[b["tool_use_id"].(string)] = map[string]any{"is_error": b["is_error"], "afm": afmField(l)}
+		}
+	}
+	if len(finishes) != 4 {
+		t.Fatalf("finishes = %v, want four (the call without an id has nothing to finish)", finishes)
+	}
+	check := func(id string, isErr bool, exit any) {
+		t.Helper()
+		f := finishes[id]
+		if f["is_error"] != isErr || f["afm"].(map[string]any)["exit_code"] != exit {
+			t.Errorf("%s finish = %v, want is_error %v exit_code %v", id, f, isErr, exit)
+		}
+	}
+	check("ok", false, float64(0))
+	check("nonzero", true, float64(2))
+	check("bad", true, nil)
+	check("bare", false, nil)
+	if finishes["nonzero"]["afm"].(map[string]any)["detail"] != "false" || finishes["nonzero"]["afm"].(map[string]any)["tool"] != "Bash" {
+		t.Errorf("a finish without a start must carry the tool and command: %v", finishes["nonzero"])
+	}
+}
+
+func TestCursorAgentAsClaude_RecordedRunFinishesBothTools(t *testing.T) {
+	recorded, err := os.ReadFile(filepath.Join("testdata", "cursor_agent_stream.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := newFakeCursor(t, string(recorded), 0).run(t, nil)
+	var finishes []map[string]any
+	for _, l := range decodeLines(res.stdout) {
+		if b := contentBlock(l); b != nil && b["type"] == "tool_result" {
+			finishes = append(finishes, l)
+		}
+	}
+	if len(finishes) != 2 || afmField(finishes[1])["exit_code"] != float64(0) || strings.Contains(res.stdout, "hello-probe\\n") {
+		t.Errorf("finishes = %v, want two, the shell one with exit code 0 and no stdout published", finishes)
+	}
+}
+
+// Through the real helper runner the finished call updates the tool that was started.
+func TestCursorAgentAsClaude_FeedsHelperActivityLifecycle(t *testing.T) {
+	recorded, err := os.ReadFile(filepath.Join("testdata", "cursor_agent_stream.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeCursor(t, string(recorded), 0)
+	cmd := filepath.Join(f.binDir, "cursor-e2e")
+	script := "#!/usr/bin/env bash\nexport PATH=" + f.binDir + ":$PATH CURSOR_API_KEY=k\nexec bash " + repoFile(t, "scripts", "cursor-agent-as-claude.sh") + " \"$@\"\n"
+	if err := os.WriteFile(cmd, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture: an executable wrapper
+		t.Fatal(err)
+	}
+	var events []ActivityEvent
+	ex := New(Config{Command: cmd, Dir: f.binDir, OnActivity: func(ev ActivityEvent) { events = append(events, ev) }})
+	if _, err := ex.RunHelperAgent(context.Background(), "t1", "reviewer", "review", filepath.Join(f.binDir, "h.log"), filepath.Join(f.binDir, "r.json")); err != nil {
+		t.Fatal(err)
+	}
+	var started, completed int
+	for _, ev := range events {
+		switch {
+		case ev.Kind == KindToolStarted:
+			started++
+		case ev.Kind == KindToolFinished && ev.Outcome == OutcomeCompleted && ev.Revision == 2:
+			completed++
+		default:
+		}
+	}
+	if started != 2 || completed != 2 {
+		t.Errorf("started %d, completed %d, want both tools finished: %+v", started, completed, events)
 	}
 }

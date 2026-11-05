@@ -99,7 +99,8 @@ right. The selected stage's Feed can also show a People panel on wide screens.
 - **Helpers** — attached helper tasks appear beneath their stage.
   Select one to see its messages, tool calls, result and controls. Its
   [activity history](collaboration.md#selected-helper-activity) is separate from
-  the stage Feed and stays available after the helper finishes. The view
+  the stage Feed and stays available after the helper finishes; messages and
+  tool calls update in place, and a tool shows its start and outcome. The view
   includes a **repaired** badge for an answer whose JSON needed repair or the
   raw answer behind a protocol error when available. With collaboration on,
   your conversation with a stage's agent lives

@@ -1,0 +1,5 @@
+{"type":"system","subtype":"afm_stream","version":1}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_x","is_error":false}]},"afm":{"exit_code":0,"tool":"Bash","detail":"git status"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_x","name":"Bash","input":{"command":"git status"}}]}}
+{"type":"afm_final","version":1,"text":"ok"}
+{"type":"result","subtype":"success","is_error":false}

@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // agentScriptPath returns the absolute path to scripts/openai-agent-as-claude.sh.
@@ -402,5 +405,248 @@ data: [DONE]
 	// system, user, assistant(tool_calls), tool = 4 messages — no followup injected
 	if len(messages) != 4 {
 		t.Fatalf("expected 4 messages (no image followup), got %d: %v", len(messages), messages)
+	}
+}
+
+const agentExt = StreamExtensionEnv + "=1"
+
+func sseChunk(delta string) string {
+	return `data: {"choices":[{"index":0,"delta":` + delta + `,"finish_reason":""}]}` + "\n"
+}
+
+func contentChunk(text string) string { return sseChunk(fmt.Sprintf(`{"content":%q}`, text)) }
+
+func toolCallRound(id, command string) string {
+	args := fmt.Sprintf("%q", fmt.Sprintf(`{"command": %q}`, command))
+	return sseChunk(fmt.Sprintf(`{"role":"assistant","tool_calls":[{"id":%q,"type":"function","index":0,"function":{"name":"bash","arguments":""}}]}`, id)) +
+		sseChunk(fmt.Sprintf(`{"tool_calls":[{"id":"","index":0,"function":{"arguments":%s}}]}`, args)) +
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\ndata: [DONE]\n"
+}
+
+func finalRound(text string) string {
+	return contentChunk(text) + `data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\ndata: [DONE]\n"
+}
+
+// decodeLines decodes every JSON object line of a wrapper's output.
+func decodeLines(out string) []map[string]any {
+	var lines []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) == nil {
+			lines = append(lines, m)
+		}
+	}
+	return lines
+}
+
+func lineOfType(lines []map[string]any, typ string) (out []map[string]any) {
+	for _, l := range lines {
+		if l["type"] == typ {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func afmField(line map[string]any) map[string]any {
+	a, _ := line["afm"].(map[string]any)
+	return a
+}
+
+func TestOpenAIAgentAsClaude_StreamExtension_ToolLifecycleAndFinal(t *testing.T) {
+	requireAgentShimTools(t)
+	fakeCurlDir, _ := writeStatefulFakeCurl(t, []string{
+		contentChunk("Checking the repo.") + toolCallRound("call_1", "echo hi; exit 3"),
+		toolCallRound("call_1", "echo again"), // a provider that reuses an id in the next round
+		finalRound("All done"),
+	}, "200")
+	out, err := runAgentScript(t, fakeCurlDir, "go\n", agentExt)
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	lines := decodeLines(out)
+	if first := lines[0]; first["type"] != "system" || first["subtype"] != "afm_stream" || first["version"] != float64(1) {
+		t.Fatalf("first line = %v, want the announcement", first)
+	}
+	var starts, results []string
+	for _, l := range lines {
+		if b := contentBlock(l); b != nil && b["type"] == "tool_use" {
+			starts = append(starts, b["id"].(string))
+		} else if b != nil && b["type"] == "tool_result" {
+			results = append(results, b["tool_use_id"].(string))
+			if b["tool_use_id"] == starts[0] {
+				hint := afmField(l)
+				if !isErrorResult(b) || hint["exit_code"] != float64(3) || hint["tool"] != "Bash" || hint["detail"] != "echo hi; exit 3" {
+					t.Errorf("first tool finish = %v %v", b, hint)
+				}
+			}
+		}
+	}
+	if len(starts) != 2 || starts[0] == starts[1] || fmt.Sprint(starts) != fmt.Sprint(results) {
+		t.Errorf("tool ids: starts %v results %v, want two distinct ids finished in order", starts, results)
+	}
+	// Round order: note, start, finish, start, finish, answer, afm_final, result.
+	types := lineTypes(lines)
+	if types[len(types)-2] != "afm_final" || types[len(types)-1] != "result" {
+		t.Fatalf("line types = %v, want afm_final then result at the end", types)
+	}
+	finals := finalLines(lines)
+	if len(finals) != 1 || finals[0]["text"] != "All done" || finals[0]["item_id"] == nil {
+		t.Fatalf("afm_final = %v", finals)
+	}
+	var answerMsg map[string]any
+	for _, l := range lineOfType(lines, "assistant") {
+		if b := contentBlock(l); b["type"] == "text" && b["text"] == "All done" {
+			answerMsg = l
+		}
+	}
+	if answerMsg == nil || afmField(answerMsg)["item_id"] != finals[0]["item_id"] || !afmComplete(answerMsg) {
+		t.Errorf("the answer message %v must be the item afm_final names", answerMsg)
+	}
+}
+
+func TestOpenAIAgentAsClaude_StreamExtension_TextAndToolStartAreVisibleWhileTheToolRuns(t *testing.T) {
+	requireAgentShimTools(t)
+	dir := t.TempDir()
+	toolGate := filepath.Join(dir, "tool-gate")
+	// The tool itself waits for the test, so the start can only be seen while the tool is running.
+	round1 := contentChunk(strings.Repeat("thinking out loud ", 8)) + toolCallRound("c1", "until [ -e "+toolGate+" ]; do sleep 0.05; done")
+	fakeCurlDir, _ := writeStatefulFakeCurl(t, []string{round1, finalRound("ok")}, "200")
+	cmd := exec.Command("bash", agentScriptPath(t))
+	cmd.Env = append(os.Environ(), "AFM_OUTPUT_SCHEMA_FILE=", "PATH="+fakeCurlDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"OPENAI_API_KEY=test", "OPENAI_BASE_URL=http://fake/v1", "OPENAI_MODEL=m", agentExt)
+	cmd.Stdin = strings.NewReader("go\n")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	release := func() { _ = os.WriteFile(toolGate, nil, 0o644) }
+	defer func() { release(); _ = cmd.Wait() }()
+
+	seen := make(chan string, 64)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			seen <- sc.Text()
+		}
+		close(seen)
+	}()
+	var text, start bool
+	deadline := time.After(10 * time.Second) // only a failure guard: the gate, not time, decides
+	for !text || !start {
+		select {
+		case l, ok := <-seen:
+			if !ok {
+				t.Fatal("output ended while the tool was still blocked")
+			}
+			if strings.Contains(l, `"tool_result"`) {
+				t.Fatalf("tool_finished arrived while the tool was blocked: %s", l)
+			}
+			text = text || strings.Contains(l, "thinking out loud")
+			start = start || strings.Contains(l, `"tool_use"`)
+		case <-deadline:
+			t.Fatalf("text seen %v, tool start seen %v while the tool ran: the wrapper holds output until the tool ends", text, start)
+		}
+	}
+	release()
+	for finished := false; !finished; {
+		select {
+		case l, ok := <-seen:
+			if !ok {
+				t.Fatal("output ended without tool_finished after the tool was released")
+			}
+			finished = strings.Contains(l, `"tool_result"`)
+		case <-deadline:
+			t.Fatal("no tool_finished after the tool was released")
+		}
+	}
+}
+
+func TestOpenAIAgentAsClaude_StreamExtension_ManySmallChunksStayBounded(t *testing.T) {
+	requireAgentShimTools(t)
+	const chunks = 2000
+	var sb strings.Builder
+	for range chunks {
+		sb.WriteString(contentChunk("ab"))
+	}
+	sb.WriteString(`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\ndata: [DONE]\n")
+	fakeCurlDir, _ := writeStatefulFakeCurl(t, []string{sb.String()}, "200")
+	out, err := runAgentScript(t, fakeCurlDir, "go\n", agentExt)
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	if n := len(strings.Split(strings.TrimSpace(out), "\n")); n > 40 {
+		t.Errorf("%d output lines for %d chunks, want a bounded number", n, chunks)
+	}
+	if len(out) > 64<<10 {
+		t.Errorf("%d bytes of output for %d bytes of text, want roughly linear", len(out), chunks*2)
+	}
+	if finals := finalLines(decodeLines(out)); len(finals) != 1 || len(finals[0]["text"].(string)) != chunks*2 {
+		t.Errorf("afm_final = %d finals, want the whole text", len(finals))
+	}
+}
+
+func TestOpenAIAgentAsClaude_StreamExtension_FailureHasNoFinal(t *testing.T) {
+	requireAgentShimTools(t)
+	fakeCurlDir, _ := writeStatefulFakeCurl(t, []string{contentChunk("partial") + `{"error":{"message":"boom"}}` + "\n"}, "500")
+	out, err := runAgentScript(t, fakeCurlDir, "go\n", agentExt)
+	if err == nil {
+		t.Fatalf("a failed request must exit non-zero:\n%s", out)
+	}
+	lines := decodeLines(out)
+	if finals := finalLines(lines); len(finals) != 0 {
+		t.Errorf("afm_final after a failed request: %v", finals)
+	}
+	if res := lineOfType(lines, "result"); len(res) != 1 || res[0]["subtype"] != "error_during_execution" || !isErrorResult(res[0]) {
+		t.Errorf("result = %v", res)
+	}
+}
+
+func TestOpenAIAgentAsClaude_StreamExtension_SchemaCorrectionKeepsOnlyTheAcceptedAnswerFinal(t *testing.T) {
+	requireAgentShimTools(t)
+	afmDir, _ := writeFakeAfm(t, outputInvalidStderr, 1)
+	fakeCurlDir, _ := writeStatefulFakeCurl(t, []string{textSSE(t, "pass, all good"), textSSE(t, "VALID verdict")}, "200")
+	out, err := runAgentScript(t, fakeCurlDir, "verify it\n", append(schemaEnv(fakeCurlDir, afmDir), agentExt)...)
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	if finals := finalLines(decodeLines(out)); len(finals) != 1 || finals[0]["text"] != "VALID verdict" {
+		t.Fatalf("afm_final = %v, want only the corrected answer", finals)
+	}
+}
+
+// Usage is summed once whether or not the stream is observed live.
+func TestOpenAIAgentAsClaude_StreamExtension_UsageMatchesBufferedRun(t *testing.T) {
+	requireAgentShimTools(t)
+	usage := `data: {"model":"m-1","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}` + "\n"
+	rounds := []string{toolCallRound("c1", "true") + usage, finalRound("fin") + usage}
+	resultOf := func(extra ...string) string {
+		fakeCurlDir, _ := writeStatefulFakeCurl(t, rounds, "200")
+		out, err := runAgentScript(t, fakeCurlDir, "go\n", extra...)
+		if err != nil {
+			t.Fatalf("script failed: %v\n%s", err, out)
+		}
+		return extractResultLine(t, out)
+	}
+	if plain, ext := resultOf(), resultOf(agentExt); plain != ext {
+		t.Errorf("result differs:\n plain: %s\n ext:   %s", plain, ext)
+	}
+}
+
+// Without the flag the wrapper speaks the old protocol: no announcement, ids, afm fields or afm_final.
+func TestOpenAIAgentAsClaude_WithoutExtensionUsesTheOldProtocol(t *testing.T) {
+	requireAgentShimTools(t)
+	fakeCurlDir, _ := writeStatefulFakeCurl(t, []string{toolCallRound("c1", "true"), finalRound("fin")}, "200")
+	out, err := runAgentScript(t, fakeCurlDir, "go\n", StreamExtensionEnv+"=0")
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	for _, banned := range []string{"afm_stream", "afm_final", `"afm"`, `"tool_result"`, `"id"`} {
+		if strings.Contains(out, banned) {
+			t.Errorf("old-protocol output contains %s:\n%s", banned, out)
+		}
 	}
 }

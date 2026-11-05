@@ -240,3 +240,36 @@ Fallback, ONLY if `afm stage ask` itself is unavailable (command not found, or i
   {the question JSON Schema}
 </interactive_rules>
 ```
+
+## 8. Helper stream extension
+
+A helper's work is shown live when its wrapper speaks the optional afm
+extension of Claude's stream-json. afm sets `AFM_STREAM_EXTENSION=1` only for a
+helper with an activity consumer; format-repair and verify runs never get it, so
+their wrappers keep the buffered output. A wrapper that ignores the variable
+works as before: tool calls with an `id` and their `tool_result` still show a
+start and an outcome, a call without an `id` stays a plain action line, and the
+last text may be marked as the answer, but messages are not updated live.
+
+Version 1 of the extension, one JSON object per line:
+
+- `{"type":"system","subtype":"afm_stream","version":1}` — first line; tells
+  afm the wrapper streams live.
+- An `assistant` text or `tool_use` line may carry
+  `"afm":{"item_id":"…","partial":true|false}`. Lines with the same `item_id`
+  are revisions of one message; `partial:true` marks a snapshot that may still
+  grow. A `tool_use` block carries a stable `id`.
+- A `user` line with a `tool_result` block ends the tool with that
+  `tool_use_id`. Its `"afm":{"tool":"…","detail":"…","exit_code":N}` repeats the
+  tool name and command (`exit_code` only when known); tool output is never
+  published.
+- `{"type":"afm_final","version":1,"text":"…","item_id":"…"}` — the answer
+  candidate, named explicitly so afm does not guess which message is final.
+  `item_id` is set only when it equals a streamed message.
+
+afm redacts every text before it is shown or saved and holds back a growing
+message's tail while it could still be the start of a secret. Live updates of a
+growing message come at most once a second and saved ones at most every five
+seconds; an unfinished snapshot is never written to the task log. Unknown
+fields and versions are ignored.
+

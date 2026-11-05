@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // DefaultMarker — маркер по умолчанию; экспортируется как константа, а не повторяющийся литерал, и
@@ -62,20 +63,34 @@ func (r *Writer) Write(p []byte) (int, error) {
 // longestSecretPrefixSuffix — длина самого длинного суффикса b, равного
 // собственному префиксу какого-либо секрета (≤ maxLen-1).
 func (r *Writer) longestSecretPrefixSuffix(b []byte) int {
+	return longestSecretPrefixSuffix(string(b), r.secrets)
+}
+
+// longestSecretPrefixSuffix — длина самого длинного суффикса s, равного собственному (не полному) префиксу
+// какого-либо секрета.
+func longestSecretPrefixSuffix(s string, secrets []string) int {
 	best := 0
-	for _, s := range r.secrets {
-		lim := len(s) - 1
-		if lim > len(b) {
-			lim = len(b)
-		}
+	for _, sec := range secrets {
+		lim := min(len(sec)-1, len(s))
 		for k := lim; k > best; k-- {
-			if bytes.HasPrefix([]byte(s), b[len(b)-k:]) {
+			if strings.HasPrefix(sec, s[len(s)-k:]) {
 				best = k
 				break
 			}
 		}
 	}
 	return best
+}
+
+// TrimSecretPrefix отрезает от s суффикс, который может оказаться началом секрета, ещё не дописанного
+// в следующем снимке текста: удерживается только самый длинный совпадающий суффикс, а не длина секрета.
+// Граница проходит по руне.
+func TrimSecretPrefix(s string, secrets []string) string {
+	cut := len(s) - longestSecretPrefixSuffix(s, secrets)
+	for cut < len(s) && cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // Close сбрасывает удержанный хвост, отредактировав его целиком (на этом этапе

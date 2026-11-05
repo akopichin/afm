@@ -1,0 +1,5 @@
+{"type":"system","subtype":"afm_stream","version":1}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_7","name":"Bash","input":{"command":"make test"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_7","is_error":true}]},"afm":{"exit_code":2}}
+{"type":"afm_final","version":1,"text":"tests failed"}
+{"type":"result","subtype":"success","is_error":false}

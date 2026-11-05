@@ -21,14 +21,24 @@ import (
 
 const activityNoticeType = "assistant_activity"
 
-// activityOf is the OnAction a production helper run of taskID would get.
+// activityOf is the plain action line a production helper run of taskID would publish.
 func activityOf(t *testing.T, o *Orchestrator, taskID assistants.TaskID) func(tool, detail string) {
 	t.Helper()
+	emit := activityEmitOf(t, o, taskID)
+	return func(tool, detail string) { emit(executor.ActivityEvent{Tool: tool, Detail: detail}) }
+}
+
+// activityEmitOf is the OnActivity a production helper run of taskID would get.
+func activityEmitOf(t *testing.T, o *Orchestrator, taskID assistants.TaskID) func(executor.ActivityEvent) {
+	t.Helper()
 	cfg := o.helperExecutorConfig(taskID, "helper-cmd")
-	if cfg.OnAction == nil {
-		t.Fatal("helperExecutorConfig must wire OnAction to the activity publisher")
+	if cfg.OnActivity == nil {
+		t.Fatal("helperExecutorConfig must wire OnActivity to the activity publisher")
 	}
-	return cfg.OnAction
+	if cfg.OnAction != nil {
+		t.Fatal("a helper with OnActivity must not also publish through OnAction")
+	}
+	return cfg.OnActivity
 }
 
 func TestAssistantActivity_PublishesRootStageParticipantTurnAndIdentity(t *testing.T) {
@@ -171,7 +181,7 @@ func TestAssistantActivity_RunScopedTaskHasEmptyStage(t *testing.T) {
 func TestAssistantActivity_TurnIncreasesAcrossContinuedTask(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		o.helperExecutorConfig(assistants.TaskID(taskID), cmd).OnAction("text", "turn output")
+		o.helperExecutorConfig(assistants.TaskID(taskID), cmd).OnActivity(executor.ActivityEvent{Tool: "text", Detail: "turn output"})
 		return passResultOutcome(), nil
 	}
 	res := addTestRunAgent(t, o, "op-turns", nil)

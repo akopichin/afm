@@ -209,3 +209,29 @@ func TestString(t *testing.T) {
 		t.Fatalf("expected redaction marker: %q", got)
 	}
 }
+
+func TestTrimSecretPrefix(t *testing.T) {
+	long := strings.Repeat("x", 8*1024)
+	cases := []struct {
+		name    string
+		text    string
+		secrets []string
+		want    string
+	}{
+		{"no secrets", "hello sk-ab", nil, "hello sk-ab"},
+		{"tail is a secret prefix", "hello sk-ab", []string{"sk-abcdef"}, "hello "},
+		{"tail unrelated to the secret", "hello world", []string{"sk-abcdef"}, "hello world"},
+		{"whole secret is not held", "key sk-abcdef", []string{"sk-abcdef"}, "key sk-abcdef"},
+		{"longest matching prefix wins", "a sk-abc", []string{"sk-abcdef", "bc-zz"}, "a "},
+		{"empty secret ignored", "text", []string{""}, "text"},
+		{"long secret holds only the matching tail", "plain text answer", []string{long}, "plain text answer"},
+		{"long secret, tail matches its start", "plain xxx", []string{long}, "plain "},
+		{"multibyte prefix keeps rune boundary", "текст ключ-се", []string{"ключ-секрет"}, "текст "},
+		{"single byte prefix", "answer s", []string{"secret"}, "answer "},
+	}
+	for _, tc := range cases {
+		if got := TrimSecretPrefix(tc.text, tc.secrets); got != tc.want {
+			t.Errorf("%s: TrimSecretPrefix(%q) = %q, want %q", tc.name, tc.text, got, tc.want)
+		}
+	}
+}

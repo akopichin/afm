@@ -167,6 +167,11 @@ executor, so it has no badge. The stage rail's verify badge tooltip reads
 `AI verify · Code review · Codex Reviewer: passed` for a named AI step and
 `AI verify step 2 · <executor name>: passed` for an unnamed one.
 
+The Feed shows only the step's own events: its start line, the result line,
+errors and the **Show full report** link. The verifier's messages and tool calls
+are not streamed there, for every adapter; they stay in the step's `agent.log`
+and `agent.jsonl` (see [Reports and feedback files](#reports-and-feedback-files)).
+
 ## Choosing a verifier
 
 Any command that runs as an agent can act as a verify adapter — a bare

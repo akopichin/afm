@@ -97,6 +97,9 @@ type Config struct {
 	IdleTimeout    time.Duration
 	TruncateOutput int                       // 0 = no truncation; max chars for Bash-command/tool detail (agent text narrative is never truncated)
 	OnAction       func(tool, detail string) // called for each parsed agent action (may be nil)
+	// OnActivity, if set, receives a helper's typed activity (RunHelperAgent only) instead of OnAction and makes the
+	// run ask built-in wrappers to stream live (StreamExtensionEnv). It runs on one goroutine, off the output reader.
+	OnActivity func(ActivityEvent)
 	// RunID identifies the current afm run — stamped onto every Observation this invocation produces (see
 	// Observation.RunID). Purely a labelling field: directory scoping (RunDir) already separates runs, so an
 	// empty RunID is harmless (Observation.ID stays unique within the run regardless).
@@ -198,15 +201,16 @@ var ErrAgentStart = errors.New("agent start failed")
 const interruptGracePeriod = 15 * time.Second
 
 const (
-	contentTypeText    = "text"
-	contentTypeToolUse = "tool_use"
-	toolNameBash       = "Bash"
-	toolNameWrite      = "Write"
-	toolNameEdit       = "Edit"
-	toolNameRead       = "Read"
-	toolNameGlob       = "Glob"
-	toolNameGrep       = "Grep"
-	eventTypeAssistant = "assistant"
+	contentTypeText       = "text"
+	contentTypeToolUse    = "tool_use"
+	contentTypeToolResult = "tool_result"
+	toolNameBash          = "Bash"
+	toolNameWrite         = "Write"
+	toolNameEdit          = "Edit"
+	toolNameRead          = "Read"
+	toolNameGlob          = "Glob"
+	toolNameGrep          = "Grep"
+	eventTypeAssistant    = "assistant"
 )
 
 // DefaultClaudeArgs returns the standard claude stream-json invocation flags. It also makes the stream
@@ -1024,6 +1028,8 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 			// always strip inherited; re-added by run only for a native schema call
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
 			// always strip inherited; re-added by caller only if mode.isolated()
+		case strings.HasPrefix(kv, StreamExtensionEnv+"="):
+			// always strip inherited; re-added by run only for a helper whose activity is consumed
 		case IsBrowserTransportEnv(kv):
 			// Strip AFM_BROWSER_* from all children; only author runners re-add non-secret browser vars.
 		case IsMeshTransportEnv(kv):
@@ -1136,6 +1142,11 @@ func (e *Executor) runJob(ctx context.Context, job *jobRun, prompt, phase string
 		// scripts/codex-as-claude.sh) независимо от этого флага.
 		filtered = append(filtered, "CODEX_VERIFY=1")
 	}
+	// The live stream goes only to a helper whose activity is shown: format-repair also runs in ModeHelper but
+	// has no consumer, and verify and author keep the buffered contract.
+	if e.cfg.effectiveMode() == ModeHelper && e.cfg.OnActivity != nil {
+		filtered = append(filtered, StreamExtensionEnv+"=1")
+	}
 	// Re-add only the non-secret browser/mesh env for author runners (the tokens live solely in their 0600
 	// descriptor files referenced by AFM_BROWSER_DESCRIPTOR/AFM_MESH_DESCRIPTOR).
 	filtered = append(filtered, browserEnv...)
@@ -1210,6 +1221,9 @@ func (e *Executor) runJob(ctx context.Context, job *jobRun, prompt, phase string
 		// Cancellation, the idle timeout and a user interrupt keep working while drain reads the agent's last
 		// output; an interrupt there returns ErrUserInterrupted, as before the exit.
 		drainErr := pipes.drain(ctx, idleTimer.C(), e.cfg.InterruptCh, group, stderr)
+		if errors.Is(drainErr, errAbandoned) && e.cfg.effectiveMode() != ModeHelper {
+			drainErr = nil // only a helper's answer depends on reading its whole output
+		}
 		if waitErr != nil && ctx.Err() != nil {
 			return ctx.Err() // the context's cancellation killed the agent
 		}

@@ -21,8 +21,8 @@ const pipeGracePeriod = 2 * time.Second
 
 // pipeDrainLimit bounds how long afm reads output after the agent has exited, however busy the pipes are: a
 // descendant that writes without pause would otherwise keep the turn open forever. When it runs out, afm kills
-// the agent's process group.
-const pipeDrainLimit = 10 * time.Second
+// the agent's process group. A variable so tests can shorten it.
+var pipeDrainLimit = 10 * time.Second
 
 // pipeFlushPeriod is how long afm still reads after it killed the group: enough to hand the output already in
 // the pipes to the readers. Whatever keeps the pipes open after that is outside the group — or the consumer of
@@ -175,7 +175,7 @@ func (h handingWriter) Write(b []byte) (n int, err error) {
 // pipeFlushPeriod more; if a pipe is still open then — held by a process outside the group — or a consumer is
 // still stuck in the output callback or the stderr writer, drain abandons the readers (see abandon) and
 // returns. It returns ctx's error, ErrIdleTimeout or ErrUserInterrupted when they stopped the drain, otherwise
-// the stdout reader's own error.
+// the stdout reader's own error, or errAbandoned when the stdout consumer was still busy at the abandonment.
 func (p *agentPipes) drain(ctx context.Context, idle <-chan time.Time, interrupt <-chan struct{}, group *processGroup, stderr io.Writer) error {
 	_ = p.stdinW.Close()
 	<-p.stdinWritten
@@ -185,6 +185,7 @@ func (p *agentPipes) drain(ctx context.Context, idle <-chan time.Time, interrupt
 	exitedAt := time.Now()
 	var killedAt time.Time
 	var stopErr error
+	stdoutStuck := false
 	kill := func(reason error) {
 		if stopErr == nil {
 			stopErr = reason
@@ -214,13 +215,16 @@ func (p *agentPipes) drain(ctx context.Context, idle <-chan time.Time, interrupt
 					kill(nil)
 				}
 			} else if time.Since(killedAt) >= pipeFlushPeriod {
-				p.abandon(stderr, exitedAt)
+				stdoutStuck = p.abandon(stderr, exitedAt)
 				remaining = 0
 			}
 		}
 	}
 	if stopErr != nil {
 		return stopErr
+	}
+	if stdoutStuck {
+		return errAbandoned // the output was not read to its end, so what it said is unknown
 	}
 	return p.stdoutErr()
 }
@@ -229,21 +233,23 @@ func (p *agentPipes) drain(ctx context.Context, idle <-chan time.Time, interrupt
 // reader stuck handing data to its consumer cannot be stopped, but it hands over nothing more once its current
 // call returns, so after drain returns no new output callback starts and nothing new is written to stderr.
 // abandon reports the truncated output in the durable stderr log — unless the stderr writer is the stuck
-// consumer.
-func (p *agentPipes) abandon(stderr io.Writer, exitedAt time.Time) {
+// consumer. It reports whether the stdout consumer was still busy.
+func (p *agentPipes) abandon(stderr io.Writer, exitedAt time.Time) (stdoutStuck bool) {
 	stderrStuck := false
 	for i, o := range p.outputs {
 		_ = o.r.Close() // unblocks a waiting reader with os.ErrClosed
-		if !o.abandon() && i == 1 {
-			stderrStuck = true
+		if !o.abandon() {
+			stdoutStuck = stdoutStuck || i == 0
+			stderrStuck = stderrStuck || i == 1
 		}
 	}
 	if stderrStuck {
-		return
+		return stdoutStuck
 	}
 	// No reader writes to stderr any more: the stderr reader is abandoned while idle, or stderr is a file.
 	_, _ = fmt.Fprintf(durableLog(stderr), "afm: agent output truncated: its output was still being read %s after the agent "+
 		"exited and its process group was killed\n", time.Since(exitedAt).Round(100*time.Millisecond))
+	return stdoutStuck
 }
 
 // durableLog is the part of stderr that only stores output: RunScript's dualWriter also streams stderr live to

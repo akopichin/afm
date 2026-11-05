@@ -388,6 +388,29 @@ func TestReconstructAgentActions_CoversAllPhasesIncludingAutonomous(t *testing.T
 	}
 }
 
+// A verifier's own jsonl is diagnostic: the replay shows an author's actions and nothing from verify/.
+func TestReconstructAgentActions_IgnoresVerifyStepLogs(t *testing.T) {
+	stageDir := t.TempDir()
+	line := func(tool string) []byte {
+		return []byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"` + tool + `","input":{"command":"ls"}}]}}` + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "planning.jsonl"), line("AuthorTool"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stepDir := filepath.Join(stageDir, "verify", "1")
+	if err := os.MkdirAll(stepDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stepDir, "agent.jsonl"), line("VerifierTool"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := reconstructAgentActions(filepath.Dir(stageDir), filepath.Base(stageDir))
+	if len(out) != 1 || out[0].Data.(map[string]string)["tool"] != "AuthorTool" {
+		t.Fatalf("replayed actions = %+v, want only the author's", out)
+	}
+}
+
 // mustDecode decodes rr's JSON body into v, failing the test on error.
 func mustDecode(t *testing.T, rr *httptest.ResponseRecorder, v any) {
 	t.Helper()

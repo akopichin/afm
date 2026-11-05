@@ -17,6 +17,18 @@ describe('parseAssistantActivity', () => {
     expect(parseAssistantActivity({ ...wire, cursor: 'abc' })?.cursor).toBeUndefined()
   })
 
+  it('reads the updatable-row fields and drops unknown kinds and outcomes', () => {
+    const entry = parseAssistantActivity({
+      ...wire, kind: 'tool_finished', invocation_id: 'inv1', item_id: 'tool:a', revision: 2, outcome: 'failed', exit_code: 2,
+      started_at: '2026-10-27T12:00:00Z', finished_at: '2026-10-27T12:00:12Z', final: true,
+    })
+    expect(entry).toMatchObject({ kind: 'tool_finished', invocationId: 'inv1', itemId: 'tool:a', revision: 2, outcome: 'failed', exitCode: 2, final: true })
+    expect(entry?.finishedAt).toBe('2026-10-27T12:00:12Z')
+    const odd = parseAssistantActivity({ ...wire, kind: 'future_kind', outcome: 'weird' })
+    expect(odd?.kind).toBeUndefined()
+    expect(odd?.outcome).toBeUndefined()
+  })
+
   it('rejects a payload without the identity fields', () => {
     expect(parseAssistantActivity({ ...wire, event_id: '' })).toBeNull()
     expect(parseAssistantActivity({ ...wire, task_id: undefined })).toBeNull()

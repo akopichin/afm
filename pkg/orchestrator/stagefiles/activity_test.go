@@ -397,3 +397,47 @@ func TestIsActivityLine(t *testing.T) {
 		}
 	}
 }
+
+// Every capped text field of a typed entry at its limit, all escaping to six bytes per byte, must still fit the
+// reader's line buffer.
+func TestReadTaskActivity_MaxSizeTypedEntryReadsBack(t *testing.T) {
+	dir := t.TempDir()
+	lt := func(n int) string { return strings.Repeat("<", n) }
+	AppendNotice(dir, "stage-a", "assistant_activity", ActivityData{
+		EventID: "act-max", TaskID: "t-1", ParticipantID: "p", Turn: 1, OccurredAt: "2026-10-27T10:00:00Z",
+		Tool: lt(MaxActivityToolBytes), Detail: lt(MaxActivityDetailBytes), Truncated: true,
+		Kind: "message", InvocationID: lt(MaxActivityInvocationBytes), ItemID: lt(MaxActivityItemBytes),
+		Revision: 9, Outcome: "completed", StartedAt: "2026-10-27T10:00:00.123456789Z", FinishedAt: "2026-10-27T10:00:01.123456789Z",
+	})
+	p := mustRead(t, dir, "t-1", ActivityQuery{Limit: 10})
+	if len(p.Entries) != 1 || len(p.Entries[0].ItemID) != MaxActivityItemBytes {
+		t.Fatalf("entries = %+v, want the max-size typed row to be read back", p.Entries)
+	}
+}
+
+func TestReadTaskActivity_TypedFieldsRoundTripAndOldNoticesStayPlain(t *testing.T) {
+	dir := t.TempDir()
+	zero := 0
+	appendRaw(t, dir, `{"time":"2026-10-27T10:00:00Z","stage_id":"s","type":"assistant_activity","data":{"event_id":"old","task_id":"t-1","participant_id":"p","turn":1,"occurred_at":"2026-10-27T10:00:00Z","tool":"Bash","detail":"ls"}}`+"\n")
+	AppendNotice(dir, "s", "assistant_activity", ActivityData{
+		EventID: "new", TaskID: "t-1", Tool: "Bash", Kind: "tool_finished", InvocationID: "inv-1", ItemID: "tool:c1",
+		Revision: 2, Outcome: "completed", ExitCode: &zero,
+	})
+	p := mustRead(t, dir, "t-1", ActivityQuery{})
+	if len(p.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(p.Entries))
+	}
+	if old := p.Entries[0]; old.Kind != "" || old.ItemID != "" || old.Revision != 0 || old.ExitCode != nil {
+		t.Errorf("old entry = %+v, want no typed fields", old)
+	}
+	if e := p.Entries[1]; e.Kind != "tool_finished" || e.InvocationID != "inv-1" || e.ItemID != "tool:c1" || e.Revision != 2 ||
+		e.Outcome != "completed" || e.ExitCode == nil || *e.ExitCode != 0 {
+		t.Errorf("typed entry = %+v, want fields kept, exit code 0 included", e)
+	}
+	raw, _ := json.Marshal(p.Entries[0])
+	for _, key := range []string{"kind", "invocation_id", "item_id", "revision", "partial", "final", "outcome", "exit_code", "started_at", "finished_at"} {
+		if strings.Contains(string(raw), `"`+key+`"`) {
+			t.Errorf("a plain entry carries %s: %s", key, raw)
+		}
+	}
+}

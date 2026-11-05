@@ -226,12 +226,12 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string, step int) *exec
 }
 
 // verifyExecutorConfig — конфигурация verify-запуска; native-режим схемы запрашивается по семейству команды.
+// OnAction не задан: сырые действия проверяющего остаются в его agent.log, а лента стадии получает только события шага.
 func (o *Orchestrator) verifyExecutorConfig(s flow.Stage, cmd string, step int) executor.Config {
 	cfg := executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
-		OnAction:       uiActionPublisher(o.ui, s.ID),
 		OnLimitWarning: o.limitWarningSink(s.ID, ""),
 		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Dir:            o.opts.RootDir,

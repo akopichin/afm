@@ -3,6 +3,20 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-05
+
+### Improvement: visible helper work in the dashboard
+
+A selected helper now shows its messages and tool calls as they happen: a
+message is one row updated in place, a tool call is one row that goes from
+**Started** to **Finished** or **Failed**, and the final answer appears as
+**Answer submitted — see the result**. A `codex` helper keeps its idle timer
+alive on real Codex events. The AI-verify step no longer streams the verifier's
+own messages and tool calls to the stage Feed; they stay in the step's
+`agent.log`. Custom wrappers keep working and can opt in to the
+[stream extension](docs/internals/prompts.md#8-helper-stream-extension). See
+[Selected helper activity](docs/collaboration.md#selected-helper-activity).
+
 ## 2026-11-04
 
 ### Improvement: `assistants` mode turns the Board off for everyone

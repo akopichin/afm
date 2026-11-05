@@ -1,0 +1,3 @@
+{"type":"system","subtype":"afm_stream","version":1}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Progress, not an answer."}]},"afm":{"item_id":"m1","partial":false}}
+{"type":"result","subtype":"success","is_error":false}

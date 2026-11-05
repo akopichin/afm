@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantActivityEntry } from '../../types/assistant-activity'
 import { useRunEpoch } from '../use-run-epoch'
 import { initialData, startActivityRunner, type ActivityControls, type ActivityData, type ActivityStatus } from './activity-runner'
+import { projectActivity, type ActivityRow } from './activity-projection'
 import { MAX_ACTIVITY_ENTRIES, mergeActivity, type OrderMemory } from './activity-window'
 
 export { MAX_ACTIVITY_ENTRIES, mergeActivity }
@@ -14,6 +15,8 @@ const POLL_INTERVAL_MS = 3000
 export type AssistantActivity = {
   // Saved rows plus the live entries not saved yet; always ends at the live end.
   entries: AssistantActivityEntry[]
+  // `entries` with the updates of one message or tool call merged into one row.
+  rows: ActivityRow[]
   status: ActivityStatus
   // The last read failed but the entries on screen are kept: loaded ones, or only live ones when the first
   // load failed (then `status` is 'error' too).
@@ -29,13 +32,17 @@ export type AssistantActivity = {
 
 // useAssistantActivity — saved + live activity of ONE helper task. State and late responses are keyed by
 // (runEpoch, taskId); `live` is the run-wide ring from useEventFeed, `connected` its socket state.
-// terminal tells the task finished: one last catch-up runs, then polling stops.
+// terminal tells the task finished: one last catch-up runs, then polling stops. running tells the task is
+// being worked on now and currentTurn is its turn; together they decide whether a tool without an outcome
+// still counts as in progress.
 export function useAssistantActivity(
   taskId: string | null,
   runId: string,
   live: AssistantActivityEntry[],
   connected: boolean,
   terminal: boolean,
+  running = false,
+  currentTurn?: number,
 ): AssistantActivity {
   const runEpoch = useRunEpoch(runId)
   const key = taskId === null ? '' : `${runEpoch}:${taskId}`
@@ -89,8 +96,11 @@ export function useAssistantActivity(
     [taskId, rows, hasOlder, unplaced, seen, live],
   )
 
+  const projected = useMemo(() => projectActivity(entries, running, currentTurn), [entries, running, currentTurn])
+
   return {
     entries,
+    rows: projected,
     status: current.status,
     refreshFailing: current.refreshFailing || (current.status === 'error' && entries.length > 0),
     hasOlder,

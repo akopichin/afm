@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"progress before the announcement"}]}}
+{"type":"system","subtype":"afm_stream","version":1}
+{"type":"afm_final","version":1,"text":"the declared answer"}
+{"type":"result","subtype":"success","is_error":false}

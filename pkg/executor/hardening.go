@@ -143,10 +143,12 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	helperCfg.VerifyMode = false
 	helperCfg.runMode = ModeHelper
 	helperCfg.BrowserMCP = nil // helpers never get the managed browser capability (§7.4)
+	norm := newActivityNormalizer(e.cfg.OnActivity, e.clk().Now, red, e.cfg.TruncateOutput, job.jobID())
 	started := false
 	delivered := helperCfg.OnDelivered
 	helperCfg.OnDelivered = func() { // run calls it right after cmd.Start succeeds
 		started = true
+		norm.startedAt = norm.now()
 		if delivered != nil {
 			delivered()
 		}
@@ -159,15 +161,26 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(he.cfg.UsageHint)
 	limits := newUsageLimitScanner(he.clk().Now, he.cfg)
-	runErr := he.runJob(ctx, job, prompt, phase, stderr, func(line string) {
-		collector.Observe([]byte(line))
+	handleLine := func(rawLine string) {
+		collector.Observe([]byte(rawLine))
 		// Everything below reads the redacted line, so no field of the event — text, tool name, tool input —
 		// can carry a secret to a sink.
-		line = red.jsonText(line)
+		line := red.jsonText(rawLine)
+		parsed := parseActivityLine(line)
+		if parsed.isPartial() {
+			// A growing snapshot is shown live but never logged as it is: a secret split across snapshots
+			// would leave its start in the log.
+			norm.text(parsed.afm().ItemID, textOf(parsed), true)
+			return
+		}
+		norm.flushDue()
 		limits.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
-		ev, ok := parseStreamEvent(line)
-		if !ok {
+		if final.observeProtocol(parsed) {
+			return
+		}
+		if !parsed.isAssistant() {
+			norm.toolResults(parsed)
 			if !final.observeLine(line) && isErrorLine(line) {
 				lg.LogAction("error", line)
 				if firstErr == "" {
@@ -176,18 +189,31 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 			}
 			return
 		}
-		for _, c := range ev.Message.Content {
+		itemID := parsed.afm().ItemID
+		for _, b := range parsed.Message.Content {
+			c := streamContent{Type: b.Type, Text: b.Text, Name: b.Name, Input: b.Input}
 			if c.Type == contentTypeText {
 				final.observeText(c.Text)
+				norm.text(itemID, c.Text, false)
 			}
-			if tool, detail, actionOK := contentToAction(c, he.cfg.TruncateOutput); actionOK {
-				tool, detail = red.text(tool), red.text(detail)
-				lg.LogAction(tool, detail)
-				if he.cfg.OnAction != nil {
-					he.cfg.OnAction(tool, detail)
-				}
+			tool, detail, actionOK := contentToAction(c, he.cfg.TruncateOutput)
+			if !actionOK {
+				continue
+			}
+			tool, detail = red.text(tool), red.text(detail)
+			lg.LogAction(tool, detail)
+			if c.Type == contentTypeToolUse {
+				norm.toolUse(b.ID, b.Name, tool, detail)
+			}
+			if he.cfg.OnActivity == nil && he.cfg.OnAction != nil {
+				he.cfg.OnAction(tool, detail)
 			}
 		}
+	}
+	runErr := he.runJob(ctx, job, prompt, phase, stderr, func(rawLine string) {
+		norm.gate <- struct{}{}
+		defer func() { <-norm.gate }()
+		handleLine(rawLine)
 	})
 
 	// The redacted stderr must be flushed before its tail is read for the limit text.
@@ -198,6 +224,11 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	runErr = he.turnOutcome(limits, runErr, logFile, stderrFrom)
 	runErr = withCLIReportedError(runErr, limits.terminal, red)
 	lg.LogEnd(runErr)
+	if started {
+		norm.finish(runErr, func() string { return norm.answerItem(&final) })
+	} else {
+		norm.discard()
+	}
 	job.noteFinalText(final.answer())
 	he.finishTurn(job, collector, runErr)
 	if firstErr != "" {

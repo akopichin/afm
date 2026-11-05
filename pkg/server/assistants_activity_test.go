@@ -235,3 +235,28 @@ func TestAssistantActivity_ResponseSizeIsBoundedByTheLimitCap(t *testing.T) {
 		t.Fatalf("entries = %d, body = %d bytes; want %d entries within ~3.3 MiB", len(p.Entries), w.Body.Len(), stagefiles.MaxActivityLimit)
 	}
 }
+
+func TestAssistantActivity_PassesTypedFieldsToTheWire(t *testing.T) {
+	dir := t.TempDir()
+	exit := 3
+	stagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{
+		EventID: "a1", TaskID: "t-1", Tool: "Bash", Kind: "tool_finished", InvocationID: "inv-1", ItemID: "tool:c1",
+		Revision: 2, Outcome: "failed", ExitCode: &exit, StartedAt: "2026-10-27T10:00:00Z", FinishedAt: "2026-10-27T10:00:01Z",
+	})
+	srv := newTestServer(t, Config{AssistantsReader: &fileActivityReader{runDir: dir, tasks: map[string]bool{"t-1": true}}})
+	w := getActivity(t, srv, "/api/assistants/t-1/activity")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Entries) != 1 {
+		t.Fatalf("body = %s, err %v", w.Body.String(), err)
+	}
+	e := body.Entries[0]
+	if e["kind"] != "tool_finished" || e["invocation_id"] != "inv-1" || e["item_id"] != "tool:c1" || e["revision"] != float64(2) ||
+		e["outcome"] != "failed" || e["exit_code"] != float64(3) || e["started_at"] != "2026-10-27T10:00:00Z" || e["finished_at"] != "2026-10-27T10:00:01Z" {
+		t.Errorf("entry on the wire = %v", e)
+	}
+}

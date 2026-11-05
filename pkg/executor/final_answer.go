@@ -18,9 +18,14 @@ const structuredOutputEnforceMarker = "[structured-output-enforce]"
 // event replaces any text.
 type finalAnswer struct {
 	claudeNative bool // the run uses Claude's native schema mode
-	text         string
-	structured   bool // text is Claude's structured payload
-	enforced     bool // the CLI forced the model to give a payload
+	// declared is set once the wrapper announced the stream extension: from then on the answer is only what
+	// afm_final carries, and plain text blocks are progress.
+	declared   bool
+	extText    string // the text of the last afm_final
+	extItemID  string // the message item afm_final points at, if it named one
+	text       string
+	structured bool // text is Claude's structured payload
+	enforced   bool // the CLI forced the model to give a payload
 	// textBeforeEnforcement is the last text when the CLI first forced a payload: the model's own answer.
 	textBeforeEnforcement string
 }
@@ -28,6 +33,20 @@ type finalAnswer struct {
 // observeText records an assistant text block.
 func (a *finalAnswer) observeText(text string) {
 	a.text = text
+}
+
+// observeProtocol consumes the extension's own lines and reports whether line was one. They are recognised
+// before any error check and whatever the schema mode, since a final text may well read like an error.
+func (a *finalAnswer) observeProtocol(line *activityLine) bool {
+	switch {
+	case line.isAnnouncement():
+		a.declared = true
+		return true
+	case line.isFinal():
+		a.extText, a.extItemID = line.Text, line.ItemID
+		return true
+	}
+	return false
 }
 
 // observeLine records what a line other than an assistant event adds to the answer and reports whether it added
@@ -51,7 +70,12 @@ func (a *finalAnswer) observeLine(line string) bool {
 }
 
 // answer is the captured answer; blank means the run gave none.
-func (a *finalAnswer) answer() string { return a.text }
+func (a *finalAnswer) answer() string {
+	if a.declared {
+		return a.extText
+	}
+	return a.text
+}
 
 // payloadMissing reports a clean native run that ended without a structured payload: its text is validated as usual.
 func (a *finalAnswer) payloadMissing(runErr error) bool {

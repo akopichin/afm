@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -378,5 +379,121 @@ func TestOpenAIAsClaude_CurlFailureWithPartialBodyStillFails(t *testing.T) {
 	}
 	if strings.Contains(string(out), `"subtype":"success"`) {
 		t.Errorf("must not report success after curl failure, got:\n%s", out)
+	}
+}
+
+// runTextExt runs openai-as-claude.sh with the stream extension against a fake curl that prints body and then
+// the given tail; it returns stdout lines decoded as JSON objects and the exit error.
+func runTextExt(t *testing.T, body, curlTail string, extraEnv ...string) ([]map[string]any, string, error) {
+	t.Helper()
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "body"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := writeFakeCurl(t, "cat "+strconv.Quote(filepath.Join(dir, "body"))+"\n"+curlTail)
+	cmd := exec.Command("bash", scriptPath(t))
+	cmd.Env = append(os.Environ(), "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"OPENAI_API_KEY=test", "OPENAI_BASE_URL=http://fake/v1", "OPENAI_MODEL=m", StreamExtensionEnv+"=1")
+	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Stdin = strings.NewReader("do it\n")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	return decodeLines(string(out)), stderr.String(), err
+}
+
+const textUsageChunk = `data: {"model":"m-1","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}` + "\n"
+
+func TestOpenAIAsClaude_StreamExtension_FinalOnlyAfterACompleteStream(t *testing.T) {
+	lines, _, err := runTextExt(t, contentChunk("Hello ")+contentChunk("world")+
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n"+textUsageChunk+"data: [DONE]\n", `printf '\n200'`)
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	if first := lines[0]; first["type"] != "system" || first["subtype"] != "afm_stream" {
+		t.Fatalf("first line = %v, want the announcement", first)
+	}
+	finals := finalLines(lines)
+	if len(finals) != 1 || finals[0]["text"] != "Hello world" || finals[0]["item_id"] == nil {
+		t.Fatalf("afm_final = %v", finals)
+	}
+	msgs := lineOfType(lines, "assistant")
+	if len(msgs) != 1 || !afmComplete(msgs[0]) || afmField(msgs[0])["item_id"] != finals[0]["item_id"] {
+		t.Errorf("message lines = %v, want one complete message that afm_final names", msgs)
+	}
+	types := lineTypes(lines)
+	if types[len(types)-2] != "afm_final" || types[len(types)-1] != "result" {
+		t.Errorf("line types = %v", types)
+	}
+	if res := lineOfType(lines, "result")[0]; res["subtype"] != "success" || res["model"] != "m-1" {
+		t.Errorf("result = %v", res)
+	}
+}
+
+func TestOpenAIAsClaude_StreamExtension_CutStreamIsAnErrorNotAPartialSuccess(t *testing.T) {
+	cut := contentChunk("half an ans")
+	cases := map[string]struct{ body, tail string }{
+		"curl exit after partial body": {cut, `exit 18`},
+		"clean close without a finish": {cut, `printf '\n200'`},
+		"http error":                   {`{"error":"nope"}` + "\n", `printf '\n503'`},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			lines, stderr, err := runTextExt(t, c.body, c.tail)
+			if err == nil {
+				t.Fatalf("a cut stream must exit non-zero; lines %v", lines)
+			}
+			if finals := finalLines(lines); len(finals) != 0 {
+				t.Errorf("afm_final after a cut stream: %v", finals)
+			}
+			res := lineOfType(lines, "result")
+			if len(res) != 1 || !isErrorResult(res[0]) || res[0]["subtype"] != "error_during_execution" || stderr == "" {
+				t.Errorf("result %v stderr %q, want an error result and a stderr message", res, stderr)
+			}
+		})
+	}
+}
+
+func TestOpenAIAsClaude_StreamExtension_ManySmallChunksStayBounded(t *testing.T) {
+	var sb strings.Builder
+	const chunks = 2000
+	for range chunks {
+		sb.WriteString(contentChunk("ab"))
+	}
+	sb.WriteString(`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\ndata: [DONE]\n")
+	lines, _, err := runTextExt(t, sb.String(), `printf '\n200'`)
+	if err != nil {
+		t.Fatalf("script failed: %v", err)
+	}
+	raw, _ := json.Marshal(lines)
+	if len(lines) > 40 || len(raw) > 64<<10 {
+		t.Errorf("%d lines / %d bytes for %d chunks, want bounded and roughly linear", len(lines), len(raw), chunks)
+	}
+	if finals := finalLines(lines); len(finals) != 1 || len(finals[0]["text"].(string)) != chunks*2 {
+		t.Errorf("afm_final = %v, want the whole text", finals)
+	}
+}
+
+func TestOpenAIAsClaude_StreamExtension_UsageAndOldProtocolUnchanged(t *testing.T) {
+	body := contentChunk("fin") + `data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n" + textUsageChunk + "data: [DONE]\n"
+	ext, _, err := runTextExt(t, body, `printf '\n200'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _, err := runTextExt(t, body, `printf '\n200'`, StreamExtensionEnv+"=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := lineOfType(ext, "result")[0], lineOfType(plain, "result")[0]; fmt.Sprint(a) != fmt.Sprint(b) {
+		t.Errorf("result differs:\n ext:   %v\n plain: %v", a, b)
+	}
+	raw, _ := json.Marshal(plain)
+	for _, banned := range []string{"afm_stream", "afm_final", `"afm"`} {
+		if strings.Contains(string(raw), banned) {
+			t.Errorf("old-protocol output contains %s: %s", banned, raw)
+		}
 	}
 }

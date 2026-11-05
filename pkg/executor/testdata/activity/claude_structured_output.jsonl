@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"id":"msg_A","content":[{"type":"text","text":"Preparing the verdict."}]}}
+{"type":"assistant","message":{"id":"msg_B","content":[{"type":"tool_use","id":"toolu_so","name":"StructuredOutput","input":{"verdict":"pass"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_so","content":"Structured output provided successfully"}]}}
+{"type":"result","subtype":"success","is_error":false,"structured_output":{"verdict":"pass"}}

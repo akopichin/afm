@@ -395,3 +395,127 @@ describe('AssistantTaskView activity', () => {
     expect(screen.getByText('Start of activity')).toBeInTheDocument()
   })
 })
+
+describe('AssistantTaskView updatable rows', () => {
+  type Wire = Row & Record<string, unknown>
+  const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString()
+  const wire = (n: number, over: Record<string, unknown>): Wire => ({ ...row(n), invocation_id: 'inv1', ...over }) as Wire
+  const toolStart = (n: number, id: string, over: Record<string, unknown> = {}) =>
+    wire(n, { event_id: `s-${id}`, kind: 'tool_started', item_id: `tool:${id}`, revision: 1, ...over })
+  const toolFinish = (n: number, id: string, over: Record<string, unknown> = {}) =>
+    wire(n, { event_id: `f-${id}`, kind: 'tool_finished', item_id: `tool:${id}`, revision: 2, outcome: 'completed', ...over })
+  const msg = (n: number, revision: number, over: Record<string, unknown> = {}) =>
+    wire(n, { event_id: `m${revision}`, kind: 'message', tool: 'text', item_id: 'msg:1', revision, ...over })
+  const asLive = (w: Wire): AssistantActivityEntry => ({
+    eventId: w.event_id, taskId: w.task_id, participantId: '', turn: w.turn, occurredAt: w.occurred_at, tool: w.tool, detail: w.detail,
+    truncated: false, cursor: undefined, kind: w.kind as AssistantActivityEntry['kind'], invocationId: w.invocation_id as string,
+    itemId: w.item_id as string, revision: w.revision as number, outcome: w.outcome as AssistantActivityEntry['outcome'],
+  })
+  const rowCount = (container: HTMLElement) => container.querySelectorAll('.assistant-activity-row').length
+
+  beforeEach(() => vi.useRealTimers())
+  afterEach(() => vi.restoreAllMocks())
+
+  test('a tool left open by the previous request does not spin again when the next turn starts', async () => {
+    mockApi({ activity: () => json(page([toolStart(1, 'a', { turn: 1 })])) })
+    const onMessage = (over: Partial<AssistantTask>) => makeTask({ trigger: 'on_message', activeRequestId: 'r1', ...over })
+    const { container, rerender } = render(view(onMessage({ status: 'running', turn: 1 })))
+    expect(await screen.findByText('Started — completion not received yet')).toBeInTheDocument()
+
+    rerender(view(onMessage({ status: 'paused', turn: 1 })))
+    rerender(view(onMessage({ status: 'running', turn: 2 })))
+    expect(await screen.findByText('Completion not received')).toBeInTheDocument()
+    expect(container.querySelector('.assistant-task-view-spinner')).toBeNull()
+  })
+
+  test('Last action is the newest arrival even when its merged row sits above an older action', async () => {
+    mockApi({
+      activity: () => json(page([
+        msg(1, 1, { occurred_at: at(300), detail: 'draft' }),
+        toolStart(2, 'a', { occurred_at: at(250) }),
+        toolFinish(3, 'a', { occurred_at: at(240) }),
+        msg(4, 2, { occurred_at: at(5), detail: 'final words' }),
+        wire(5, { event_id: 'closed', kind: 'invocation_finished', tool: 'invocation', outcome: 'completed', occurred_at: at(4) }),
+      ])),
+    })
+    render(view(makeTask()))
+    expect(await screen.findByText(/^Last action: message · \d+s ago/)).toBeInTheDocument()
+    expect(screen.queryByText(/no new actions/i)).toBeNull()
+  })
+
+  test('a reconnect recovers the message revision and tool finish missed while disconnected', async () => {
+    vi.useFakeTimers() // no poll may fire: only the reconnect read can bring the missed updates
+    const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    const before = [msg(1, 1, { detail: 'draft words' }), toolStart(2, 'a')]
+    const missed = [msg(3, 2, { detail: 'final words' }), toolFinish(4, 'a')]
+    let reconnected = false
+    const fetchMock = mockApi({
+      activity: (url) => {
+        if (url.includes('after=')) return json(reconnected ? page(missed) : page([], { after: '20' }))
+        return json(page(reconnected ? [...before, ...missed] : before))
+      },
+    })
+    const forwardReads = () =>
+      fetchMock.mock.calls.filter(([u]) => String(u).includes('/activity') && String(u).includes('after=')).length
+    const props = { liveActivity: before.map(asLive) }
+    const { container, rerender, unmount } = render(view(makeTask(), props))
+    await settle()
+    expect(rowCount(container)).toBe(2)
+    expect(screen.getByText('draft words')).toBeInTheDocument()
+    expect(container.querySelector('.assistant-task-view-spinner')).not.toBeNull()
+
+    rerender(view(makeTask(), { ...props, connected: false }))
+    await settle()
+    reconnected = true
+    const readsBefore = forwardReads()
+    rerender(view(makeTask(), props))
+    await settle()
+    expect(forwardReads()).toBe(readsBefore + 1)
+    expect(rowCount(container)).toBe(2)
+    expect(screen.getByText('final words')).toBeInTheDocument()
+    expect(screen.queryByText('draft words')).toBeNull()
+    expect(container.querySelectorAll('.assistant-activity-state.is-finished')).toHaveLength(1)
+    expect(container.querySelector('.assistant-task-view-spinner')).toBeNull()
+
+    // The live ring delivering the same finish afterwards must not duplicate rows.
+    rerender(view(makeTask(), { ...props, liveActivity: [...props.liveActivity, asLive(missed[1]!)] }))
+    await settle()
+    expect(rowCount(container)).toBe(2)
+    expect(container.querySelectorAll('.assistant-activity-state.is-finished')).toHaveLength(1)
+    unmount()
+
+    const again = render(view(makeTask(), props))
+    await settle()
+    expect(rowCount(again.container)).toBe(2)
+    expect(screen.getByText('final words')).toBeInTheDocument()
+    expect(screen.queryByText('draft words')).toBeNull()
+    expect(again.container.querySelector('.assistant-task-view-spinner')).toBeNull()
+  })
+
+  test('remount keeps exact rows with overlapping live and saved events and a late older start', async () => {
+    const saved = [msg(2, 1), toolStart(3, 'a'), toolFinish(4, 'a'), toolFinish(5, 'b'), msg(6, 2)]
+    const ring = [saved[0]!, saved[1]!, saved[2]!, saved[4]!].map(asLive)
+    mockApi({
+      activity: (url) =>
+        url.includes('before=')
+          ? json(page([toolStart(1, 'b')], { before: '0', has_older: false }))
+          : json(page(saved, { before: '20', has_older: true })),
+    })
+    const props = { liveActivity: ring }
+    const first = render(view(makeTask(), props))
+    await screen.findByRole('button', { name: /load older/i })
+    expect(rowCount(first.container)).toBe(3)
+    fireEvent.click(screen.getByRole('button', { name: /load older/i }))
+    await screen.findByText('Start of activity')
+    expect(rowCount(first.container)).toBe(3)
+    first.unmount()
+
+    const second = render(view(makeTask(), props))
+    await screen.findByRole('button', { name: /load older/i })
+    expect(rowCount(second.container)).toBe(3)
+    fireEvent.click(screen.getByRole('button', { name: /load older/i }))
+    await screen.findByText('Start of activity')
+    expect(rowCount(second.container)).toBe(3)
+    expect(second.container.querySelector('.assistant-task-view-spinner')).toBeNull()
+  })
+})

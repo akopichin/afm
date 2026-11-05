@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { AssistantActivityFeed } from './AssistantActivityFeed'
 import type { AssistantActivity } from '../../hooks/use-assistant-activity'
+import { projectActivity } from '../../hooks/use-assistant-activity/activity-projection'
 import type { AssistantActivityEntry } from '../../types/assistant-activity'
 
 function entry(n: number, over: Partial<AssistantActivityEntry> = {}): AssistantActivityEntry {
@@ -12,9 +13,10 @@ function entry(n: number, over: Partial<AssistantActivityEntry> = {}): Assistant
   }
 }
 
-function activity(entries: AssistantActivityEntry[], over: Partial<AssistantActivity> = {}): AssistantActivity {
+function activity(entries: AssistantActivityEntry[], over: Partial<AssistantActivity> = {}, running = false): AssistantActivity {
   return {
-    entries, status: 'ready', refreshFailing: false, hasOlder: false, loadingOlder: false, olderCapped: false,
+    entries,
+    rows: projectActivity(entries, running), status: 'ready', refreshFailing: false, hasOlder: false, loadingOlder: false, olderCapped: false,
     loadOlder: vi.fn(), retry: vi.fn(), ...over,
   }
 }
@@ -37,6 +39,61 @@ function mockRowOffsets(): void {
 afterEach(() => vi.restoreAllMocks())
 
 const scrollRegion = () => screen.getByRole('region', { name: 'Helper activity' })
+
+const tool = (n: number, over: Partial<AssistantActivityEntry>) =>
+  entry(n, { invocationId: 'inv1', itemId: 'tool:a', ...over })
+
+describe('AssistantActivityFeed updatable rows', () => {
+  test('a running tool shows the spinner and the not-completed note', () => {
+    const { container } = render(
+      <AssistantActivityFeed activity={activity([tool(1, { kind: 'tool_started' })], {}, true)} empty={null} />,
+    )
+    expect(screen.getByText('Started — completion not received yet')).toBeInTheDocument()
+    expect(container.querySelector('.assistant-task-view-spinner')).not.toBeNull()
+  })
+
+  test('start and finish are one row with the duration', () => {
+    const finished = tool(2, { kind: 'tool_finished', outcome: 'completed', startedAt: '2026-10-27T12:00:00Z', finishedAt: '2026-10-27T12:00:12Z' })
+    const { container } = render(<AssistantActivityFeed activity={activity([tool(1, { kind: 'tool_started' }), finished], {}, true)} empty={null} />)
+    expect(container.querySelectorAll('.assistant-activity-row')).toHaveLength(1)
+    expect(screen.getByText('Finished · 12s')).toBeInTheDocument()
+    expect(container.querySelector('.assistant-task-view-spinner')).toBeNull()
+  })
+
+  test('failed, timed out, unknown and not received outcomes are labelled, never as success', () => {
+    const finishedWith = (outcome: AssistantActivityEntry['outcome'], exitCode?: number) =>
+      render(<AssistantActivityFeed activity={activity([tool(1, { kind: 'tool_finished', outcome, exitCode })])} empty={null} />)
+    finishedWith('failed', 2)
+    expect(screen.getByText('Failed · exit 2')).toBeInTheDocument()
+    cleanup()
+    finishedWith('timed_out')
+    expect(screen.getByText('Timed out')).toBeInTheDocument()
+    cleanup()
+    finishedWith('unknown')
+    expect(screen.getByText('Outcome unknown')).toBeInTheDocument()
+    cleanup()
+    render(<AssistantActivityFeed activity={activity([tool(1, { kind: 'tool_started' })], {}, false)} empty={null} />)
+    expect(screen.getByText('Completion not received')).toBeInTheDocument()
+  })
+
+  test('an interrupted invocation marks its open tool Interrupted', () => {
+    const closed = entry(2, { kind: 'invocation_finished', invocationId: 'inv1', outcome: 'interrupted', tool: 'invocation' })
+    render(<AssistantActivityFeed activity={activity([tool(1, { kind: 'tool_started' }), closed], {}, true)} empty={null} />)
+    expect(screen.getByText('Interrupted')).toBeInTheDocument()
+  })
+
+  test('message revisions update one row in place; a final message is the neutral answer line', () => {
+    const msg = (n: number, revision: number, detail: string, final = false) =>
+      entry(n, { kind: 'message', tool: 'text', invocationId: 'inv1', itemId: 'msg:1', revision, detail, final })
+    const { container, rerender } = render(<AssistantActivityFeed activity={activity([msg(1, 1, 'he')])} empty={null} />)
+    rerender(<AssistantActivityFeed activity={activity([msg(1, 1, 'he'), msg(2, 2, 'hello there')])} empty={null} />)
+    expect(container.querySelectorAll('.assistant-activity-row')).toHaveLength(1)
+    expect(screen.getByText('hello there')).toBeInTheDocument()
+    rerender(<AssistantActivityFeed activity={activity([msg(1, 1, 'he'), msg(2, 2, 'hello there'), msg(3, 3, 'secret result', true)])} empty={null} />)
+    expect(screen.getByText('Answer submitted — see the result')).toBeInTheDocument()
+    expect(screen.queryByText('secret result')).toBeNull()
+  })
+})
 
 describe('AssistantActivityFeed rows', () => {
   test('a tool call is a compact row with its name and detail', () => {
@@ -237,6 +294,14 @@ describe('AssistantActivityFeed older history', () => {
     expect(screen.queryByRole('button', { name: /load older/i })).toBeNull()
     rerender(<AssistantActivityFeed activity={activity([entry(5)], { hasOlder: true })} empty={null} />)
     expect(screen.getByRole('button', { name: /load older/i })).toBeInTheDocument()
+  })
+
+  test('a loaded tail with only closure records still offers Load older', () => {
+    const closures = Array.from({ length: 3 }, (_, n) => entry(n + 1, { kind: 'invocation_finished', invocationId: `inv${n}`, outcome: 'completed', tool: 'invocation' }))
+    const loadOlder = vi.fn()
+    render(<AssistantActivityFeed activity={activity(closures, { hasOlder: true, loadOlder })} empty={<div>nothing yet</div>} />)
+    fireEvent.click(screen.getByRole('button', { name: /load older/i }))
+    expect(loadOlder).toHaveBeenCalledTimes(1)
   })
 
   test('clicking Load older asks for the page once; a busy button ignores repeat clicks and keeps focus', () => {

@@ -327,3 +327,49 @@ func TestRunHelperAgent_ArgvReachesTheProcess(t *testing.T) {
 		})
 	}
 }
+
+func runAuthor(ex *executor.Executor, dir string) error {
+	return ex.RunAgent(context.Background(), "implementation", "s1", "go", filepath.Join(dir, "author.log"))
+}
+
+// Только helper с потребителем активности получает живой вывод адаптера: format-repair (тот же ModeHelper, но без
+// OnActivity), verify и author продолжают работать по прежнему контракту, а унаследованный флаг не доходит никуда.
+func TestStreamExtensionEnv_OnlyForHelperWithActivityConsumer(t *testing.T) {
+	onActivity := func(executor.ActivityEvent) {}
+	cases := []struct {
+		name string
+		run  func(ex *executor.Executor, dir string) error
+		cfg  executor.Config
+		want bool
+	}{
+		{"helper with OnActivity", runHelper, executor.Config{OnActivity: onActivity}, true},
+		{"helper without OnActivity (format repair)", runHelper, executor.Config{}, false},
+		{"verify with OnActivity configured", runVerify, executor.Config{OnActivity: onActivity}, false},
+		{"author with OnActivity configured", runAuthor, executor.Config{OnActivity: onActivity}, false},
+		{"author", runAuthor, executor.Config{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(executor.StreamExtensionEnv, "inherited")
+			env := runtimeEnvOf(t, "fake-recipe", tc.run, tc.cfg)
+			if got := envContainsLine(env, executor.StreamExtensionEnv+"=1"); got != tc.want {
+				t.Errorf("%s=1 present = %v, want %v", executor.StreamExtensionEnv, got, tc.want)
+			}
+			if strings.Contains(env, executor.StreamExtensionEnv+"=inherited") {
+				t.Errorf("an inherited %s reached the process", executor.StreamExtensionEnv)
+			}
+		})
+	}
+}
+
+// CODEX_VERIFY задаёт политику, флаг расширения — только формат вывода: одно не включает другое.
+func TestStreamExtensionEnv_IsIndependentOfCodexVerify(t *testing.T) {
+	env := runtimeEnvOf(t, "fake-recipe", runHelper, executor.Config{OnActivity: func(executor.ActivityEvent) {}})
+	if !envContainsLine(env, "CODEX_VERIFY=1") || !envContainsLine(env, executor.StreamExtensionEnv+"=1") {
+		t.Errorf("a helper with OnActivity needs both CODEX_VERIFY=1 and the extension flag:\n%s", env)
+	}
+	env = runtimeEnvOf(t, "fake-recipe", runVerify, executor.Config{})
+	if !envContainsLine(env, "CODEX_VERIFY=1") || strings.Contains(env, executor.StreamExtensionEnv+"=") {
+		t.Errorf("verify keeps CODEX_VERIFY=1 and never gets the extension flag:\n%s", env)
+	}
+}

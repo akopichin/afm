@@ -400,6 +400,13 @@
   font-size: 11px;
   color: var(--text-muted);
 }
+.assistant-activity-state { display: inline-flex; align-items: center; gap: 6px; }
+.assistant-activity-state.is-failed,
+.assistant-activity-state.is-timed_out,
+.assistant-activity-state.is-usage_limit { color: var(--danger-text); }
+.assistant-activity-state.is-not_received,
+.assistant-activity-state.is-unknown_outcome,
+.assistant-activity-state.is-interrupted { color: var(--text-secondary); }
 .assistant-activity-message .assistant-activity-meta { align-self: flex-start; }
 .assistant-activity-toggle {
   border: 0;

@@ -203,6 +203,90 @@ extract_failure() {
     failure_msg=${failure_msg:0:4096}
 }
 
+# Live translation for a helper: items stream as they complete and the answer is named by afm_final, so afm can
+# tell progress from the final answer. Same argv and sandbox policy as the buffered verify path below.
+# Each item that carries an id gets a stable id; an item without one is shown once, as a plain action.
+XLATE_EXT='
+    def tool_use($id;$n;$inp): {type:"assistant",message:{content:[{type:"tool_use",id:$id,name:$n,input:$inp}]}};
+    def plain_tool($n;$inp): {type:"assistant",message:{content:[{type:"tool_use",name:$n,input:$inp}]}};
+    def note($t): select($t | test("\\S"))
+        | {type:"assistant",message:{content:[{type:"text",text:$t}]}}
+          + (if (.item.id // "") != "" then {afm:{item_id:.item.id,partial:false}} else {} end);
+    def finish($id;$tool;$detail;$code;$failed):
+        {type:"user",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:$failed}]},
+         afm:({tool:$tool,detail:$detail} + (if ($code | type) == "number" then {exit_code:$code} else {} end))};
+    (.item.id // "") as $id
+    | (.item.type // "") as $it
+    | if .type == "item.started" then
+        if $id == "" then empty
+        elif $it == "command_execution" then tool_use($id; "Bash"; {command: (.item.command // "")})
+        elif ($it == "mcp_tool_call" or $it == "mcp_call") then
+            tool_use($id; ((.item.tool // .item.name // "mcp") | tostring);
+                     {server: (.item.server // ""), arguments: (.item.arguments // .item.input // {})})
+        else empty end
+    elif .type == "item.completed" then
+        if $it == "agent_message" then note(.item.text // "")
+        elif $it == "reasoning" then
+            note(if (.item.text | type) == "string" then .item.text
+                 elif (.item.summary | type) == "array" then (.item.summary | map(.text // "") | join("\n"))
+                 elif (.item.summary | type) == "string" then .item.summary
+                 else "" end)
+        elif $it == "command_execution" then
+            (.item.exit_code) as $code
+            | if $id == "" then plain_tool("Bash"; {command: (.item.command // "")})
+              else finish($id; "Bash"; (.item.command // ""); $code; (($code | type) == "number" and $code != 0) or .item.status == "failed") end
+        elif ($it == "mcp_tool_call" or $it == "mcp_call") then
+            ((.item.tool // .item.name // "mcp") | tostring) as $n
+            | if $id == "" then plain_tool($n; {server: (.item.server // ""), arguments: (.item.arguments // .item.input // {})})
+              else finish($id; $n; ""; null; (.item.status == "failed") or ((.item.error // null) != null)) end
+        else empty end
+    else empty end
+'
+
+# emit_afm_final <raw jsonl> — the answer candidate: the last-message file when codex wrote one, else the last
+# completed agent_message (never a concatenation). It names the streamed message only when it is that message.
+emit_afm_final() {
+    jq -Rsc --rawfile file "${last_msg_file:-/dev/null}" '
+        (split("\n")
+         | map(fromjson? | select(type == "object" and .type == "item.completed" and .item.type == "agent_message"
+                                  and ((.item.text // "") | test("\\S"))))
+         | last) as $m
+        | ($file | sub("\n+$"; "")) as $from_file
+        | (if $from_file != "" then $from_file else ($m.item.text // "") end) as $text
+        | if $text == "" then empty
+          else {type:"afm_final", version:1, text:$text}
+               + (if ($m.item.id // "") != "" and ($m.item.text // "") == $text then {item_id:$m.item.id} else {} end)
+          end' "$1"
+}
+
+if [[ "$CODEX_VERIFY" == "1" && "${AFM_STREAM_EXTENSION:-}" == "1" ]]; then
+    printf '%s\n' '{"type":"system","subtype":"afm_stream","version":1}'
+    # PIPESTATUS[1] is codex's own status; errexit is off so a malformed line cannot stop the stream.
+    set +e
+    printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" | {
+        while IFS= read -r line; do
+            printf '%s\n' "$line" >> "$out_file"
+            printf '%s' "$line" | jq -c "$XLATE_EXT" 2>/dev/null
+        done
+    }
+    codex_exit=${PIPESTATUS[1]}
+    set -e
+
+    extract_usage "$out_file"
+    extract_failure "$out_file"
+    resolved_model=$(resolve_codex_model)
+    emit_afm_final "$out_file"
+
+    if [[ "$codex_exit" -ne 0 ]]; then
+        echo "error: codex exited with status $codex_exit" >&2
+        dump_raw_output
+        build_result_line "error_during_execution"
+        exit "$codex_exit"
+    fi
+    build_result_line "success"
+    exit 0
+fi
+
 if [[ "$CODEX_VERIFY" == "1" ]]; then
     # --- verify mode: UNCHANGED aggregation path ---
     set +e

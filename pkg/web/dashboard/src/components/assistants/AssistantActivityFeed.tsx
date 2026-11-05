@@ -18,7 +18,7 @@ const CAPPED_NOTE = 'Showing the latest 2000 actions. Earlier actions are not sh
 // AssistantActivityFeed — the scroll region of one helper's history. The caller keys it by (run, task), so a
 // task switch starts a fresh scroll position.
 export function AssistantActivityFeed({ activity, empty, children }: AssistantActivityFeedProps): ReactElement {
-  const { entries, hasOlder, loadingOlder, olderCapped, loadOlder } = activity
+  const { rows, hasOlder, loadingOlder, olderCapped, loadOlder } = activity
   const feed = useStickToBottom<HTMLDivElement>()
   const scrollNode = useRef<HTMLDivElement | null>(null)
   const edgeNote = useRef<HTMLDivElement | null>(null)
@@ -43,9 +43,10 @@ export function AssistantActivityFeed({ activity, empty, children }: AssistantAc
     anchor.current = node === null || row === null ? null : { id: row.dataset.eventId ?? '', top: row.offsetTop - node.scrollTop }
   }, [])
 
-  const showOlderButton = entries.length > 0 && hasOlder && !olderCapped
+  // Not gated on visible rows: a loaded tail of closure records shows none, yet older actions exist.
+  const showOlderButton = hasOlder && !olderCapped
   // The note that replaces the button: the start of the history, or the bound of what the panel keeps.
-  const showEdgeNote = entries.length > 0 && !showOlderButton
+  const showEdgeNote = rows.length > 0 && !showOlderButton
   useLayoutEffect(() => {
     if (!showEdgeNote || !focusEdgeNote.current) return
     focusEdgeNote.current = false
@@ -102,15 +103,19 @@ export function AssistantActivityFeed({ activity, empty, children }: AssistantAc
           {olderCapped ? CAPPED_NOTE : 'Start of activity'}
         </div>
       )}
-      {entries.length === 0 ? (
+      {rows.length === 0 ? (
         empty
       ) : (
-        entries.map((entry, index) => {
-          const previous = entries[index - 1]
+        rows.map((row, index) => {
+          const { entry } = row
+          const previous = rows[index - 1]?.entry
           return (
             <AssistantActivityRow
-              key={entry.eventId}
+              key={row.key}
+              rowKey={row.key}
               entry={entry}
+              state={row.state}
+              durationMs={row.durationMs}
               gap={formatEventGap(Date.parse(entry.occurredAt), previous === undefined ? NaN : Date.parse(previous.occurredAt))}
               firstEvent={previous === undefined && !hasOlder}
               onBeforeExpand={feed.release}

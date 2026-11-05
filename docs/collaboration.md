@@ -731,6 +731,28 @@ the first message or tool call…**; a quiet helper shows how long it has gone
 without a new action. These observations do not indicate whether a tool
 succeeded or whether the helper is stuck.
 
+A message is one row that is updated in place while the helper writes it, not
+a new row per update. A tool call is also one row: it shows **Started —
+completion not received yet** with a spinner until the tool ends, then
+**Finished · 12s** or **Failed · exit 2**. **Completion not received** means
+the helper's call ended without reporting the tool's end, and **Interrupted**
+means the call was stopped while the tool was running. When the helper submits
+its answer, the history shows an **Answer submitted — see the result** row
+instead of repeating the answer; the result card below carries it.
+
+Which rows update depends on what the helper's output provides. The built-in
+wrappers (`codex-as-claude`, `cursor-agent-as-claude`, `openai-agent-as-claude`,
+`openai-as-claude`) and the native `claude` command stream messages live. For
+any helper, a tool call with an ID and a matching tool result shows its
+start and outcome; a tool call without an ID stays a plain action line, and the
+last text of the call may be marked as the answer even when the helper never
+declared the stream extension. Wrappers that emit nothing until the end show the
+whole call at once. A `codex` helper counts real Codex events as output, so
+they reset the idle timeout. A tool that sends no event for longer than the
+configured idle timeout can still be stopped by it: afm adds no heartbeat. See
+[Helper stream extension](internals/prompts.md#8-helper-stream-extension) for
+wrapper authors.
+
 Each helper has its own activity history, including later watcher passes and
 turns after Continue. Actions are saved on a best-effort basis and restored on
 reload or reconnect. If live updates disconnect, the view keeps the activity
@@ -757,6 +779,18 @@ Each entry has a cursor; cursors are byte offsets in the run's notice journal,
 separate from task event sequence numbers. `limit` defaults to 100 and is capped
 at 200. Supply at most one cursor. Invalid cursors return HTTP 400; an unknown
 task or unavailable activity reader returns HTTP 404.
+
+Entries keep the old fields (`tool`, `detail`, `occurred_at`, ...) and may add
+optional ones: `kind` (`message`, `tool_started`, `tool_finished`,
+`invocation_finished`), `invocation_id`, `item_id`, `revision`, `partial`,
+`final`, `outcome` (`completed`, `failed`, `interrupted`, `timed_out`,
+`usage_limit`), `exit_code`, `started_at` and `finished_at`. An entry without
+`kind` is a plain action line. Entries are append-only: a client shows one row
+per (`invocation_id`, `item_id`) pair, for messages and tool calls alike: an
+`item_id` such as `msg:t1` repeats in every invocation, so it identifies a row
+only together with its `invocation_id`. Within a pair, the entry with the highest
+`revision` replaces the earlier ones; `partial: true` means the message may
+still grow.
 
 ## Repeating prompts
 

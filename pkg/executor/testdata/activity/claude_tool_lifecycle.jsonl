@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","session_id":"s-1","model":"claude-opus-4-8"}
+{"type":"assistant","message":{"id":"msg_A","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"<trimmed>"}]}}
+{"type":"assistant","message":{"id":"msg_A","type":"message","role":"assistant","content":[{"type":"text","text":"Checking the repository."}]}}
+{"type":"assistant","message":{"id":"msg_A","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls pkg"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"executor\nredact","is_error":false}]}}
+{"type":"assistant","message":{"id":"msg_B","type":"message","role":"assistant","content":[{"type":"text","text":"All good."}]}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"All good."}

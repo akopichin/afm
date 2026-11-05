@@ -19,7 +19,7 @@ import {
   type AssistantTask,
 } from '../../types/assistant-task'
 import type { AssistantActivityEntry } from '../../types/assistant-activity'
-import { useAssistantActivity } from '../../hooks/use-assistant-activity'
+import { latestAction, useAssistantActivity } from '../../hooks/use-assistant-activity'
 import { AssistantBreadcrumb } from './AssistantBreadcrumb'
 import { AssistantActivityEmpty } from './AssistantActivityEmpty'
 import { AssistantActivityFeed } from './AssistantActivityFeed'
@@ -135,7 +135,7 @@ export function AssistantTaskView({
 }: AssistantTaskViewProps): ReactElement {
   const result = useTaskResult(task?.id ?? null)
   const isTerminal = task !== null && ASSISTANT_TASK_TERMINAL.has(task.status)
-  const activity = useAssistantActivity(task?.id ?? null, runId, liveActivity, connected, isTerminal)
+  const activity = useAssistantActivity(task?.id ?? null, runId, liveActivity, connected, isTerminal, task?.status === 'running', task?.turn)
 
   if (task === null) {
     return (
@@ -184,7 +184,7 @@ export function AssistantTaskView({
       {task.trigger === 'on_message' && <OnMessageBlock task={task} />}
 
       <AssistantActivityStatus
-        last={activity.entries[activity.entries.length - 1] ?? null}
+        last={latestAction(activity.entries)}
         connected={connected}
         refreshFailing={activity.refreshFailing}
         running={task.status === 'running'}

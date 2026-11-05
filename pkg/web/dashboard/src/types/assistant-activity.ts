@@ -5,6 +5,12 @@
 // Tool name the server uses for a plain assistant message (rendered as Markdown, not as a tool row).
 export const ACTIVITY_TEXT_TOOL = 'text'
 
+export type ActivityKind = 'message' | 'tool_started' | 'tool_finished' | 'invocation_finished'
+export type ActivityOutcome = 'completed' | 'failed' | 'interrupted' | 'timed_out' | 'usage_limit' | 'unknown'
+
+const ACTIVITY_KINDS: readonly string[] = ['message', 'tool_started', 'tool_finished', 'invocation_finished']
+const ACTIVITY_OUTCOMES: readonly string[] = ['completed', 'failed', 'interrupted', 'timed_out', 'usage_limit', 'unknown']
+
 export type AssistantActivityEntry = {
   eventId: string
   taskId: string
@@ -14,6 +20,17 @@ export type AssistantActivityEntry = {
   tool: string
   detail: string
   truncated: boolean
+  // Fields of the updatable rows; a record without `kind` is a legacy static line.
+  kind?: ActivityKind
+  invocationId?: string
+  itemId?: string
+  revision?: number
+  partial?: boolean
+  final?: boolean
+  outcome?: ActivityOutcome
+  exitCode?: number
+  startedAt?: string
+  finishedAt?: string
   // Offset just after the entry's line in notices.jsonl; only history entries have one. Not a task event Seq.
   cursor: string | undefined
 }
@@ -35,6 +52,10 @@ function parseCursor(value: unknown): string | undefined {
   return undefined
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object'
 }
@@ -46,6 +67,8 @@ export function parseAssistantActivity(raw: unknown): AssistantActivityEntry | n
   const { event_id: eventId, task_id: taskId, tool, occurred_at: occurredAt } = raw
   if (typeof eventId !== 'string' || eventId === '' || typeof taskId !== 'string' || taskId === '') return null
   if (typeof tool !== 'string' || typeof occurredAt !== 'string') return null
+  const kind = typeof raw.kind === 'string' && ACTIVITY_KINDS.includes(raw.kind) ? (raw.kind as ActivityKind) : undefined
+  const outcome = typeof raw.outcome === 'string' && ACTIVITY_OUTCOMES.includes(raw.outcome) ? (raw.outcome as ActivityOutcome) : undefined
   return {
     eventId,
     taskId,
@@ -55,6 +78,16 @@ export function parseAssistantActivity(raw: unknown): AssistantActivityEntry | n
     tool,
     detail: typeof raw.detail === 'string' ? raw.detail : '',
     truncated: raw.truncated === true,
+    kind,
+    invocationId: optionalString(raw.invocation_id),
+    itemId: optionalString(raw.item_id),
+    revision: typeof raw.revision === 'number' ? raw.revision : undefined,
+    partial: raw.partial === true ? true : undefined,
+    final: raw.final === true ? true : undefined,
+    outcome,
+    exitCode: typeof raw.exit_code === 'number' ? raw.exit_code : undefined,
+    startedAt: optionalString(raw.started_at),
+    finishedAt: optionalString(raw.finished_at),
     cursor: parseCursor(raw.cursor),
   }
 }

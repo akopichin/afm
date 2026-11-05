@@ -22,11 +22,14 @@ const (
 const (
 	MaxActivityDetailBytes = 16 * 1024
 	MaxActivityToolBytes   = 256
+	// Идентификаторы вызова и элемента приходят от адаптера и тоже ограничены по размеру строки.
+	MaxActivityInvocationBytes = 128
+	MaxActivityItemBytes       = 256
 )
 
-// activityLineBuffer — самая длинная читаемая строка: каждый байт detail и tool после JSON-экранирования до шести
+// activityLineBuffer — самая длинная читаемая строка: каждый байт текстовых полей после JSON-экранирования до шести
 // байт, плюс запас на остальные поля. Более длинная строка не может быть записью активности и пропускается.
-const activityLineBuffer = 6*(MaxActivityDetailBytes+MaxActivityToolBytes) + (4 << 10)
+const activityLineBuffer = 6*(MaxActivityDetailBytes+MaxActivityToolBytes+MaxActivityInvocationBytes+MaxActivityItemBytes) + (4 << 10)
 
 // ErrInvalidCursor — курсор не лежит на границе строки notices.jsonl либо заданы оба направления.
 var ErrInvalidCursor = errors.New("stagefiles: invalid activity cursor")
@@ -41,6 +44,17 @@ type ActivityData struct {
 	Tool          string `json:"tool"`
 	Detail        string `json:"detail"`
 	Truncated     bool   `json:"truncated,omitempty"`
+	// Поля обновляемых строк; запись без kind — прежняя статическая строка.
+	Kind         string `json:"kind,omitempty"`
+	InvocationID string `json:"invocation_id,omitempty"`
+	ItemID       string `json:"item_id,omitempty"`
+	Revision     int    `json:"revision,omitempty"`
+	Partial      bool   `json:"partial,omitempty"`
+	Final        bool   `json:"final,omitempty"`
+	Outcome      string `json:"outcome,omitempty"`
+	ExitCode     *int   `json:"exit_code,omitempty"`
+	StartedAt    string `json:"started_at,omitempty"`
+	FinishedAt   string `json:"finished_at,omitempty"`
 }
 
 // ActivityEntry — запись истории. Cursor — смещение конца её строки: after=Cursor продолжает чтение сразу за

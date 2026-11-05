@@ -54,6 +54,18 @@ XLATE='
             ($e.tool_call | to_entries | first) as $call
             | .out = (if $call == null then null else
                 asst([{type:"tool_use", id:($e.call_id // ""), name:tool_name($call.key), input:tool_input($call.key; $call.value.args // {})}]) end)
+        elif $e.type == "tool_call" and $e.subtype == "completed" then
+            # The end of a call: result.success carries the shell exit code, result.failure marks an error; no result
+            # block is a plain completion. Output is not forwarded, only the code and the command for the feed.
+            ($e.tool_call | to_entries | first) as $call
+            | .out = (if $call == null or ($e.call_id // "") == "" then null else
+                ($call.value.result // {}) as $r
+                | ($r.success.exitCode? // $r.failure.exitCode? // null) as $code
+                | (($r.failure // null) != null or (($code | type) == "number" and $code != 0)) as $failed
+                | {type:"user", message:{content:[{type:"tool_result", tool_use_id:$e.call_id, is_error:$failed}]},
+                   afm:({tool: tool_name($call.key)}
+                        + (if $call.key == "shellToolCall" then {detail: ($call.value.args.command // "")} else {} end)
+                        + (if ($code | type) == "number" then {exit_code:$code} else {} end))} end)
         else .out = null end;
         .out | select(. != null))
 '

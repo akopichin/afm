@@ -63,7 +63,7 @@ func (o *Orchestrator) promptOnlyHelperConfig(taskID assistants.TaskID, cmd stri
 		UsageHint:      o.usageHintFor(cmd),
 		Provider:       o.opts.Config.UsageLimitProvider(cmd),
 		OnLimitWarning: o.limitWarningSink("", taskID),
-		OnAction:       o.helperActivitySink(taskID),
+		OnActivity:     o.helperActivitySink(taskID),
 		Redact:         o.RedactSecrets,
 		Secrets:        o.secretValues,
 		MeshClient:     o.meshClientFor(participant),
