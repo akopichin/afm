@@ -208,10 +208,45 @@ describe('skins CSS contract — stage-note.css is imported by every skin', () =
   it('novacorps imports stage-note.css', () => expect(novacorpsIndexCss).toContain(IMPORT_LINE))
   it('coffee imports stage-note.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
 
-  it('bounds the block height with its own scroll and gives the editor room on a narrow screen', () => {
-    expect(rule(stageNoteCss, '.stage-note-wrap')).toMatch(/max-height:\s*48%;[\s\S]*overflow-y:\s*auto/)
+  it('bounds the card height, pins the header and scrolls only the body', () => {
+    expect(rule(stageNoteCss, '.stage-note-wrap')).toMatch(/max-height:\s*48%/)
+    expect(rule(stageNoteCss, '.stage-note-wrap')).not.toMatch(/overflow-y/)
+    expect(rule(stageNoteCss, '.stage-note')).toMatch(/flex-direction:\s*column/)
+    expect(rule(stageNoteCss, '.stage-note-body')).toMatch(/overflow-y:\s*auto/)
+    expect(rule(stageNoteCss, '.stage-note-body')).toMatch(/min-height:\s*0/)
     const narrow = stageNoteCss.slice(stageNoteCss.indexOf('@media (max-width: 600px)'))
     expect(narrow).toMatch(/\.stage-note-wrap \{[^}]*max-height:\s*55%/)
+  })
+
+  it('makes the compact state a 32px row (44px on a narrow screen) with a one-line ellipsis preview', () => {
+    const compact = "[data-presentation='compact']"
+    expect(rule(stageNoteCss, `.stage-note${compact}`)).toMatch(/min-height:\s*32px/)
+    expect(rule(stageNoteCss, `.stage-note${compact}`)).toMatch(/padding:\s*0 10px/)
+    const preview = rule(stageNoteCss, '.stage-note-preview')
+    expect(preview).toMatch(/white-space:\s*nowrap/)
+    expect(preview).toMatch(/overflow:\s*hidden/)
+    expect(preview).toMatch(/text-overflow:\s*ellipsis/)
+    expect(preview).toMatch(/min-width:\s*0/)
+    expect(rule(stageNoteCss, '.stage-note-name')).toMatch(/flex:\s*0 0 auto/)
+    expect(rule(stageNoteCss, '.stage-note-badge')).toMatch(/flex:\s*0 0 auto/)
+    const narrow = stageNoteCss.slice(stageNoteCss.indexOf('@media (max-width: 600px)'))
+    expect(narrow).toMatch(/\.stage-note\[data-presentation='compact'\] \{[^}]*min-height:\s*44px/)
+  })
+
+  it('sizes the header toggle as a touch target on a narrow screen', () => {
+    expect(rule(stageNoteCss, '.stage-note-toggle')).toMatch(/min-height:\s*30px/)
+    const narrow = stageNoteCss.slice(stageNoteCss.indexOf('@media (max-width: 600px)'))
+    expect(narrow).toMatch(/\.stage-note-toggle \{[^}]*min-height:\s*44px/)
+  })
+
+  it('lets only the preview shrink: the title takes the leftover width and the action stays on one line', () => {
+    expect(rule(stageNoteCss, '.stage-note-title')).toMatch(/flex:\s*1 1 0/)
+    expect(rule(stageNoteCss, '.stage-note-action')).toMatch(/flex:\s*0 0 auto/)
+    expect(rule(stageNoteCss, '.stage-note-action')).toMatch(/white-space:\s*nowrap/)
+  })
+
+  it('shows the toggle focus ring from the shared token', () => {
+    expect(rule(stageNoteCss, '.stage-note-toggle:focus-visible')).toMatch(/var\(--focus-ring\)/)
   })
 
   it('takes every colour from semantic tokens', () => {

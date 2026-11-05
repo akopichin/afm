@@ -7,7 +7,7 @@ import { StagePeoplePanel, STAGE_PEOPLE_ID, STAGE_PEOPLE_DRAWER_QUERY, TeamView 
 import { BoardLoadState } from '../components/team/BoardLoadState'
 import { BoardView } from '../components/team/BoardView'
 import { teamStagesOf } from '../components/team/RunTeamList'
-import { StageNote } from '../components/stage-note'
+import { StageNote, type StageNotePreference } from '../components/stage-note'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
@@ -472,6 +472,16 @@ export function App(): ReactElement {
     else drafts.set(stageId, text)
     stageNoteDrafts.current = { runEpoch, drafts }
   }, [runEpoch])
+  // stageNotePreferences — each stage's note presentation (card or row), kept only to restore the choice after the
+  // note unmounts on a stage or tab switch. The live state belongs to StageNote; a new run starts without it.
+  const stageNotePreferences = useRef({ runEpoch, preferences: new Map<string, StageNotePreference>() })
+  if (stageNotePreferences.current.runEpoch !== runEpoch) stageNotePreferences.current = { runEpoch, preferences: new Map() }
+  const updateStageNotePreference = useCallback((stageId: string, preference: StageNotePreference) => {
+    if (stageNotePreferences.current.runEpoch !== runEpoch) return
+    const preferences = new Map(stageNotePreferences.current.preferences)
+    preferences.set(stageId, preference)
+    stageNotePreferences.current = { runEpoch, preferences }
+  }, [runEpoch])
   // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
   const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
   const meshSideFailures = useMemo(() => (stageMesh ? sideAgentFailures(events) : NO_DELIVERIES), [stageMesh, events])
@@ -863,10 +873,12 @@ export function App(): ReactElement {
                       aboveFeed={
                         wsState.view === 'feed' && selection?.kind === 'stage' && workspaceStage !== null ? (
                           <StageNote
-                            key={workspaceStage.id}
+                            key={`${runEpoch}:${workspaceStage.id}`}
                             stage={workspaceStage}
                             initialDraft={stageNoteDrafts.current.drafts.get(workspaceStage.id)}
+                            initialPresentation={stageNotePreferences.current.preferences.get(workspaceStage.id)}
                             onDraftChange={updateStageNoteDraft}
+                            onPresentationChange={updateStageNotePreference}
                             onChanged={refresh}
                           />
                         ) : undefined

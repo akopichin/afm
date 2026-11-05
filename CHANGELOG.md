@@ -17,6 +17,14 @@ own messages and tool calls to the stage Feed; they stay in the step's
 [stream extension](docs/internals/prompts.md#8-helper-stream-extension). See
 [Selected helper activity](docs/collaboration.md#selected-helper-activity).
 
+### Improvement: Stage note folds into a one-line row
+
+Once a stage starts, its Stage note folds into a one-line row with a preview and
+a **Read only** badge, so the Feed gets the space back. Click the title (or press
+Enter/Space) to expand or fold it again; the choice is remembered per stage until
+the page is reloaded. See
+[Stage note](docs/dashboard.md#stage-note).
+
 ## 2026-11-04
 
 ### Improvement: `assistants` mode turns the Board off for everyone
