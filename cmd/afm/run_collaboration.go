@@ -53,10 +53,8 @@ func resolveCollaboration(cfg config.Config, f *flow.Flow) collaborationPolicy {
 	return collaborationPolicy{Enabled: enabled, Depth: depth}
 }
 
-// resolveCollaborationMode resolves the dashboard view mode: flow > config (global/project already merged,
-// project wins) > assistants.CollaborationModeTeam. It is a pure presentation value, deliberately separate
-// from resolveCollaboration: AFM_COLLABORATION, collaboration.enabled and max_depth do not affect it, and it
-// is not part of the durable policy record (state.Store.EnsurePolicyRecorded).
+// resolveCollaborationMode resolves the collaboration mode: flow > config (layers already merged) > team.
+// It is independent of resolveCollaboration (enabled, max_depth) and of the durable policy record.
 func resolveCollaborationMode(cfg config.Config, f *flow.Flow) assistants.CollaborationMode {
 	if f != nil && f.Collaboration != nil && f.Collaboration.Mode != nil {
 		return *f.Collaboration.Mode

@@ -80,7 +80,7 @@
         "mode": {
           "type": "string",
           "enum": ["team", "assistants"],
-          "description": "Dashboard collaboration mode. team (default) shows Team, Board and People; assistants hides them and keeps the helpers under stages. Affects the UI only, not whether collaboration is enabled. Unset falls back to the other config layer, then team; a flow.yaml collaboration.mode can override this further."
+          "description": "Collaboration mode. team (default) shows Team, Board and People and keeps the Board available; assistants hides them, keeps the helpers under stages and also turns the Board off in the API, in afm agent board/task/wait --condition board_key and in the built-in agent instructions. Neither value enables or disables collaboration itself. Unset falls back to the other config layer, then team; a flow.yaml collaboration.mode can override this further."
         },
         "hide_attach_helpers": {
           "type": "boolean",

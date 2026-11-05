@@ -1,8 +1,8 @@
 import { useState, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
-import { boardReportsOf, boardTasksOf, boardTopLevelOf, type BoardTaskStatus } from '../../lib/board-tasks'
-import { senderLabel } from '../../lib/mesh-roster'
+import { boardTasksOf, boardTopLevelOf, type BoardTaskStatus } from '../../lib/board-tasks'
+import { BoardFactCard } from './BoardFactCard'
 import { BOARD_STATUS_LABEL, BoardTaskCard, BoardTaskStatusBadge } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
 import { BoardTaskForm, boardTaskModeOf } from './BoardTaskForm'
@@ -72,36 +72,9 @@ export function BoardPanel({ board, participants, stages, active = true }: Board
                   </li>
                 )
               }
-              const reports = boardReportsOf(e, entries)
               return (
                 <li key={e.key}>
-                  <article className="team-board-entry" aria-label={e.key}>
-                    <div className="team-board-entry-header">
-                      <span className="team-board-entry-key">{e.key}</span>
-                      <span className="team-board-entry-version">v{e.version}</span>
-                    </div>
-                    <p className="team-board-entry-status">{e.status}</p>
-                    <div className="team-board-entry-meta">
-                      <span className="team-board-entry-author">{senderLabel(e.author_id, participants)}</span>
-                    </div>
-                    {e.artifact_refs && e.artifact_refs.length > 0 && (
-                      <ul className="team-board-entry-artifacts">
-                        {e.artifact_refs.map((ref) => (
-                          <li key={ref}>{ref}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {reports.length > 0 && (
-                      <ul className="team-board-reports" aria-label="Reports">
-                        {reports.map((r) => (
-                          <li key={r.key} className="team-board-report">
-                            <span className="team-board-report-author">{senderLabel(r.author_id, participants)}</span>
-                            <span className="team-board-report-status">{r.status}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </article>
+                  <BoardFactCard fact={e} entries={entries} participants={participants} />
                 </li>
               )
             })}

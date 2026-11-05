@@ -45,6 +45,11 @@ async function refreshStatus() {
   expect(statusCalls()).toBeGreaterThan(before)
 }
 const composer = () => screen.getByRole('combobox', { name: 'Message the mesh' }) as HTMLTextAreaElement
+// field — the composer's one textarea in any mode; modeButton — a "Send as" choice; sendIn — the toolbar's Send.
+const field = () => document.querySelector<HTMLTextAreaElement>('textarea.chat-composer-input')!
+const modeButton = (name: 'Chat' | 'Restart with note') => within(screen.getByRole('group', { name: 'Send as' })).getByRole('button', { name })
+const findModeButton = async (name: 'Chat' | 'Restart with note') => within(await screen.findByRole('group', { name: 'Send as' })).getByRole('button', { name })
+const sendIn = (name: string) => within(field().closest('.pasteable-textarea-wrap')!.querySelector<HTMLElement>('.pasteable-toolbar')!).getByRole('button', { name })
 const tab = (name: string | RegExp) => within(screen.getByRole('tablist', { name: 'Workspace' })).getByRole('tab', { name })
 const header = () => within(document.querySelector('.workspace-header') as HTMLElement)
 const headerPause = () => fireEvent.click(header().getByRole('button', { name: 'Pause' }))
@@ -84,7 +89,7 @@ it.each(['running', 'paused', 'failed', 'hook_failed'])('only the real-stage Fee
   }
 })
 
-it('persists reply/image/mode drafts through People, views and stages, and releases them on run change', async () => {
+it('persists the one draft — text, image, reply and mode — through People, views and stages, and releases it on run change', async () => {
   const state = setup()
   vi.spyOn(api, 'uploadAttachment').mockResolvedValue({ path: '/attachments/shot.png' })
   render(<App />)
@@ -102,44 +107,50 @@ it('persists reply/image/mode drafts through People, views and stages, and relea
   fireEvent.click(within(people).getByText('QA reviewer'))
   expect(composer()).toBe(input)
   expect(input).toHaveValue(text)
-  expect(screen.getByRole('button', { name: 'Cancel reply in conversation' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Remove reply in conversation' })).toBeInTheDocument()
   expect(screen.getByAltText('Pasted screenshot')).toHaveAttribute('src', 'blob:app-image')
   expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
-  fireEvent.change(screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…'), { target: { value: 'independent revise' } })
+  // Restart writes into the same field: one text, not a second draft.
+  fireEvent.click(modeButton('Restart with note'))
+  expect(field()).toBe(input)
+  fireEvent.change(input, { target: { value: `${text}and more` } })
   for (const name of ['Cost', 'Team']) {
     fireEvent.click(tab(name))
     fireEvent.click(tab('Feed'))
-    expect(screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')).toHaveValue('independent revise')
+    expect(modeButton('Restart with note')).toHaveAttribute('aria-pressed', 'true')
+    expect(field()).toHaveValue(`${text}and more`)
   }
-  fireEvent.click(screen.getByRole('tab', { name: 'Chat' }))
+  fireEvent.click(modeButton('Chat'))
   fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row')!)
   expect(composer()).toHaveValue('')
   fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row')!)
-  expect(composer()).toHaveValue(text)
+  expect(composer()).toHaveValue(`${text}and more`)
   expect(screen.getByAltText('Pasted screenshot')).toHaveAttribute('src', 'blob:app-image')
+  expect(screen.getByRole('button', { name: 'Remove reply in conversation' })).toBeInTheDocument()
   expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:app-image')
   state.runId = 'correction-b'
   refresh()
   await waitFor(() => expect(composer()).toHaveValue(''), { timeout: 4000 })
   expect(screen.queryByAltText('Pasted screenshot')).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Reply context' })).toBeNull()
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:app-image')
 })
 
-it('keeps interrupted uploads retryable after ordinary/reply and stage switches in the App draft store', async () => {
+it('an upload goes on through choosing and removing a reply; a stage switch interrupts it and leaves it retryable', async () => {
   setup()
   let finish!: (value: { path: string }) => void
   const upload = vi.spyOn(api, 'uploadAttachment').mockImplementationOnce(() => new Promise((resolve) => { finish = resolve })).mockResolvedValue({ path: '/attachments/retried.png' })
   render(<App />)
   await screen.findByRole('button', { name: '↩ Reply in conversation' })
-  paste(composer())
+  const input = composer()
+  paste(input)
   fireEvent.click(screen.getByRole('button', { name: '↩ Reply in conversation' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel reply in conversation' }))
-  expect(screen.getByRole('button', { name: /Retry upload/ })).toBeInTheDocument()
-  await act(async () => finish({ path: '/attachments/stale.png' }))
-  expect(composer().value).not.toContain('stale.png')
-  fireEvent.click(screen.getByRole('button', { name: /Retry upload/ }))
-  await waitFor(() => expect(composer().value).toContain('retried.png'))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove reply in conversation' }))
+  expect(composer()).toBe(input)
+  expect(screen.queryByRole('button', { name: /Retry upload/ })).toBeNull()
+  await act(async () => finish({ path: '/attachments/kept.png' }))
+  expect(composer().value).toContain('kept.png')
+  expect(upload).toHaveBeenCalledTimes(1)
   upload.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
   paste(composer())
   fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row')!)
@@ -147,21 +158,39 @@ it('keeps interrupted uploads retryable after ordinary/reply and stage switches 
   expect(screen.getByRole('button', { name: /Retry upload/ })).toBeInTheDocument()
   await act(async () => finish({ path: '/attachments/stale-stage.png' }))
   expect(composer().value).not.toContain('stale-stage.png')
+  fireEvent.click(screen.getByRole('button', { name: /Retry upload/ }))
+  await waitFor(() => expect(composer().value).toContain('retried.png'))
 })
 
-it('does not render existing Feed markdown on Message or Revise keystrokes', async () => {
+it('does not render existing Feed markdown on keystrokes, in Chat or in Restart', async () => {
   setup()
   const renderMarkdown = vi.spyOn(markdown, 'renderPlainMarkdown')
   render(<App />)
   await screen.findByText('Existing', { exact: false })
   await screen.findByRole('button', { name: '↩ Reply in conversation' })
-  for (const mode of ['Chat', 'Restart with note']) {
-    fireEvent.click(screen.getByRole('tab', { name: mode }))
+  for (const mode of ['Chat', 'Restart with note'] as const) {
+    fireEvent.click(modeButton(mode))
     const count = renderMarkdown.mock.calls.length
-    const input = mode === 'Chat' ? composer() : screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
-    for (const value of ['a', 'ab', 'abc']) fireEvent.change(input, { target: { value } })
+    for (const value of ['a', 'ab', 'abc']) fireEvent.change(field(), { target: { value } })
     expect(renderMarkdown).toHaveBeenCalledTimes(count)
   }
+})
+
+it('a Chat send that settles after the run changed leaves the new run\'s draft alone', async () => {
+  const state = setup()
+  let finish!: (value: { messageId: string }) => void
+  vi.spyOn(api, 'postStageDiscussionMessage').mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  render(<App />)
+  await screen.findByRole('button', { name: '↩ Reply in conversation' })
+  fireEvent.change(composer(), { target: { value: 'old run text' } })
+  fireEvent.click(sendIn('Send message'))
+  state.runId = 'correction-b'
+  refresh()
+  await waitFor(() => expect(composer()).toHaveValue(''), { timeout: 4000 })
+  fireEvent.change(composer(), { target: { value: 'old run text' } })
+  await act(async () => finish({ messageId: 'late' }))
+  expect(composer()).toHaveValue('old run text')
+  expect(sendIn('Send message')).toBeEnabled()
 })
 
 it('uses the Hold resume path when an empty blur races header Continue', async () => {
@@ -171,8 +200,7 @@ it('uses the Hold resume path when an empty blur races header Continue', async (
   let finish!: () => void
   const resume = vi.spyOn(api, 'continueStage').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
   render(<App />)
-  await screen.findByRole('tab', { name: 'Restart with note' })
-  fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  fireEvent.click(await findModeButton('Restart with note'))
   const input = screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
   fireEvent.focus(input)
   await waitFor(() => expect(api.pauseStage).toHaveBeenCalledTimes(1))
@@ -277,7 +305,7 @@ it('keeps header Pause behind Hold ownership before the paused status poll', asy
   const pause = vi.spyOn(api, 'pauseStage').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
   const resume = vi.spyOn(api, 'continueStage').mockResolvedValue(undefined)
   await act(async () => { render(<App />) })
-  fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  fireEvent.click(await findModeButton('Restart with note'))
   fireEvent.focus(screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…'))
   expect(header().getByRole('button', { name: 'Pause' })).toBeDisabled()
   headerPause()
@@ -301,7 +329,7 @@ it('drops pending Hold ownership on a new run with the same stage id and ignores
   const pause = vi.spyOn(api, 'pauseStage').mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve })).mockResolvedValue(undefined)
   const resume = vi.spyOn(api, 'continueStage').mockResolvedValue(undefined)
   await act(async () => { render(<App />) })
-  fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  fireEvent.click(await findModeButton('Restart with note'))
   fireEvent.focus(screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…'))
   expect(pause).toHaveBeenCalledTimes(1)
   state.runId = 'correction-b'
@@ -309,7 +337,7 @@ it('drops pending Hold ownership on a new run with the same stage id and ignores
   await act(async () => finish())
   expect(header().getByRole('button', { name: 'Pause' })).toBeEnabled()
   expect(resume).not.toHaveBeenCalled()
-  fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  fireEvent.click(await findModeButton('Restart with note'))
   const input = screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
   await act(async () => { fireEvent.blur(input) })
   expect(resume).not.toHaveBeenCalled()
@@ -326,7 +354,7 @@ it('routes Plan Continue through Hold when empty blur already started resuming',
   let finish!: () => void
   const resume = vi.spyOn(api, 'continueStage').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
   render(<App />)
-  fireEvent.click(await screen.findByRole('tab', { name: 'Restart with note' }))
+  fireEvent.click(await findModeButton('Restart with note'))
   const input = screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
   fireEvent.focus(input)
   await waitFor(() => expect(api.pauseStage).toHaveBeenCalledTimes(1))
@@ -371,10 +399,10 @@ it.each(['Chat', 'Restart with note'] as const)('%s keeps a later upload retryab
   vi.spyOn(api, 'uploadAttachment').mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve }))
     .mockResolvedValue({ path: '/attachments/retried.png' })
   render(<App />)
-  fireEvent.click(await screen.findByRole('tab', { name: mode }))
-  const input = mode === 'Chat' ? composer() : screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
+  fireEvent.click(await findModeButton(mode))
+  const input = field()
   fireEvent.change(input, { target: { value: 'Send before the next image' } })
-  fireEvent.click(screen.getByRole('button', { name: mode === 'Chat' ? 'Send message' : 'Restart with note' }))
+  fireEvent.click(sendIn(mode === 'Chat' ? 'Send message' : 'Restart with note'))
   paste(input)
   fireEvent.click(tab('Cost'))
   await act(async () => { finishSend(); await sending })
@@ -383,7 +411,8 @@ it.each(['Chat', 'Restart with note'] as const)('%s keeps a later upload retryab
   expect(screen.getByText('Upload interrupted — retry to attach')).toBeInTheDocument()
   await act(async () => finishUpload({ path: '/attachments/stale.png' }))
   fireEvent.click(retry)
-  const restored = mode === 'Chat' ? composer() : screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
-  await waitFor(() => expect((restored as HTMLTextAreaElement).value).toContain('/attachments/retried.png'))
-  expect((restored as HTMLTextAreaElement).value).not.toContain('stale.png')
+  const restored = field()
+  await waitFor(() => expect(restored.value).toContain('/attachments/retried.png'))
+  expect(restored.value).not.toContain('stale.png')
+  expect(restored.value).not.toContain('Send before the next image')
 })

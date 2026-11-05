@@ -119,6 +119,9 @@ type Options struct {
 	// its own (Инвариант 9).
 	AssistantsEnabled  bool
 	AssistantsRegistry *assistants.Registry
+	// CollaborationMode is the resolved collaboration.mode; the zero value means team. In assistants mode
+	// the Board is unavailable (boardAvailable); it is independent of AssistantsEnabled.
+	CollaborationMode assistants.CollaborationMode
 	// RecipeIdentity returns the identity of command's docker.agents recipe in a re-exec'd autoShim container, ""
 	// without a recipe or outside one; nil means "" for every command. A task keeps the identity it was admitted
 	// with and fails rather than silently run another model or account behind the same alias.
@@ -834,6 +837,11 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	if err := o.startupStop(); err != nil {
 		o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 		return err
+	}
+	// Before any wake, resume or wait decision: unread Board notices left from team mode would count as new work.
+	if err := o.retireHiddenBoardNotices(ctx); err != nil {
+		o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
+		return fmt.Errorf("retire Board notices: %w", err)
 	}
 
 	// Restore review-pause before scheduling. On a corrupt resuming marker, hold activation and keep the

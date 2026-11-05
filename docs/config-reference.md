@@ -52,7 +52,7 @@ server:
 
 # collaboration:
 #   enabled: true           # stage helpers; ON by default. env AFM_COLLABORATION overrides
-#   mode: team              # dashboard: team (default) | assistants; flow.yaml may override
+#   mode: team              # team (default) | assistants (hides Team/Board, turns the Board off); flow.yaml may override
 #   hide_attach_helpers: true # hide the manual Attach helper buttons; OFF by default.
 #                           # env AFM_HIDE_ATTACH_HELPERS overrides; no flow.yaml override
 #   runtime_context: isolated # helper process environment: isolated (default) | wrapper
@@ -113,11 +113,15 @@ A recipe of `type: cursor` runs the local `cursor-agent` CLI from the Docker ima
 needs no `url` (a value is ignored), its `auth.to` is `env:CURSOR_API_KEY` and `model`
 defaults to `auto`. See [Docker mode](docker.md#non-claude-agents-in-docker-autoshim).
 
-`collaboration.mode` selects the dashboard presentation: `team` (the default for
-existing configs) or `assistants`. The value in `flow.yaml` takes precedence over
+`collaboration.mode` selects the collaboration mode: `team` (the default for
+existing configs) or `assistants`. `assistants` hides Team, Board and People in the
+dashboard and also turns the Board off in the API, in `afm agent board`, `afm agent task`
+and `afm agent wait --condition board_key`, and in the built-in agent instructions.
+The value in `flow.yaml` takes precedence over
 project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
 enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
-still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
+still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes)
+and [The Board in `assistants` mode](collaboration.md#the-board-in-assistants-mode).
 
 `collaboration.hide_attach_helpers: true` hides the dashboard buttons that attach a
 helper to a stage by hand: **Attach helper to stage…** in People and **Attach helper…**

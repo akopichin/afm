@@ -218,8 +218,11 @@ and the controls available in each mode.
 In `team` mode, the run-wide **Board** tab shows tasks in **Todo**, **In progress**,
 and **Done** columns. Task cards are gray, blue, and green, respectively. Search matches a
 task's key and text; the assignee filter can show one agent's tasks or unassigned
-tasks. The header shows completed tasks out of all tasks. **New task** opens the
-posting form, and selecting a card opens its text, assignees, and current reports.
+tasks. The header shows completed tasks out of all tasks. Below the columns, a
+**Facts** section lists the other board entries (key, version, status, author,
+artifacts and the reports on them) with the same cards as Team's Board subtab; search
+and the filter do not apply to it, and it is absent when the board has no facts.
+**New task** opens the posting form, and selecting a card opens its text, assignees, and current reports.
 New tasks start in Todo.
 
 In a run with [typed tasks](collaboration.md#typed-tasks) (every run started by
@@ -257,6 +260,9 @@ one mixed grid alongside non-task board entries, without status columns. Both
 views update from the shared board. While it loads, the Board tab says so; if
 loading fails, **Retry** is available. If a later refresh fails, the last loaded
 cards stay visible with an out-of-date warning.
+
+In `assistants` mode neither Board view exists: the Board is off for the dashboard,
+agents and the CLI. See [The Board in `assistants` mode](collaboration.md#the-board-in-assistants-mode).
 
 ## Message times
 
@@ -606,32 +612,50 @@ works on an agent's **question** in the Communication channel.
 
 A messenger-style composer is pinned to the bottom of a stage's **Feed**.
 
-With collaboration off (`AFM_COLLABORATION=0`) it is the plain note field, without
-modes, shown only while the stage is `running` (and not a script stage); it works like
-**Restart with note**. With Agent Mesh and collaboration on it has two modes:
+There is always **one** input. With collaboration off (`AFM_COLLABORATION=0`) it is
+the plain note field, shown only while the stage is `running` (and not a script
+stage); it works like **Restart with note**. With Agent Mesh and collaboration on, a
+**Send as** group of two buttons above the input chooses what Send does with what
+you wrote:
 
 - **Chat** (selected by default) — ask or tell people in the run; the agent keeps
   working on its task. Available for any non-script stage while the run is going,
   whatever the stage's status.
 - **Restart with note** — the agent stops and restarts its current phase with your
-  note as new instructions. The tab is there only while the stage can be restarted: `running`, `awaiting_approval` or
+  note as new instructions. The button is there only while the stage can be restarted: `running`, `awaiting_approval` or
   `awaiting_assistants`, and not during a review pause.
 
-Each mode keeps its own draft when you switch between them. Drafts — both modes'
-text, reply target and attachment, the chosen mode and the people picked as
-recipients — are kept per stage:
-switching to another stage, the Feed following the run to the next stage, or
+Choosing a way sends nothing. The text, the attached images, the selection and the
+cursor stay exactly as they were, and the keyboard focus stays on the button you
+pressed; only the **To** row, the hint, the Send button's label and the options
+beside **Send as** follow the chosen way. Write first and decide afterwards: the
+same text and images can go out as a Chat message or as a restart note.
+
+The input, the **Send as** choice and the people picked as recipients are kept per
+stage: switching to another stage, the Feed following the run to the next stage, or
 opening another tab and coming back restores them. They are not kept across a
 page reload. When Agent Mesh becomes available only after the composer appeared,
-it switches to **Chat** unless you already chose a mode or are writing a
-restart note.
+it switches to **Chat** unless you already chose a way, started writing or
+are holding the agent for a restart note.
+
+If the chosen way stops being available (for example the stage finished, or the
+run was paused), your text stays, Send is off and the reason is shown under the
+input. afm never turns Chat into Restart with note, or the other way round, by
+itself: a **Use Chat** / **Use Restart with note** button offers the other way and
+you press it.
+
+A send in progress owns the input: until it finishes, the other way cannot send the
+same input. You may keep typing meanwhile. When the send succeeds only what was
+sent is removed, so anything you typed or attached after pressing Send stays. If you
+changed the reply while the request ran, the whole input stays, because it no longer
+belongs to what was sent.
 
 ### Restart with note
 
-1. Select the stage and open its **Feed** tab (with modes, pick **Restart with note**). The
+1. Select the stage and open its **Feed** tab (with the **Send as** group, pick **Restart with note**). The
    input is a growing textarea, an **Attach** button and a send button.
-2. Type your note and send it — click **Restart with note** when the composer has
-   modes (otherwise the send button), or press **Enter**
+2. Type your note and send it — click **Restart with note** under the input (without
+   collaboration the send button does the same), or press **Enter**
    (**Shift+Enter** inserts a newline). **Attach** lets you paste or upload an image,
    and in Docker mode reference a project file. An image sent with the note is
    removed from the composer once the send succeeds, even if you edited the line
@@ -644,8 +668,17 @@ restart note.
 4. Your note appears in the Feed as a right-side bubble carrying its text, alongside
    the agent's own messages (it is not clickable — it's a record of what you sent).
 
-Click **↩** on one of the agent's thoughts to answer it: the composer switches to
-**Restart with note** and shows the quoted thought above the input (**↩ In reply to**).
+In this way the **To** row shows only the stage's agent: a restart cannot be addressed
+to a helper or another agent. The recipients and options you set for Chat are not
+used, but they stay and come back when you return to Chat. A `/loop` command is not
+sent as a note: the input shows **Slash commands run in Chat** and offers **Use Chat**,
+with your text kept. Attaching a helper is not done from here either: the chosen
+helper gets no note and nothing is created.
+
+Click **↩** on one of the agent's thoughts to answer it; see
+[Replying to a thought or a message](#replying-to-a-thought-or-a-message). Without
+collaboration the button is named **Restart with quoted note** and quotes the thought
+into the one restart note field.
 
 ### Chat
 
@@ -659,7 +692,7 @@ The **To** row above the input lists who the message goes to:
 - Nobody named — the stage's own agent, shown as a dashed **stage agent** chip.
   If it cannot read a message (the stage has finished, or it waits for its
   helpers and reads a note only through Restart with note), the row says why and you must pick
-  someone; **Use Restart with note** switches modes when it is available.
+  someone; **Use Restart with note** switches the way when it is available.
 
 **×** on a chip removes that recipient everywhere it came from: the pick and
 every mention of them in the text (a full id such as `@stage:docs` included). A
@@ -674,10 +707,10 @@ Sending posts **one** message to all recipients:
   your conversation with that agent; anyone else you named joins that same
   conversation. This is the path that can interrupt the agent and that marks a
   post the stage finished without answering (**Not answered**). While the stage
-  is `running`, an **Interrupt agent** switch appears in the **To** row: switched
-  on, the agent stops its current turn, answers your message, then continues its
-  work; off, it reads the message at its next inbox check. You choose it for each
-  send.
+  is `running`, an **Interrupt agent** switch appears next to the **Send as**
+  buttons (not in the **To** row): switched on, the agent stops its current turn,
+  answers your message, then continues its work; off, it reads the message at its
+  next inbox check. You choose it for each send.
 - Any other message — without the stage agent, or a **↩ Reply in conversation** —
   goes to exactly its recipients: into your open conversation with those people
   that this stage's feed shows (a reply stays in the conversation it answers), or
@@ -694,10 +727,6 @@ highlighted person or role instead of sending.
 **Interrupt agent** is reset after each successful send and kept after a failed
 one, so a retry interrupts too.
 
-A **↩ Reply in conversation** has its own draft: the text and `@mentions` you
-were writing to others are neither its text nor its recipients, and they come
-back when the reply ends.
-
 A failed send keeps the draft and shows the
 server's reason; sending it again is the same message, never a duplicate. Under
 the input each recipient gets its own delivery state: *Accepted · waiting for an
@@ -709,6 +738,47 @@ read, then *Delivered*; *Paused · waiting for Continue*, *Unavailable*, and
 adds an *Attach helper* chip, and Send opens the attach preview with your text as
 the helper's assignment (it must be the only recipient). See
 [Team conversations](collaboration.md#team-conversations).
+
+### Replying to a thought or a message
+
+A reply is context for the one input, not a second input. Choosing it keeps the text
+and images already in the field, and one reply is active at a time: choosing another
+replaces it, **✕** on its chip removes it. Removing a reply also removes the recipient
+it required, and keeps your text, images and the recipients you chose yourself.
+
+**↩ on a thought** of the stage's agent (**Reply to this thought**) quotes it in a
+**↩ In reply to** chip above the input and moves the keyboard focus into the field
+(pressing **↩** on the same thought again only returns the focus). With collaboration
+it selects **Chat**; without it, **Restart with note**. In Chat the thought's author,
+the stage's agent, becomes a required recipient — shown in **To** without a **×** —
+and it stays when your text already mentions `@reviewer` or you picked someone else:
+they are added, never swapped in. The new message goes to the stage's agent through
+the stage discussion, as an ordinary post, not as a reply to the thought.
+
+The quote is not part of your text. It is added in front of what you wrote only when
+you send — the same way for Chat and for **Restart with note** — and an `@handle`
+inside the quote addresses nobody; only `@handles` you typed do.
+
+**↩ Reply in conversation** on a message in the feed (see
+[Conversations in the stage feed](#conversations-in-the-stage-feed)) selects **Chat**
+and makes the message's author a required recipient of the answer. The reply stays in
+that conversation: if your text or the picked people name someone who is not in it,
+their chip shows an error and Chat cannot send until you remove them — afm never drops
+them silently and never sends the text to another conversation.
+
+Switching such a reply to **Restart with note** keeps your text and images, but the
+conversation reply is not sent with a restart: the chip says so, the **To** row shows
+the stage's agent, and the message is not quoted into the note. Going back to Chat
+before sending restores the reply and its recipients. If the conversation closes
+while you write, your text and images stay and the chip says **This conversation is
+closed.**; Chat cannot send it as a new message, and the chip offers **Remove reply**
+or **Use Restart with note**.
+
+After a successful send, the text and images that were sent are cleared, and the reply
+ends with them once nothing new is left in the field. Text you typed or images you
+attached while the request was running stay, and so does the reply they belong to.
+If you replaced or removed the reply meanwhile, the whole input stays. After a failed
+send everything stays, and sending again is the same message.
 
 ### Repeating a prompt with /loop
 
@@ -737,8 +807,10 @@ loops and their reasons. Stopping prevents future ticks; an agent already
 working can finish its current turn.
 
 Loop commands have their own route: ordinary **To** selections, reply recipients
-and helper-attachment chips do not receive their text. An invalid command keeps
-the draft and shows an error; **Restart with note** asks you to use Chat. See
+and helper-attachment chips do not receive their text. A selected reply's quote is
+not added to the command, and a successful command leaves the reply selected. An
+invalid command keeps the draft and shows an error; **Restart with note** asks you
+to use **Chat**. See
 [Repeating prompts with loops](loops.md) for fixed-slot timing, skipped ticks,
 agent commands, thread limits and recovery.
 
@@ -773,8 +845,8 @@ resizing still works, but the width is not retained.
   different one (for example, a host run resumed in Docker), the badge's tooltip
   says so. A finished agent shows the guarantee it ran under.
 - Click a person to add them to the composer's recipients: the composer switches
-  to **Chat** and the person gets a chip in the **To** row; click more people
-  to write to several at once. You can do this while the stage's composer is
+  to **Chat** (the text and images you were writing stay) and the person gets a chip
+  in the **To** row; click more people to write to several at once. You can do this while the stage's composer is
   shown (any non-script stage while the run is going).
 - A finished stage or task stays listed but is disabled (*Finished — can't
   write*). A script stage is listed but disabled too: no agent reads its
@@ -846,15 +918,15 @@ line such as *"reviewer posted in the stage conversation"*.
 - **↩ Reply in conversation** answers that message in its conversation: the
   composer switches to **Chat**, the author becomes a recipient and a
   **↩ Reply in conversation** chip quotes the message, which is highlighted in
-  the feed. The reply goes to that conversation's people only: people you picked
-  before wait until the reply ends, and anyone you add during it is dropped with
-  it. Naming someone who is not in that conversation, or the finished stage's
-  agent, is an error on their chip and Send stays off — a conversation never
-  gains members. One message is answered at a time — choosing another replaces it; **✕**
-  cancels. It is told apart from answering a thought with Restart with note by its colour.
-  It is offered while the composer is shown, on open conversations you are a
-  member of, and while the author can still read it; if the conversation closes
-  meanwhile, the reply ends on the next poll.
+  the feed. It uses the text already in the one input and goes to that
+  conversation's people only. Naming someone who is not in that conversation, or
+  the finished stage's agent, is an error on their chip and Send stays off — a
+  conversation never gains members. One message is answered at a time — choosing
+  another replaces it; **✕** cancels. It is told apart from answering a thought by
+  its colour. It is offered while the composer is shown, on open conversations you
+  are a member of, and while the author can still read it. See
+  [Replying to a thought or a message](#replying-to-a-thought-or-a-message) for
+  Restart with note, a conversation that closes meanwhile, and what a send clears.
 - A line such as *@qa is working* at the bottom shows who among the people in
   this stage's conversations, and its helpers, is in a turn right now.
 
@@ -865,14 +937,23 @@ messages of a stage; Team shows every conversation in full.
 ### Hold the agent while you type
 
 A running agent can finish (or move on) before you're done typing a note. The
-composer has a **Hold the agent while you type** toggle above the note input,
-aligned to the right, for this:
+composer has a **Hold the agent while you type** toggle above the input,
+aligned to the right, for this. With collaboration it is shown next to **Send as**
+while **Restart with note** is chosen (in Chat that place holds **Interrupt agent**),
+because only a restart note needs the agent to wait:
 
-- With it **on**, clicking into the note field pauses the running stage — the agent
-  is put on hold and a banner shows *"Stage paused — it'll resume when you send."*
-  Take your time; the agent won't advance past where it was.
+- With it **on**, clicking into the field while **Restart with note** is chosen
+  pauses the running stage — the agent is put on hold and a banner shows
+  *"Stage paused. The agent is on hold — it'll resume when you send."*
+  Take your time; the agent won't advance past where it was. Clicking into the
+  field in Chat does not pause.
 - **Send** resumes the stage and delivers your note in one step. **Resume now** (or
-  leaving the field empty and clicking away) un-pauses without sending.
+  leaving an empty field and clicking away) un-pauses without sending.
+- If you switch to **Chat** while the stage is held, nothing is resumed: the banner
+  becomes *"Stage paused by you — Chat messages don't resume it."*, and a Chat
+  message is sent without continuing the stage. Use **Resume now** to continue it.
+  Switching the way never resumes the stage by itself, and a field that holds text
+  keeps the hold when you click away.
 - With it **off**, the composer behaves as above (Send interrupts the live agent, no
   pause).
 

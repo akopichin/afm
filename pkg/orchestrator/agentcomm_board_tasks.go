@@ -92,6 +92,9 @@ func boardTasksEnabled(rs state.RunState) bool {
 // task's coordinator notifies the coordinator in the same commit; a notice that cannot be delivered now is
 // skipped (the receipt's NoticeSkipped says why) and never refuses the change.
 func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (BoardTaskReceipt, error) {
+	if !o.boardAvailable() {
+		return BoardTaskReceipt{}, errBoardUnavailable()
+	}
 	// A message to the Side agent commits before SetSideAgentAvailable can close its gate (see Publish).
 	o.sideAgentGate.RLock()
 	defer o.sideAgentGate.RUnlock()
@@ -630,6 +633,9 @@ func (o *Orchestrator) comparableBoardTaskPayload(raw json.RawMessage) (map[stri
 // BoardTasks returns the typed board tasks sorted by key — only the one under key when it is set (not_found
 // when there is none). A run without the typed protocol has none.
 func (o *Orchestrator) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {
+	if !o.boardAvailable() {
+		return nil, errBoardUnavailable()
+	}
 	tasks := o.opts.Store.Snapshot().Assistants.Mesh.BoardTasks
 	if key != "" {
 		t, ok := tasks[key]

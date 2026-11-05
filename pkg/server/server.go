@@ -99,7 +99,7 @@ type Server struct {
 	workspace          workspace.FS                 // Docker project file browser backend; nil = capability off
 	sideAgent          SideAgentService             // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
 	assistantProfiles  AssistantProfilesService     // реестр помощников (collaboration); nil = capability off (/api/assistant-profiles не регистрируется)
-	collaborationMode  assistants.CollaborationMode // режим представления collaboration в dashboard; никогда не пустой (New подставляет "team")
+	collaborationMode  assistants.CollaborationMode // режим collaboration (раскладка dashboard, доступность Board); никогда не пустой (New подставляет "team")
 	hideAttachHelpers  bool                         // скрыть кнопки ручного прикрепления helper в dashboard; только видимость, не capability
 	assistantActions   AssistantActions             // write-команды задач помощников; nil = capability off (POST/pause/continue/cancel 404)
 	assistantsReader   AssistantsReader             // read-сторона: дерево задач/история событий; nil = capability off (GET 404)
@@ -215,8 +215,8 @@ type Config struct {
 	SideAgent   SideAgentService // «боковой» разговор; nil = capability off
 	// AssistantProfiles — реестр помощников (collaboration); nil = capability off.
 	AssistantProfiles AssistantProfilesService
-	// CollaborationMode — режим представления collaboration в dashboard; нулевое значение нормализуется в
-	// "team" в New. Не зависит от AssistantProfiles (capability).
+	// CollaborationMode — режим collaboration (раскладка dashboard и доступность Board); нулевое значение
+	// нормализуется в "team" в New. Не зависит от AssistantProfiles (capability).
 	CollaborationMode assistants.CollaborationMode
 	// HideAttachHelpers прячет в dashboard кнопки ручного прикрепления helper к стадии. Меняет только
 	// видимость: attach через Feed, API и CLI остаются доступны.

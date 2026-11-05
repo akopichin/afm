@@ -499,6 +499,76 @@ func TestAgentCommBoardTasksBlock_TitleCannotSpoofFields(t *testing.T) {
 	}
 }
 
+// Without the Board (assistants mode) no participant is sent to a command the server refuses, whichever board
+// protocol the run recorded; the note says how work is handed over instead, and every other command stays.
+func TestAgentComm_BoardUnavailableDropsEveryBoardInstruction(t *testing.T) {
+	roles := map[string]AgentCommInputs{
+		"stage agent": {ParticipantID: "stage:build", Scope: "stage", CanSpawnHelpers: true},
+		"helper":      {ParticipantID: "helper:t-1", Scope: "stage", CanSelfLoop: true},
+		"run agent":   {ParticipantID: "run:t-1", Scope: "run", CanSelfLoop: true},
+	}
+	for name, in := range roles {
+		in.Available = true
+		in.BoardUnavailable = true
+		blocks := map[bool]string{}
+		for _, typed := range []bool{false, true} {
+			in.TypedBoardTasks = typed
+			block := AgentCommunicationBlock(in)
+			blocks[typed] = block
+			for _, unwanted := range []string{"afm agent board", "afm agent task", "board_key", "<your_board_tasks>", "board task"} {
+				if strings.Contains(strings.ToLower(block), strings.ToLower(unwanted)) {
+					t.Errorf("%s, typed=%v: block still mentions %q:\n%s", name, typed, unwanted, block)
+				}
+			}
+			for _, want := range []string{
+				"The Board is unavailable in this run (assistants mode)", "direct requests and replies",
+				"afm agent send", "afm agent reply", "afm agent inbox",
+				"reply_to", "addressed_message", "task_result", "stage_status",
+				"Check the required result contract.",
+			} {
+				if !strings.Contains(block, want) {
+					t.Errorf("%s, typed=%v: block lacks %q:\n%s", name, typed, want, block)
+				}
+			}
+			canSpawn := []string{"afm agent spawn", "afm agent helper-result", "temporary helpers"}
+			for _, spawn := range canSpawn {
+				if strings.Contains(block, spawn) != in.CanSpawnHelpers {
+					t.Errorf("%s, typed=%v: mentions %q = %v, want it only for a stage agent:\n%s", name, typed, spawn, !in.CanSpawnHelpers, block)
+				}
+			}
+		}
+		if blocks[false] != blocks[true] {
+			t.Errorf("%s: without the Board the recorded board protocol must not change the block:\nlegacy:\n%s\ntyped:\n%s", name, blocks[false], blocks[true])
+		}
+	}
+}
+
+// The Board stays in team mode: the zero BoardUnavailable keeps both protocols, the wait guidance shared with the
+// CLI help and the helper-task distinction exactly as they were.
+func TestAgentComm_BoardAvailableKeepsBoardInstructions(t *testing.T) {
+	for _, typed := range []bool{false, true} {
+		block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, TypedBoardTasks: typed, CanSpawnHelpers: true})
+		for _, want := range []string{"afm agent board get", AgentWaitGuidance, "These are helper tasks, not board tasks."} {
+			if !strings.Contains(block, want) {
+				t.Errorf("typed=%v: team block lacks %q:\n%s", typed, want, block)
+			}
+		}
+		if strings.Contains(block, "unavailable") {
+			t.Errorf("typed=%v: team block must not call anything unavailable:\n%s", typed, block)
+		}
+	}
+	if !strings.Contains(AgentWaitGuidance, "Check the required result contract or Board task state.") {
+		t.Errorf("CLI wait help lost the Board task state hint:\n%s", AgentWaitGuidance)
+	}
+}
+
+// The dashboard Assistant's block never had Board commands; it stays that way.
+func TestAgentComm_SideAgentNeverMentionsTheBoard(t *testing.T) {
+	if block := SideAgentCommunicationBlock("side:run-1"); strings.Contains(strings.ToLower(block), "board") {
+		t.Fatalf("the side turn block mentions the Board:\n%s", block)
+	}
+}
+
 func TestAgentComm_TypedInstructionsSayRepliesNeverCompleteTasks(t *testing.T) {
 	block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, TypedBoardTasks: true})
 	if !strings.Contains(block, "never completes a board task") {

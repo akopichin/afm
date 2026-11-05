@@ -58,7 +58,7 @@
         "mode": {
           "type": "string",
           "enum": ["team", "assistants"],
-          "description": "Dashboard collaboration mode for this flow. team (default) shows Team, Board and People; assistants hides them and keeps the helpers under stages. Highest-precedence layer; affects the UI only, not whether collaboration is enabled."
+          "description": "Collaboration mode for this flow. team (default) shows Team, Board and People and keeps the Board available; assistants hides them, keeps the helpers under stages and also turns the Board off in the API, in afm agent board/task/wait --condition board_key and in the built-in agent instructions. Highest-precedence layer; neither value enables or disables collaboration itself."
         }
       }
     },

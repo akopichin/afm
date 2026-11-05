@@ -73,6 +73,8 @@ type Config struct {
 	Reasoning string
 	// Context — сборщик промпта из истории + текущего сообщения.
 	Context ContextBuilder
+	// HideSource keeps the history of a source message out of every later prompt; it becomes Context.HideSource.
+	HideSource func(sourceMessageID string) bool
 	// Secrets — поставщик значений секретов для редакции пользовательского текста. nil → без редакции.
 	Secrets func() []string
 	// MentionResolve — резолвит "@word", извлечённое из текста сообщения, в нормализованный id профиля
@@ -167,6 +169,8 @@ func New(cfg Config) *Manager {
 	if cfg.Store == nil {
 		panic("sideagent: Config.Store is nil")
 	}
+	ctxBuilder := cfg.Context
+	ctxBuilder.HideSource = cfg.HideSource
 	nx := cfg.NewExecutor
 	if nx == nil {
 		nx = NewExecutorRunner
@@ -179,7 +183,7 @@ func New(cfg Config) *Manager {
 		wrapperDir:        cfg.WrapperDir,
 		idleTimeout:       cfg.IdleTimeout,
 		reasoning:         cfg.Reasoning,
-		ctxBuilder:        cfg.Context,
+		ctxBuilder:        ctxBuilder,
 		secrets:           cfg.Secrets,
 		onUsage:           cfg.OnUsage,
 		job:               cfg.Job,

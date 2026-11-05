@@ -26,6 +26,13 @@ describe('ChatSendButton', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toHaveClass('paused')
   })
 
+  test('describedBy links the button to the text that explains why it is off', () => {
+    const { rerender } = render(<ChatSendButton label="Send" disabled onClick={() => {}} describedBy="why" />)
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-describedby', 'why')
+    rerender(<ChatSendButton label="Send" disabled={false} onClick={() => {}} />)
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-describedby')
+  })
+
   test('while sending it is disabled and named "Sending…"', () => {
     const onClick = vi.fn()
     render(<ChatSendButton label="Send" disabled={false} onClick={onClick} sending />)

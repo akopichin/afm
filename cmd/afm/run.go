@@ -292,6 +292,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	// orchestrator.New below — is created. A flow.yaml change after this run's policy was first recorded
 	// must not silently retake effect on resume without going through its own durable record (T2.6).
 	collab := startCollaboration(store, cfg, f)
+	collaborationMode := resolveCollaborationMode(cfg, f)
 	if err := checkDeclaredAssistants(f, collab); err != nil {
 		return cycleResult{}, err
 	}
@@ -351,6 +352,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		BrowserDescriptor:  browserDesc,
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
+		CollaborationMode:  collaborationMode,
 		AddStageDisabled:   !cfg.AddStage.IsEnabled(),
 		Team:               team,
 		SecretValues:       loadRedactionSecrets(absRootDir(), cfg, hooks),
@@ -391,7 +393,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		UsageAnalytics:    newUsageAnalytics(acct, acctErr, jobs, orch, side),
 		SideAgent:         side.service(),
 		AssistantProfiles: collab.service(orch),
-		CollaborationMode: resolveCollaborationMode(cfg, f),
+		CollaborationMode: collaborationMode,
 		AssistantActions:  collab.actions(orch),
 		AssistantsReader:  collab.reader(orch),
 		DiscussionService: collab.discussionService(orch),

@@ -53,9 +53,11 @@ func requireCancelledByFailure(t *testing.T, o *Orchestrator, turns *turnCounter
 	if tk.LastVerdict != "" || tk.Waived {
 		t.Fatalf("helper verdict %q, waived %t: a cancelled pass records neither", tk.LastVerdict, tk.Waived)
 	}
-	if _, _, _, bound := o.WatcherStatus(id); bound {
-		t.Fatal("a cancelled pass is still bound as a watcher")
-	}
+	// The binding is dropped in the commit's callback, just after the new status becomes visible.
+	waitForTrue(t, func() bool {
+		_, _, _, bound := o.WatcherStatus(id)
+		return !bound
+	}, 2*time.Second, "a cancelled pass is still bound as a watcher")
 }
 
 // requireRunNotHeld fails if a helper task still keeps the run from finishing.

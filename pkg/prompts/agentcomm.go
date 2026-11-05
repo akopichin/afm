@@ -28,6 +28,9 @@ type AgentCommInputs struct {
 	// TypedBoardTasks selects explicit assignments instead of the legacy free-text board protocol.
 	// It follows the durable run protocol, including after resume.
 	TypedBoardTasks bool
+	// BoardUnavailable drops every Board instruction: in assistants mode the server refuses Board commands. It wins
+	// over TypedBoardTasks; the zero value keeps the Board for every existing caller.
+	BoardUnavailable bool
 	// CanSelfLoop excludes stage main agents: they can schedule a colleague but cannot target themselves.
 	CanSelfLoop bool
 
@@ -69,21 +72,28 @@ func AgentCommunicationBlock(in AgentCommInputs) string {
 	sb.WriteString("- `afm agent reply --in-reply-to <message-id> --body \"...\"` — answer a SPECIFIC message in its own thread, back to its sender.\n")
 	sb.WriteString("- `afm agent inbox` — check for NEW messages addressed to you (ones not already in your <inbox> block or an earlier inbox call; each is shown once, so do not answer it again later). Call this between steps and again before you report your final result. `--all` shows every message ever addressed to you.\n")
 	waitConditions := "addressed_message/task_result/board_key/stage_status"
-	if in.TypedBoardTasks {
+	if in.TypedBoardTasks || in.BoardUnavailable {
 		waitConditions = "addressed_message/task_result/stage_status"
 	}
 	fmt.Fprintf(&sb, "- `afm agent wait --condition reply_to --message-id <id>` (or %s) — register a durable wait and inspect the returned status using the rules below. A pending wait survives your process exiting; after yield you will be resumed, never by polling. `--condition addressed_message` without `--thread-id` waits for the next message anyone sends you (e.g. a colleague's question).\n", waitConditions)
 	sb.WriteString(batchWaitInstructions)
-	sb.WriteString(AgentWaitGuidance)
+	if in.BoardUnavailable {
+		sb.WriteString(boardlessWaitGuidance)
+	} else {
+		sb.WriteString(AgentWaitGuidance)
+	}
 	if in.CanSpawnHelpers {
-		sb.WriteString(spawnInstructions)
+		sb.WriteString(spawnInstructions(!in.BoardUnavailable))
 		sb.WriteString(onMessageHelperInstructions())
 		sb.WriteString(completionHelperInstructions)
 	}
-	if in.TypedBoardTasks {
+	switch {
+	case in.BoardUnavailable:
+		sb.WriteString(boardUnavailableNote(in.CanSpawnHelpers))
+	case in.TypedBoardTasks:
 		sb.WriteString("- `afm agent board get`/`afm agent board publish --key <k> --status <s>` — read/publish shared facts (\"what is ready now\"), separate from a direct conversation. Publish only facts there, never under `task/` keys: tasks have their own commands below. Only a key's author can update the key itself.\n")
 		sb.WriteString(typedBoardTasksInstructions)
-	} else {
+	default:
 		sb.WriteString("- `afm agent board get`/`afm agent board publish --key <k> --status <s>` — read/publish shared facts (\"what is ready now\"), separate from a direct conversation. The human also posts TASKS there (author `user`, keys like `task/...`): check the board between steps and take a task that fits your role. To take it, publish `in progress: <progress>` at your own key `<task key>/<your alias>`; when finished, republish that same key with `done: <result>`, passing its current version as `--expected-version` (`afm agent board get --key <k>` shows it; the first publish uses 0). Only a key's author can update the key itself.\n")
 	}
 	sb.WriteString(loopInstructions(in.CanSelfLoop))
@@ -114,15 +124,39 @@ func loopInstructions(canSelfLoop bool) string {
 const batchWaitInstructions = "- `afm agent wait --condition reply_to_all --message-ids <id1,id2,...> [--deadline-seconds N]` — ONE wait for the reply to EACH of up to 16 distinct requests you sent; its result carries a `batch_id`. If it returns yield, you are resumed once, after every request was answered, cancelled or expired, and the deadline covers the whole set. Separate `--condition reply_to` waits would resume you on the FIRST answer instead. Read the answers with `afm agent inbox --all`, and the outcome of each request — with the reason one ended without an answer — with `afm agent wait-status [--wait-id <batch_id>]` (it shows only your own batches).\n"
 
 // AgentWaitGuidance keeps the prompt and CLI help aligned on when a wait permits yielding.
-const AgentWaitGuidance = "Read the wait command's returned status before deciding whether to end your turn:\n" +
+const AgentWaitGuidance = waitOutcomeGuidance + " Check the required result contract or Board task state." + finalResultRequestGuidance
+
+// boardlessWaitGuidance is AgentWaitGuidance for a run without the Board, which has no task state to check.
+const boardlessWaitGuidance = waitOutcomeGuidance + " Check the required result contract." + finalResultRequestGuidance
+
+const waitOutcomeGuidance = "Read the wait command's returned status before deciding whether to end your turn:\n" +
 	"- status: yield — a pending wait is registered; END YOUR TURN. AFM resumes you when the wait ends.\n" +
 	"- status: ready — the event already happened; read the result and continue working. Do not end your turn or re-register the satisfied wait. Read replies with `afm agent inbox --all` and outcomes with `afm agent wait-status --wait-id <wait_id-or-batch_id>`.\n" +
 	"- A terminal wait (cancelled, expired or run_closed) or a rejected wait registration: inspect the reason; this does not mean the task is complete. A ready batch can contain cancelled or expired items; inspect each item's outcome.\n" +
-	"An ACK or ordinary reply satisfies reply_to when linked to that request; it does not prove the delegated task is complete. Check the required result contract or Board task state. If you received only an ACK or progress update, send a NEW linked request to the same agent for the final result: use `afm agent send --kind request`, name the original request ID in its body, and wait on the new request ID if needed. Do not wait again on the satisfied request ID.\n"
+	"An ACK or ordinary reply satisfies reply_to when linked to that request; it does not prove the delegated task is complete."
+
+const finalResultRequestGuidance = " If you received only an ACK or progress update, send a NEW linked request to the same agent for the final result: use `afm agent send --kind request`, name the original request ID in its body, and wait on the new request ID if needed. Do not wait again on the satisfied request ID.\n"
 
 // spawnInstructions — a stage agent's temporary helpers. Every command and flag matches cmd/afm/agent.go
-// (newAgentSpawnCmd, newAgentHelperResultCmd). Helper tasks are not board tasks: they have their own ID.
-const spawnInstructions = "- `afm agent spawn --profile <profile> --title <title> --instruction <text>` — start a temporary helper of a configured profile for one job; it prints `task_id` and the `message_id` of your request to it. The helper answers that message (or its wait ends with the reason it could not), so pass the `message_id`s of several helpers to ONE `--condition reply_to_all` wait. `afm agent helper-result --task-id <task_id>` reads the helper's status and its full result once it finished. These are helper tasks, not board tasks. Your <your_helpers> block lists the helpers you already started: do not start a running or finished one again.\n"
+// (newAgentSpawnCmd, newAgentHelperResultCmd). Helper tasks have their own ID, so they are told apart from board tasks.
+func spawnInstructions(boardAvailable bool) string {
+	notBoardTasks := ""
+	if boardAvailable {
+		notBoardTasks = "These are helper tasks, not board tasks. "
+	}
+	return "- `afm agent spawn --profile <profile> --title <title> --instruction <text>` — start a temporary helper of a configured profile for one job; it prints `task_id` and the `message_id` of your request to it. The helper answers that message (or its wait ends with the reason it could not), so pass the `message_id`s of several helpers to ONE `--condition reply_to_all` wait. `afm agent helper-result --task-id <task_id>` reads the helper's status and its full result once it finished. " +
+		notBoardTasks + "Your <your_helpers> block lists the helpers you already started: do not start a running or finished one again.\n"
+}
+
+// boardUnavailableNote replaces the Board instructions in assistants mode, so the agent knows why there are none
+// and does not look for its work on the Board.
+func boardUnavailableNote(canSpawnHelpers bool) string {
+	helpers := ""
+	if canSpawnHelpers {
+		helpers = ", and through temporary helpers you start with `afm agent spawn`"
+	}
+	return "The Board is unavailable in this run (assistants mode): work is handed over and reported through direct requests and replies" + helpers + ".\n"
+}
 
 // onMessageHelperInstructions — how a stage agent works with a helper that rests until it is asked. One thread holds
 // MaxThreadMessages messages and a request and its automatic reply both count, so a long series needs another helper.

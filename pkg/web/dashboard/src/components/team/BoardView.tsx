@@ -1,9 +1,10 @@
 import { useRef, useState, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
-import { boardTasksOf, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
+import { boardTasksOf, boardTopLevelOf, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
 import { participantLabel, senderLabel } from '../../lib/mesh-roster'
+import { BoardFactCard } from './BoardFactCard'
 import { BOARD_STATUS_LABEL, BoardTaskCard } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
 import { BoardTaskForm, boardTaskModeOf, type BoardTaskMode } from './BoardTaskForm'
@@ -50,6 +51,8 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
   const tasks = boardTasksOf(board, participants)
   const taskByKey = new Map(tasks.map((t) => [t.key, t]))
   const openTask = openKey === null ? undefined : taskByKey.get(openKey)
+  // Facts are the top-level entries that are not tasks (legacy tasks are top-level entries too); filters concern tasks only.
+  const facts = boardTopLevelOf(board).filter((e) => !taskByKey.has(e.key))
 
   const query = search.trim().toLowerCase()
   const filtering = query !== '' || assignee !== ALL_ASSIGNEES
@@ -147,6 +150,22 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
           )
         })}
       </div>
+
+      {facts.length > 0 && (
+        <section className="board-facts" aria-label="Facts">
+          <header className="board-facts-header">
+            <h3 className="board-facts-title">Facts</h3>
+            <span className="board-facts-count">{facts.length}</span>
+          </header>
+          <ul className="board-facts-list">
+            {facts.map((fact) => (
+              <li key={fact.key}>
+                <BoardFactCard fact={fact} entries={board.entries} participants={participants} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {newTaskOpen && (
         <NewTaskDialog participants={participants} stages={stages} mode={boardTaskModeOf(board)} onPosted={handlePosted} onClose={() => setNewTaskOpen(false)} />

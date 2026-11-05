@@ -36,6 +36,9 @@ import (
 // The returned entry is the revision THIS operation committed — rebuilt from the committed operation, never
 // read back from the board, which may already hold a newer revision.
 func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentcomm.BoardEntry, error) {
+	if !o.boardAvailable() {
+		return agentcomm.BoardEntry{}, errBoardUnavailable()
+	}
 	if len(req.Notify) != 0 {
 		// A board revision and its side notice commit together. CloseInput
 		// must wait until that commit has either completed or been rejected.
@@ -252,13 +255,16 @@ func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, reci
 			return plannedMessage{}, "", err
 		}
 	}
-	msg, err = o.planMessage(rs, send, deriveMeshMessageID(opID+":notify:"+string(recipient)), open)
+	msg, err = o.planMessage(rs, send, boardNoticeMessageID(opID, recipient), open)
 	return msg, "", err
 }
 
 // ReadBoard implements Service.ReadBoard. An empty Key returns every entry, sorted for a deterministic
 // result (the board has no commit-order index of its own, unlike threads/inboxes).
 func (o *Orchestrator) ReadBoard(ctx context.Context, req ReadBoardRequest) (BoardPage, error) {
+	if !o.boardAvailable() {
+		return BoardPage{}, errBoardUnavailable()
+	}
 	rs := o.opts.Store.Snapshot()
 	if req.Key != "" {
 		e, ok := rs.Assistants.Mesh.Board[req.Key]

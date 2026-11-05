@@ -95,6 +95,9 @@ function openDetail(): void {
   if (detail) fireEvent.click(detail)
 }
 
+// sendAs — the Feed composer's "Send as" choices: the pressed one is how Send delivers the input.
+const sendAs = () => within(screen.getByRole('group', { name: 'Send as' }))
+
 describe('App', () => {
   beforeEach(() => {
     resetUnknownCommandLabels()
@@ -790,7 +793,7 @@ describe('App', () => {
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
       // /api/mesh/* — capability off by default (see mockFetchForStatus's own comment): without this the
       // generic catch-all below would make useMeshRoster misread this test as mesh-enabled and swap the
-      // Revise composer's "Send note to agent" button for the mesh-mode "Apply Revise" label.
+      // Revise composer's "Restart with note" button for the mesh-mode "Apply Revise" label.
       if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
 
       return { ok: true, json: async () => [] } as Response
@@ -803,9 +806,9 @@ describe('App', () => {
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
     fireEvent.click(feedTab)
 
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     fireEvent.change(composer, { target: { value: 'test note' } })
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
 
     // /revise вернул 409 — reviseStage отклонился, FeedComposer НЕ очистил поле:
     // текст сохранён, юзер может повторить попытку.
@@ -1008,7 +1011,7 @@ describe('App', () => {
       mockNoteRun([])
       render(<App />)
       await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
-      const composer = await screen.findByPlaceholderText('Note to agent…')
+      const composer = await screen.findByPlaceholderText(/the agent restarts this phase/i)
       fireEvent.change(composer, { target: { value: 'revise alpha' } })
 
       fireEvent.click(screen.getByRole('button', { name: /^s2 / }))
@@ -1023,7 +1026,7 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: /^s1 / }))
       await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       expect(noteRegion()).toBeNull()
-      expect(await screen.findByPlaceholderText('Note to agent…')).toHaveValue('revise alpha')
+      expect(await screen.findByPlaceholderText(/the agent restarts this phase/i)).toHaveValue('revise alpha')
 
       fireEvent.click(screen.getByRole('button', { name: /^s2 / }))
       expect(await screen.findByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved words')
@@ -1850,7 +1853,7 @@ describe('App', () => {
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
     fireEvent.click(feedTab)
 
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
 
     // Фокус → стадия ставится на паузу (POST /pause), владение отмечается.
     fireEvent.focus(composer)
@@ -1858,7 +1861,7 @@ describe('App', () => {
 
     // Отправка при владении: continue ДО revise.
     fireEvent.change(composer, { target: { value: 'note while paused' } })
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
 
     await waitFor(() => expect(posts).toContain('revise'))
     expect(posts.indexOf('continue')).toBeLessThan(posts.indexOf('revise'))
@@ -1904,7 +1907,7 @@ describe('App', () => {
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
     fireEvent.click(feedTab)
 
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     fireEvent.focus(composer)
     fireEvent.change(composer, { target: { value: 'draft note' } })
     // Дожидаемся, что pause применился (владение подтверждено).
@@ -1921,7 +1924,7 @@ describe('App', () => {
 
     // Композер остался, черновик цел; воркспейс не ушёл в attention (Feed активна),
     // и стадию никто не возобновил самопроизвольно.
-    await waitFor(() => expect(screen.getByPlaceholderText(/note to agent/i)).toHaveValue('draft note'))
+    await waitFor(() => expect(screen.getByPlaceholderText(/the agent restarts this phase/i)).toHaveValue('draft note'))
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
     expect(posts).not.toContain('continue')
   })
@@ -1955,7 +1958,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     // Фокус composer'а через РЕАЛЬНЫЙ .focus() → useIsEditing=true (suppression).
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     act(() => composer.focus())
     expect(document.activeElement).toBe(composer)
     fireEvent.change(composer, { target: { value: 'my draft' } })
@@ -1967,7 +1970,7 @@ describe('App', () => {
     await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(true))
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
     // Черновик цел — воркспейс не размонтировался под suppression.
-    expect(screen.getByPlaceholderText(/note to agent/i)).toHaveValue('my draft')
+    expect(screen.getByPlaceholderText(/the agent restarts this phase/i)).toHaveValue('my draft')
 
     // Снятие фокуса — всё ещё актуальный вопрос авто-открывается.
     act(() => composer.blur())
@@ -1989,7 +1992,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     act(() => composer.focus())
     fireEvent.change(composer, { target: { value: 'my draft' } })
 
@@ -2113,7 +2116,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     // Фокус composer'а на A ставит НАШУ паузу (self-owned) и заносит черновик.
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     act(() => composer.focus())
     fireEvent.change(composer, { target: { value: 'draft note' } })
     await waitFor(() => expect(posts).toContain('pause'))
@@ -2136,10 +2139,10 @@ describe('App', () => {
       expect(document.querySelector('[data-stage-id="s2"][data-status="awaiting_user_input"]')).not.toBeNull(),
     )
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByPlaceholderText(/note to agent/i)).toHaveValue('draft note')
+    expect(screen.getByPlaceholderText(/the agent restarts this phase/i)).toHaveValue('draft note')
 
     // Завершаем op отправкой (continue → revise): владение снимается.
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
     await waitFor(() => expect(posts).toContain('revise'))
 
     // Авторитетный статус: A снова running (владения нет), B всё ещё ждёт — отдельное событие (дедуп ленты
@@ -2176,7 +2179,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     act(() => composer.focus())
     fireEvent.change(composer, { target: { value: 'draft note' } })
     await waitFor(() => expect(posts).toContain('pause'))
@@ -2184,7 +2187,7 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText(/Stage paused/)).toBeInTheDocument())
 
     // Send: continue → revise, затем clearOp (владение снято) — А ещё paused.
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
     await waitFor(() => expect(posts).toContain('revise'))
 
     // Зазор: владение снято, suppression отпущен, A всё ещё paused. Триггерим refresh (тот же
@@ -2237,7 +2240,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     act(() => composer.focus())
     fireEvent.change(composer, { target: { value: 'my draft' } })
 
@@ -2283,7 +2286,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     act(() => composer.focus())
     expect(document.activeElement).toBe(composer)
     fireEvent.change(composer, { target: { value: 'half-typed' } })
@@ -2321,7 +2324,7 @@ describe('App', () => {
     // (2) Выбираем A, открываем Feed, фокусируем её composer (suppression).
     fireEvent.click(document.querySelector('[data-stage-id="sA"] .stage-row') as HTMLElement)
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
-    const composer = screen.getByPlaceholderText(/note to agent/i)
+    const composer = screen.getByPlaceholderText(/the agent restarts this phase/i)
     act(() => composer.focus())
     expect(document.activeElement).toBe(composer)
 
@@ -2856,7 +2859,7 @@ describe('App', () => {
     const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
     expect(composer.value).toBe('')
     expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
+    expect(sendAs().getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Show people' })).toHaveAttribute('aria-expanded', 'true')
   })
 
@@ -2906,7 +2909,7 @@ describe('App', () => {
 
     await screen.findByRole('combobox', { name: /message the mesh/i })
     expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
+    expect(sendAs().getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getAllByText('Found a bug in parse()').length).toBeGreaterThan(1) // the bubble and the reply chip
   })
 
@@ -3104,16 +3107,17 @@ describe('App', () => {
     await screen.findByRole('navigation', { name: 'People' })
   }
 
-  test('composer gate: a pending stage gets Message only', async () => {
+  test('composer gate: a pending stage gets Chat only', async () => {
     await renderGate('pending', 'running')
     await screen.findByRole('combobox', { name: /message the mesh/i })
-    expect(screen.getAllByRole('tab', { name: /^(Chat|Restart with note)$/ }).map((t) => t.textContent)).toEqual(['Chat'])
+    expect(sendAs().getAllByRole('button').map((t) => t.textContent)).toEqual(['Chat'])
   })
 
-  test('composer gate: awaiting_assistants also gets Revise', async () => {
+  test('composer gate: awaiting_assistants also gets Restart with note', async () => {
     await renderGate('awaiting_assistants', 'running')
-    expect(await screen.findByRole('tab', { name: 'Restart with note' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
+    await screen.findByRole('combobox', { name: /message the mesh/i })
+    expect(sendAs().getByRole('button', { name: 'Restart with note' })).toBeInTheDocument()
+    expect(sendAs().getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('composer gate: no composer once the run has ended', async () => {
@@ -3176,7 +3180,7 @@ describe('App', () => {
     mockMeshRun(false, requests)
 
     render(<App />)
-    const note = await screen.findByPlaceholderText(/note to agent/i)
+    const note = await screen.findByPlaceholderText(/the agent restarts this phase/i)
     // Give the roster probe and any stage-messages poll time to happen.
     await waitFor(() => expect(requests.some((r) => r.includes('/api/mesh/participants'))).toBe(true))
     await new Promise((r) => setTimeout(r, 50))
@@ -3186,8 +3190,8 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Add agent' })).toBeNull()
     expect(screen.queryByRole('group', { name: 'Show in the feed' })).toBeNull()
     expect(screen.queryByText('Found a bug in parse()')).toBeNull()
-    expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
-    expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Send as' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
     expect(screen.queryByRole('combobox', { name: /message the mesh/i })).toBeNull()
     expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
     expect(requests.some((r) => r.includes('/api/mesh/stages/'))).toBe(false)
@@ -3195,7 +3199,7 @@ describe('App', () => {
     expect(screen.queryByRole('tab', { name: 'Discussion' })).toBeNull()
 
     fireEvent.change(note, { target: { value: 'tighten the tests' } })
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
     await waitFor(() => expect(requests.some((r) => r.startsWith('POST') && r.includes('/api/stages/s1/revise'))).toBe(true))
   })
 
@@ -3209,7 +3213,7 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Show people' })).toBeInTheDocument()
     expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Show in the feed' })).toBeInTheDocument()
-    expect(screen.getByRole('tablist', { name: 'Composer mode' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Send as' })).toBeInTheDocument()
     expect(requests.some((r) => r.includes('/api/mesh/stages/s1/messages'))).toBe(true)
     // The stage conversation lives in the Feed: its log is read there, and there is no Discussion tab.
     await waitFor(() => expect(requests.some((r) => r.startsWith('GET') && r.includes('/api/stages/s1/discussion'))).toBe(true))
@@ -3408,9 +3412,9 @@ describe('App', () => {
     mockModeRun(requests, () => 'assistants')
     render(<App />)
 
-    // The stage conversation still renders in the Feed, with the Message/Revise composer.
+    // The stage conversation still renders in the Feed, with the Chat / Restart with note composer.
     expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
-    expect(screen.getByRole('tablist', { name: 'Composer mode' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Send as' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: /message the mesh/i })).toBeInTheDocument()
     expect(requests.some((r) => r.includes('/api/mesh/stages/s1/messages'))).toBe(true)
 
@@ -3644,13 +3648,13 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
   })
 
-  test('assistants mode: the Feed composer keeps Message and Revise for a running stage', async () => {
+  test('assistants mode: the Feed composer keeps Chat and Restart with note for a running stage', async () => {
     mockModeRun([], () => 'assistants')
     render(<App />)
     await screen.findByText('Found a bug in parse()')
 
-    expect(screen.getAllByRole('tab', { name: /^(Chat|Restart with note)$/ }).map((t) => t.textContent)).toEqual(['Chat', 'Restart with note'])
-    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
+    expect(sendAs().getAllByRole('button').map((t) => t.textContent)).toEqual(['Chat', 'Restart with note'])
+    expect(sendAs().getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('assistants arriving while Team is open: Feed shown, stage kept, Team unmounted, board polling stopped', async () => {
@@ -4013,7 +4017,7 @@ describe('App', () => {
 
     scenario.threads = [RUN_THREAD]
     await screen.findByRole('button', { name: 'Run conversations' }, { timeout: 8000 })
-    const note = screen.getByPlaceholderText(/note to agent|ask or tell — type @/i)
+    const note = screen.getByPlaceholderText(/the agent restarts this phase|ask or tell — type @/i)
     note.focus()
     expect(document.activeElement).toBe(note)
 
@@ -4138,7 +4142,7 @@ describe('App', () => {
     fireEvent.click(runConversationsOpener())
     await within(runConversationsPanel()).findByText('Run question')
 
-    fireEvent.keyDown(screen.getByPlaceholderText(/note to agent|ask or tell — type @/i), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByPlaceholderText(/the agent restarts this phase|ask or tell — type @/i), { key: 'Escape' })
     expect(runConversationsPanel()).toHaveClass('open')
 
     fireEvent.keyDown(within(runConversationsPanel()).getByText('Run question'), { key: 'Escape' })

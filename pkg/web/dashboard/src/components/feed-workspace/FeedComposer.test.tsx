@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import type { ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
+import { createComposerDraftStore, type ComposerDraftStore } from './composer-draft-store'
+import { cancelContext, selectConversation, selectThought, type MeshReplyTarget } from './composer-draft'
 import * as meshClient from '../../api/mesh-client'
 import * as runClient from '../../api/run-client'
 import type { MeshParticipant } from '../../api/mesh-client'
@@ -59,7 +61,7 @@ describe('FeedComposer', () => {
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: '  учти edge case  ' } })
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: /restart with note/i }))
 
     expect(onSend).toHaveBeenCalledWith('учти edge case')
     await waitFor(() => expect(textarea.value).toBe(''))
@@ -71,7 +73,7 @@ describe('FeedComposer', () => {
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'note that failed' } })
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: /restart with note/i }))
 
     await waitFor(() => expect(onSend).toHaveBeenCalled())
     // Текст сохранён — пользователь может повторить.
@@ -85,7 +87,7 @@ describe('FeedComposer', () => {
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'first' } })
-    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: /restart with note/i }))
     // Поле остаётся редактируемым — пользователь дописывает, пока идёт отправка.
     fireEvent.change(textarea, { target: { value: 'first and more' } })
     resolveSend()
@@ -99,7 +101,7 @@ describe('FeedComposer', () => {
     const onSend = vi.fn().mockResolvedValue(undefined)
     render(<FeedComposer stageId="s1" onSend={onSend} />)
 
-    const sendBtn = screen.getByRole('button', { name: /send note to agent/i })
+    const sendBtn = screen.getByRole('button', { name: /restart with note/i })
     expect(sendBtn).toBeDisabled()
 
     // Пробел не считается — по-прежнему disabled и no-op.
@@ -119,75 +121,87 @@ describe('FeedComposer', () => {
     expect(onSend).toHaveBeenCalledWith('via keyboard')
   })
 
-  // --- Ответ на мысль агента (quote chip + доставка quote+comment) ---
+  // --- Ответ на мысль агента: цитата — контекст общего поля, добавляется только при отправке ---
 
   describe('reply chip', () => {
-    it('рендерит чип, когда задан replyQuote', () => {
-      render(<FeedComposer stageId="s1" onSend={vi.fn()} replyQuote="цитируемая мысль" />)
-      expect(screen.getByText(/in reply to/i)).toBeInTheDocument()
-      expect(screen.getByText('цитируемая мысль')).toBeInTheDocument()
+    // withThought — a draft store whose s1 draft answers a thought (FeedWorkspace does this on ↩).
+    function withThought(text = 'мысль', key = 'k1', hasMesh = false): ComposerDraftStore {
+      const store = createComposerDraftStore()
+      store.update('s1', (d) => selectThought(d, { key, text }, hasMesh))
+      return store
+    }
+
+    it('shows the quoted thought in the reply context', () => {
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} draftStore={withThought('цитируемая мысль')} />)
+      const context = screen.getByRole('group', { name: 'Reply context' })
+      expect(within(context).getByText(/in reply to/i)).toBeInTheDocument()
+      expect(within(context).getByText('цитируемая мысль')).toBeInTheDocument()
     })
 
-    it('не рендерит чип, когда replyQuote null/не задан', () => {
-      const { container } = render(<FeedComposer stageId="s1" onSend={vi.fn()} replyQuote={null} />)
-      expect(container.querySelector('.feed-reply-chip')).toBeNull()
+    it('shows no reply context without a reply', () => {
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} />)
+      expect(screen.queryByRole('group', { name: 'Reply context' })).toBeNull()
     })
 
-    it('✕ вызывает onCancelReply', () => {
-      const onCancelReply = vi.fn()
-      render(<FeedComposer stageId="s1" onSend={vi.fn()} replyQuote="мысль" onCancelReply={onCancelReply} />)
-      fireEvent.click(screen.getByRole('button', { name: /cancel reply to thought/i }))
-      expect(onCancelReply).toHaveBeenCalledTimes(1)
+    it('✕ removes the reply and keeps the text', () => {
+      const store = withThought()
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} draftStore={store} />)
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'keep me' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Remove reply to thought' }))
+      expect(screen.queryByRole('group', { name: 'Reply context' })).toBeNull()
+      expect(store.get('s1').context).toBeNull()
+      expect(screen.getByRole('textbox')).toHaveValue('keep me')
     })
 
-    it('send остаётся disabled при пустом комментарии даже с цитатой', () => {
+    it('Send stays off with an empty comment even with a quote', () => {
       const onSend = vi.fn().mockResolvedValue(undefined)
-      render(<FeedComposer stageId="s1" onSend={onSend} replyQuote="мысль" />)
-      const sendBtn = screen.getByRole('button', { name: /send note to agent/i })
+      render(<FeedComposer stageId="s1" onSend={onSend} draftStore={withThought()} />)
+      const sendBtn = screen.getByRole('button', { name: /restart with note/i })
       expect(sendBtn).toBeDisabled()
       fireEvent.click(sendBtn)
       expect(onSend).not.toHaveBeenCalled()
     })
 
-    it('на отправке доставляет quote+comment через onSend', () => {
+    it('sends the quote and the comment as one restart note; the quote is never put into the field', () => {
       const onSend = vi.fn().mockResolvedValue(undefined)
-      render(<FeedComposer stageId="s1" onSend={onSend} replyQuote="мысль агента" replyKey="k1" />)
+      render(<FeedComposer stageId="s1" onSend={onSend} draftStore={withThought('мысль агента')} />)
+      expect(screen.getByRole('textbox')).toHaveValue('')
       fireEvent.change(screen.getByRole('textbox'), { target: { value: 'сделай X' } })
-      fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+      fireEvent.click(screen.getByRole('button', { name: /restart with note/i }))
       expect(onSend).toHaveBeenCalledWith('> мысль агента\n\nсделай X')
     })
 
-    it('на успехе очищает текст и вызывает onSent(replyKey)', async () => {
-      const onSend = vi.fn().mockResolvedValue(undefined)
-      const onSent = vi.fn()
-      render(<FeedComposer stageId="s1" onSend={onSend} replyQuote="мысль" replyKey="k1" onSent={onSent} />)
+    it('a success clears the text and ends the reply', async () => {
+      const store = withThought()
+      render(<FeedComposer stageId="s1" onSend={vi.fn().mockResolvedValue(undefined)} draftStore={store} />)
       const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
       fireEvent.change(textarea, { target: { value: 'ответ' } })
-      fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+      fireEvent.click(screen.getByRole('button', { name: /restart with note/i }))
       await waitFor(() => expect(textarea.value).toBe(''))
-      expect(onSent).toHaveBeenCalledWith('k1')
+      expect(store.get('s1').context).toBeNull()
+      expect(screen.queryByRole('group', { name: 'Reply context' })).toBeNull()
     })
 
-    it('на отказе сохраняет текст и НЕ вызывает onSent', async () => {
+    it('a failure keeps the text and the reply', async () => {
       const onSend = vi.fn().mockRejectedValue(new Error('409'))
-      const onSent = vi.fn()
-      render(<FeedComposer stageId="s1" onSend={onSend} replyQuote="мысль" replyKey="k1" onSent={onSent} />)
+      const store = withThought()
+      render(<FeedComposer stageId="s1" onSend={onSend} draftStore={store} />)
       const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
       fireEvent.change(textarea, { target: { value: 'ответ' } })
-      fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
-      await waitFor(() => expect(onSend).toHaveBeenCalled())
+      fireEvent.click(screen.getByRole('button', { name: /restart with note/i }))
+      await waitFor(() => expect(store.get('s1').inFlight).toBeNull())
       expect(textarea.value).toBe('ответ')
-      expect(onSent).not.toHaveBeenCalled()
+      expect(store.get('s1').context).not.toBeNull()
     })
 
-    it('focuses the textarea when a reply target appears (Enter works right after ↩)', () => {
+    it('focuses the textarea when an action asks for it (Enter works right after ↩), never on mount', () => {
+      const store = withThought()
       const onSend = vi.fn().mockResolvedValue(undefined)
-      const { rerender } = render(<FeedComposer stageId="s1" onSend={onSend} />)
+      const { rerender } = render(<FeedComposer stageId="s1" onSend={onSend} draftStore={store} focusRequest={3} />)
       const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
       expect(document.activeElement).not.toBe(textarea)
 
-      // Клик по ↩ у мысли = появление replyKey → фокус уезжает в поле ввода.
-      rerender(<FeedComposer stageId="s1" onSend={onSend} replyQuote="мысль" replyKey="seq:5" />)
+      rerender(<FeedComposer stageId="s1" onSend={onSend} draftStore={store} focusRequest={4} />)
       expect(document.activeElement).toBe(textarea)
     })
   })
@@ -323,15 +337,32 @@ describe('FeedComposer', () => {
     const input = () => screen.getByRole('combobox', { name: /message the mesh/i }) as HTMLTextAreaElement
     const recipients = () => screen.getByRole('group', { name: 'Recipients' })
     const type = (value: string) => fireEvent.change(input(), { target: { value, selectionStart: value.length } })
+    // field — the one textarea in any mode; sendIn — the toolbar's Send, apart from the "Send as" buttons.
+    const field = () => document.querySelector<HTMLTextAreaElement>('textarea.chat-composer-input')!
+    const sendIn = (name: string | RegExp) => within(field().closest('.pasteable-textarea-wrap')!.querySelector<HTMLElement>('.pasteable-toolbar')!).getByRole('button', { name })
+    const modeButton = (name: 'Chat' | 'Restart with note') => within(screen.getByRole('group', { name: 'Send as' })).getByRole('button', { name })
+    const replyTarget = (overrides: Partial<MeshReplyTarget> = {}): MeshReplyTarget => ({
+      messageId: 'm5', threadId: 'mt-1', senderId: 'run:t-1', preview: 'Found a bug', members: ['user', 'run:t-1'], ...overrides,
+    })
+    function storeReplying(target: MeshReplyTarget): ComposerDraftStore {
+      const store = createComposerDraftStore()
+      store.update('s1', (d) => selectConversation(d, target))
+      return store
+    }
 
     function selectMention(label: string): void {
       type('@')
       fireEvent.click(screen.getByText(label))
     }
 
-    it('does not render mode tabs when mesh is not provided (legacy, unchanged behavior)', () => {
+    it('without the mesh there is no "Send as" switch: one field that restarts the stage agent with the note', () => {
       render(<FeedComposer stageId="s1" onSend={vi.fn()} />)
-      expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
+      expect(screen.queryByRole('group', { name: 'Send as' })).toBeNull()
+      expect(screen.queryByRole('tablist')).toBeNull()
+      expect(screen.getAllByRole('textbox')).toHaveLength(1)
+      expect(screen.getByRole('textbox', { name: 'Restart instructions' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Restart with note' })).toHaveTextContent('Restart with note')
+      expect(screen.getByText('The agent stops and restarts its current phase with your note.')).toBeInTheDocument()
     })
 
     it('keeps recipients, textarea and labelled toolbar inside one Message card', () => {
@@ -345,23 +376,23 @@ describe('FeedComposer', () => {
       expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Mention someone' }))
       expect(within(toolbar).getByRole('button', { name: 'Send message' })).toHaveTextContent('Send')
       const header = container.querySelector('.feed-composer-header')!
-      expect(header).toContainElement(screen.getByRole('tablist', { name: 'Composer mode' }))
+      expect(header).toContainElement(screen.getByRole('group', { name: 'Send as' }))
       expect(header).toContainElement(screen.getByRole('checkbox', { name: 'Interrupt agent' }))
-      for (const name of ['Chat', 'Restart with note']) {
-        expect(screen.getByRole('tab', { name }).querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+      for (const name of ['Chat', 'Restart with note'] as const) {
+        expect(modeButton(name).querySelector('svg[aria-hidden="true"]')).not.toBeNull()
       }
-      const panel = screen.getByRole('tabpanel', { name: 'Chat' })
-      expect(within(panel).getByText('Only the recipients above receive this. The agent keeps working on its task.')).toBeVisible()
-      expect(within(panel).getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
+      expect(screen.queryByRole('tablist')).toBeNull()
+      expect(screen.queryByRole('tabpanel')).toBeNull()
+      expect(screen.getByText('Only the recipients above receive this. The agent keeps working on its task.')).toBeVisible()
+      expect(screen.getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
     })
 
-    it('puts the Revise option beside the tabs and its recipient inside the card below the pause banner', () => {
+    it('puts Hold beside the switch in Restart and its only recipient inside the card below the pause banner', () => {
       const onResumeNow = vi.fn()
       const onTogglePauseOnFocus = vi.fn()
       const { container } = renderComposer(meshProps(), { paused: true, pauseOnFocusEnabled: true, onTogglePauseOnFocus, onResumeNow })
-      fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
-      const panel = screen.getByRole('tabpanel', { name: 'Restart with note' })
-      const card = within(panel).getByPlaceholderText('New instructions — the agent restarts this phase with them…').closest('.chat-composer-row')!
+      fireEvent.click(modeButton('Restart with note'))
+      const card = screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…').closest('.chat-composer-row')!
       expect(card).toContainElement(recipients())
       expect(within(recipients()).getByText('@s1')).toBeVisible()
       const option = screen.getByRole('checkbox', { name: 'Hold the agent while you type' })
@@ -370,7 +401,8 @@ describe('FeedComposer', () => {
       expect(option).toBeChecked()
       fireEvent.click(option)
       expect(onTogglePauseOnFocus).toHaveBeenCalledWith(false)
-      const banner = within(panel).getByRole('status')
+      const banner = screen.getByRole('status')
+      expect(banner).toHaveTextContent("Stage paused. The agent is on hold — it'll resume when you send.")
       expect(card).not.toContainElement(banner)
       expect(banner.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
       fireEvent.click(within(banner).getByRole('button', { name: 'Resume now' }))
@@ -378,8 +410,14 @@ describe('FeedComposer', () => {
       const toolbar = card.querySelector<HTMLElement>('.pasteable-toolbar')!
       expect(within(toolbar).getByRole('button', { name: 'Attach' })).toBeVisible()
       expect(within(toolbar).getByRole('button', { name: 'Restart with note' })).toHaveTextContent('Restart with note')
-      expect(within(panel).getByText('The agent stops and restarts its current phase with your note.')).toBeVisible()
-      expect(within(panel).getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
+      expect(screen.getByText('The agent stops and restarts its current phase with your note.')).toBeVisible()
+      expect(screen.getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
+    })
+
+    it("in Chat the pause banner says Chat messages don't resume the stage", () => {
+      renderComposer(meshProps(), { paused: true })
+      expect(screen.getByRole('status')).toHaveTextContent("Stage paused by you — Chat messages don't resume it.")
+      expect(screen.getByRole('button', { name: 'Resume now' })).toBeInTheDocument()
     })
 
     it('opens the existing keyboard mention picker from the toolbar without replacing the textarea or draft', () => {
@@ -457,19 +495,20 @@ describe('FeedComposer', () => {
       expect(input()).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { selected: true }).id)
     })
 
-    it('starts in Message, addressed to the stage agent by default; Revise is a tab with "Send revision"', () => {
+    it('starts in Chat, addressed to the stage agent by default; Restart with note is the other way to send', () => {
       renderComposer()
-      expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
+      expect(modeButton('Chat')).toHaveAttribute('aria-pressed', 'true')
+      expect(modeButton('Restart with note')).toHaveAttribute('aria-pressed', 'false')
       expect(within(recipients()).getByText('@s1')).toBeInTheDocument()
       expect(within(recipients()).getByText('stage agent')).toBeInTheDocument()
       expect(within(recipients()).getByText('@s1').closest('.chat-composer-recipient')).toHaveClass('is-default')
-      fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
-      expect(screen.getByRole('button', { name: 'Restart with note' })).toBeInTheDocument()
+      fireEvent.click(modeButton('Restart with note'))
+      expect(sendIn('Restart with note')).toBeInTheDocument()
     })
 
-    it('without Revise there is only the Message tab', () => {
+    it('without Restart there is only Chat to choose', () => {
       renderComposer(meshProps(), { reviseAvailable: false })
-      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Chat'])
+      expect(within(screen.getByRole('group', { name: 'Send as' })).getAllByRole('button').map((t) => t.textContent)).toEqual(['Chat'])
     })
 
     it('with nobody named the message is a post to the stage agent in its conversation, never a Revise', async () => {
@@ -511,7 +550,7 @@ describe('FeedComposer', () => {
       await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: 'how is it going?', mentions: [], interrupt: true }))
 
       // A reply stays in its conversation: no Interrupt there.
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={{ messageId: 'm5', threadId: 'mt-1', senderId: 'stage:s1', preview: 'x', members: ['user', 'stage:s1'] }} />)
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} draftStore={storeReplying(replyTarget({ senderId: 'stage:s1', members: ['user', 'stage:s1'] }))} />)
       expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
     })
 
@@ -531,20 +570,26 @@ describe('FeedComposer', () => {
       expect((screen.getByLabelText('Interrupt agent') as HTMLInputElement).checked).toBe(false)
     })
 
-    it("a reply has its own draft: the ordinary draft's @mentions are not its recipients, and the draft comes back after it", async () => {
+    it('a reply in conversation is a context of the same input: the text and its @mentions stay, outsiders are errors', async () => {
       const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm9', seq: 9, thread_id: 'mt-docs' })
-      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2'] }
-      const { rerender } = renderComposer()
+      const store = createComposerDraftStore()
+      renderComposer(meshProps(), { draftStore: store })
+      const textarea = input()
       type('@qa half-written note')
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={reply} />)
-      expect(input().value).toBe('')
-      expect(within(recipients()).queryByText('@qa')).toBeNull()
-      type('the answer')
-      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-2'], body: 'the answer', inReplyTo: 'm5' })))
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={null} />)
+      act(() => {
+        store.update('s1', (d) => selectConversation(d, replyTarget({ threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2'] })))
+      })
+      expect(input()).toBe(textarea)
       expect(input().value).toBe('@qa half-written note')
+      expect(within(recipients()).getByText('@docs')).toBeInTheDocument()
       expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent('@qa is not in this conversation — a reply goes only to its members')
+      expect(sendIn('Send message')).toBeDisabled()
+      type('the answer')
+      fireEvent.click(sendIn('Send message'))
+      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-2'], body: 'the answer', inReplyTo: 'm5' })))
+      await waitFor(() => expect(input().value).toBe(''))
+      expect(store.get('s1').context).toBeNull()
     })
 
     it("the feed stage's finished agent can still get a post in its conversation, delivered to the others named", async () => {
@@ -562,7 +607,7 @@ describe('FeedComposer', () => {
       const send = vi.spyOn(meshClient, 'sendMeshMessageTo')
       const done = { ...stageAgent, reachable: false, unreachable_reason: 'stage s1 has reached a terminal status' }
       const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2', 'stage:s1'] }
-      renderComposer(meshProps({ roster: roster({ participants: [runAgent, docsAgent, done] }), stages: [makeStage({ status: 'done' })] }), { reviseAvailable: false, meshReply: reply })
+      renderComposer(meshProps({ roster: roster({ participants: [runAgent, docsAgent, done] }), stages: [makeStage({ status: 'done' })] }), { reviseAvailable: false, draftStore: storeReplying(reply) })
       type('@qa @s1 thanks')
       const alert = screen.getByRole('alert')
       expect(alert).toHaveTextContent('@qa is not in this conversation — a reply goes only to its members')
@@ -573,18 +618,28 @@ describe('FeedComposer', () => {
       expect(send).not.toHaveBeenCalled()
     })
 
-    it('the mesh arriving after mount opens Message — unless a Revise note is being written', () => {
+    it('the mesh arriving after mount opens Chat on the same field — unless a note is being written or Hold is on', () => {
       const { rerender } = render(<FeedComposer stageId="s1" onSend={vi.fn()} />)
+      const textarea = field()
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
-      expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
+      expect(modeButton('Chat')).toHaveAttribute('aria-pressed', 'true')
+      expect(field()).toBe(textarea)
+
+      const held = render(<FeedComposer stageId="s2" onSend={vi.fn()} holdActive />)
+      held.rerender(<FeedComposer stageId="s2" onSend={vi.fn()} holdActive mesh={meshProps()} />)
+      expect(within(held.container).getByRole('button', { name: 'Restart with note', pressed: true })).toBeInTheDocument()
     })
 
-    it('a late mesh keeps a Revise note being written in Revise', () => {
+    it('a late mesh keeps a note being written in Restart, in the same field', () => {
       const { rerender } = render(<FeedComposer stageId="s1" onSend={vi.fn()} />)
-      fireEvent.change(screen.getByPlaceholderText('Note to agent…'), { target: { value: 'tighten tests' } })
+      const textarea = field()
+      fireEvent.change(textarea, { target: { value: 'tighten tests' } })
+      textarea.setSelectionRange(2, 7)
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
-      expect(screen.getByRole('tab', { name: 'Restart with note' })).toHaveAttribute('aria-selected', 'true')
-      expect(screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')).toHaveValue('tighten tests')
+      expect(modeButton('Restart with note')).toHaveAttribute('aria-pressed', 'true')
+      expect(field()).toBe(textarea)
+      expect(textarea).toHaveValue('tighten tests')
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 7])
     })
 
     it('Enter sends to two picked people; Shift+Enter adds a line, as the hint says', async () => {
@@ -593,7 +648,7 @@ describe('FeedComposer', () => {
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 2 } })} />)
       type('please both review')
-      expect(within(screen.getByRole('tabpanel', { name: 'Chat' })).getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
+      expect(screen.getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
       expect(fireEvent.keyDown(input(), { key: 'Enter', shiftKey: true })).toBe(true)
       expect(send).not.toHaveBeenCalled()
       fireEvent.keyDown(input(), { key: 'Enter' })
@@ -637,14 +692,15 @@ describe('FeedComposer', () => {
       expect(send.mock.calls[0]?.[0]).toMatchObject({ recipientIds: ['run:t-1', 'run:t-2'], body: '@qa please both review' })
     })
 
-    it('a people-panel pick switches to Message and ADDS a chip without touching the text; a pick before mount is ignored', () => {
+    it('a people-panel pick switches to Chat and ADDS a chip without touching the text; a pick before mount is ignored', () => {
       const { rerender } = renderComposer(meshProps({ pick: { participantId: 'run:t-1', seq: 3 } }))
       expect(within(recipients()).queryByText('@qa')).toBeNull()
-      fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+      fireEvent.click(modeButton('Restart with note'))
+      fireEvent.change(field(), { target: { value: 'kept' } })
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 4 } })} />)
-      expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
+      expect(modeButton('Chat')).toHaveAttribute('aria-pressed', 'true')
       expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
-      expect(input().value).toBe('')
+      expect(input().value).toBe('kept')
       expect(input()).toHaveFocus()
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 5 } })} />)
       expect(within(recipients()).getByText('@docs')).toBeInTheDocument()
@@ -682,13 +738,27 @@ describe('FeedComposer', () => {
       expect(input().value).toBe('@qa hi')
     })
 
-    it('a stage agent waiting for its helpers reads only a Revise: no default recipient, and "Use Revise" switches', () => {
+    it('a stage agent waiting for its helpers reads only a Restart: no default recipient, and "Use Restart with note" switches', () => {
       renderComposer(meshProps({ stages: [makeStage({ status: 'awaiting_assistants' })] }))
       expect(within(recipients()).getByText(/reads a note only through Restart with note/)).toBeInTheDocument()
       type('hi')
       expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+      expect(screen.getByText('Only the recipients above receive this.')).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'Use Restart with note' }))
-      expect(screen.getByRole('tab', { name: 'Restart with note' })).toHaveAttribute('aria-selected', 'true')
+      expect(modeButton('Restart with note')).toHaveAttribute('aria-pressed', 'true')
+      expect(field()).toHaveValue('hi')
+    })
+
+    it('the Restart offer stays when the waiting stage agent is named explicitly (a thought reply or @handle)', () => {
+      const store = createComposerDraftStore()
+      store.update('s1', (d) => selectThought(d, { key: 'k1', text: 'a thought' }, true))
+      renderComposer(meshProps({ stages: [makeStage({ status: 'awaiting_assistants' })] }), { draftStore: store })
+      type('hi')
+      expect(within(recipients()).getByText('@s1').closest('.chat-composer-recipient')).toHaveClass('has-problem')
+      expect(screen.getByRole('alert')).toHaveTextContent(/reads a note only through Restart with note/)
+      fireEvent.click(screen.getByRole('button', { name: 'Use Restart with note' }))
+      expect(modeButton('Restart with note')).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByText('↩ In reply to')).toBeInTheDocument()
     })
 
     it('a finished stage agent is no default: a recipient is required', () => {
@@ -709,23 +779,29 @@ describe('FeedComposer', () => {
       expect(within(screen.getByRole('listbox')).getByText('@qa')).toBeInTheDocument()
     })
 
-    it('answering a conversation message adds its sender and sends in_reply_to; ✕ cancels', async () => {
+    it('answering a conversation message adds its sender (no ×, "in reply") and sends in_reply_to; a success ends the reply', async () => {
       const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm9', seq: 9, thread_id: 'mt-1' })
-      const onCancel = vi.fn()
-      const onReplySent = vi.fn()
-      renderComposer(meshProps(), {
-        meshReply: { messageId: 'm5', threadId: 'mt-1', senderId: 'run:t-1', preview: 'Found a bug', members: ['user', 'run:t-1'] },
-        onCancelMeshReply: onCancel,
-        onMeshReplySent: onReplySent,
-      })
-      expect(screen.getByText('↩ Reply in conversation')).toBeInTheDocument()
+      const store = storeReplying(replyTarget())
+      renderComposer(meshProps(), { draftStore: store })
+      expect(within(screen.getByRole('group', { name: 'Reply context' })).getByText('↩ Reply in conversation')).toBeInTheDocument()
       expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+      expect(within(recipients()).getByText('in reply')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove @qa' })).toBeNull()
       type('which one?')
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-1'], inReplyTo: 'm5' })))
-      await waitFor(() => expect(onReplySent).toHaveBeenCalledWith('m5'))
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel reply in conversation' }))
-      expect(onCancel).toHaveBeenCalled()
+      await waitFor(() => expect(store.get('s1').context).toBeNull())
+    })
+
+    it('✕ on a conversation reply removes it and its required recipient, keeping the text and explicit recipients', () => {
+      const store = storeReplying(replyTarget())
+      renderComposer(meshProps(), { draftStore: store })
+      type('@docs keep this')
+      fireEvent.click(screen.getByRole('button', { name: 'Remove reply in conversation' }))
+      expect(screen.queryByRole('group', { name: 'Reply context' })).toBeNull()
+      expect(input().value).toBe('@docs keep this')
+      expect(within(recipients()).queryByText('@qa')).toBeNull()
+      expect(within(recipients()).getByText('@docs')).toBeInTheDocument()
     })
 
     it('a picked person who left the roster stays as a problem chip and Send stays off — the stage agent never takes over', () => {
@@ -752,25 +828,21 @@ describe('FeedComposer', () => {
       expect(within(recipients()).getByText('stage agent')).toBeInTheDocument()
     })
 
-    it('a reply is addressed to that conversation only: earlier picks wait, and picks made during it end with it', async () => {
-      const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm9', seq: 9, thread_id: 'mt-docs' })
-      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2'] }
-      const { rerender } = renderComposer()
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
-      expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
-
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} meshReply={reply} />)
+    it('a picked person outside the conversation stays visible as an error and blocks Chat — never dropped silently', () => {
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo')
+      const store = createComposerDraftStore()
+      const { rerender } = renderComposer(meshProps(), { draftStore: store })
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} draftStore={store} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
+      act(() => {
+        store.update('s1', (d) => selectConversation(d, replyTarget({ threadId: 'mt-docs', senderId: 'run:t-2', members: ['user', 'run:t-2'] })))
+      })
       expect(within(recipients()).getByText('@docs')).toBeInTheDocument()
-      expect(within(recipients()).queryByText('@qa')).toBeNull()
-      expect(screen.queryByRole('button', { name: 'Remove @docs' })).toBeNull()
-      type('answer')
-      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-2'], inReplyTo: 'm5' })))
-
-      // The reply ended: its sender is no longer a recipient, the earlier pick is back.
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} meshReply={null} />)
-      expect(within(recipients()).queryByText('@docs')).toBeNull()
       expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent('@qa is not in this conversation')
+      type('answer')
+      expect(sendIn('Send message')).toBeDisabled()
+      fireEvent.keyDown(input(), { key: 'Enter' })
+      expect(send).not.toHaveBeenCalled()
     })
 
     it('a retry of the same message reuses its request id; another recipient set is a new message', async () => {
@@ -875,31 +947,249 @@ describe('FeedComposer', () => {
       await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Paused · waiting for Continue'))
     })
 
-    it('Message/Revise follow the tab pattern: arrow keys switch modes and each tab controls its panel', () => {
-      renderComposer()
-      const message = screen.getByRole('tab', { name: 'Chat' })
-      message.focus()
-      fireEvent.keyDown(message, { key: 'ArrowRight' })
-      const revise = screen.getByRole('tab', { name: 'Restart with note' })
-      expect(revise).toHaveAttribute('aria-selected', 'true')
-      expect(revise).toHaveFocus()
-      expect(screen.getByRole('tabpanel', { name: 'Restart with note' })).toBeVisible()
+    it('"Send as" is a group of two pressed buttons: no tabs, focus stays on the button, nothing is sent', () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      const { onSend } = renderComposer()
+      const restart = modeButton('Restart with note')
+      restart.focus()
+      fireEvent.click(restart)
+      expect(restart).toHaveAttribute('aria-pressed', 'true')
+      expect(modeButton('Chat')).toHaveAttribute('aria-pressed', 'false')
+      expect(restart).toHaveFocus()
+      expect(screen.queryByRole('tab')).toBeNull()
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(onSend).not.toHaveBeenCalled()
     })
 
-    it('switching to Revise and back keeps the message draft and its recipients', () => {
+    it('switching Chat ↔ Restart keeps the same textarea, its text, selection, recipients and attachments', () => {
       renderComposer()
-      type('@qa draft')
-      fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
-      fireEvent.click(screen.getByRole('tab', { name: 'Chat' }))
-      expect(input().value).toBe('@qa draft')
+      const textarea = input()
+      type('@qa draft text')
+      textarea.setSelectionRange(4, 9)
+      fireEvent.click(modeButton('Restart with note'))
+      expect(field()).toBe(textarea)
+      expect(textarea).toHaveValue('@qa draft text')
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([4, 9])
+      expect(within(recipients()).getByText('@s1')).toBeInTheDocument()
+      expect(within(recipients()).queryByText('@qa')).toBeNull()
+      fireEvent.click(modeButton('Chat'))
+      expect(field()).toBe(textarea)
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([4, 9])
       expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
     })
 
-    it('a reply to a thought switches to Revise and focuses its field', () => {
-      const { rerender } = renderComposer()
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} replyQuote="a thought" replyKey="k1" />)
-      expect(screen.getByRole('tab', { name: 'Restart with note' })).toHaveAttribute('aria-selected', 'true')
-      expect(screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')).toHaveFocus()
+    it('Chat sends a message without a restart and Restart sends a note from the same field, both ways, by keyboard too', async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'dm-1' })
+      const { onSend } = renderComposer()
+      fireEvent.click(modeButton('Restart with note'))
+      fireEvent.click(modeButton('Chat'))
+      type('as a message')
+      fireEvent.keyDown(input(), { key: 'Enter' })
+      await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: 'as a message', mentions: [], interrupt: false }))
+      expect(onSend).not.toHaveBeenCalled()
+      await waitFor(() => expect(field().value).toBe(''))
+
+      fireEvent.click(modeButton('Restart with note'))
+      fireEvent.change(field(), { target: { value: 'as a restart note' } })
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('as a restart note'))
+      expect(post).toHaveBeenCalledTimes(1)
+    })
+
+    it('a thought reply in Restart is quoted in the note; in Chat it is a post to the stage agent with the quote', async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'dm-1' })
+      const store = createComposerDraftStore()
+      store.update('s1', (d) => selectThought(d, { key: 'k1', text: 'Plan step: ask @docs to check the parser' }, true))
+      const { onSend } = renderComposer(meshProps(), { draftStore: store })
+      expect(within(recipients()).getByText('@s1')).toBeInTheDocument()
+      expect(within(recipients()).getByText('in reply')).toBeInTheDocument()
+      expect(within(recipients()).queryByText('@docs')).toBeNull()
+      type('agreed @qa')
+      fireEvent.click(sendIn('Send message'))
+      await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), {
+        body: '> Plan step: ask @docs to check the parser\n\nagreed @qa', mentions: ['run:t-1'], interrupt: false,
+      }))
+      await waitFor(() => expect(store.get('s1').context).toBeNull())
+
+      act(() => {
+        store.update('s1', (d) => selectThought(d, { key: 'k2', text: 'Second thought' }, true))
+      })
+      fireEvent.click(modeButton('Restart with note'))
+      fireEvent.change(field(), { target: { value: 'restart with it' } })
+      fireEvent.click(sendIn('Restart with note'))
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('> Second thought\n\nrestart with it'))
+    })
+
+    it('a conversation reply in Restart is kept but marked as not sent: the note goes to the stage agent only', async () => {
+      const store = storeReplying(replyTarget())
+      const { onSend } = renderComposer(meshProps(), { draftStore: store })
+      type('use the new parser')
+      fireEvent.click(modeButton('Restart with note'))
+      const context = screen.getByRole('group', { name: 'Reply context' })
+      expect(within(context).getByText('Not sent with a restart — switch to Chat to reply in the conversation')).toBeInTheDocument()
+      expect(within(recipients()).getByText('@s1')).toBeInTheDocument()
+      expect(within(recipients()).queryByText('@qa')).toBeNull()
+      fireEvent.click(modeButton('Chat'))
+      expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+      expect(within(screen.getByRole('group', { name: 'Reply context' })).queryByText(/Not sent with a restart/)).toBeNull()
+      fireEvent.click(modeButton('Restart with note'))
+      fireEvent.click(sendIn('Restart with note'))
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('use the new parser'))
+      await waitFor(() => expect(store.get('s1').context).toBeNull())
+    })
+
+    it('a closed conversation keeps the input and the reply, blocks Chat and offers Remove reply or Restart', () => {
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo')
+      const store = storeReplying(replyTarget())
+      renderComposer(meshProps(), { draftStore: store, conversationClosed: true })
+      type('late answer')
+      expect(screen.getByText('This conversation is closed.')).toBeInTheDocument()
+      const send_ = sendIn('Send message')
+      expect(send_).toBeDisabled()
+      const reason = screen.getByText("Chat can't reply in a closed conversation. Your text is kept.").closest('[role="status"]')!
+      expect(send_).toHaveAttribute('aria-describedby', reason.id)
+      fireEvent.keyDown(input(), { key: 'Enter' })
+      expect(send).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Use Restart with note' }))
+      expect(modeButton('Restart with note')).toHaveAttribute('aria-pressed', 'true')
+      expect(field()).toHaveValue('late answer')
+      fireEvent.click(modeButton('Chat'))
+      fireEvent.click(screen.getByRole('button', { name: 'Remove reply' }))
+      expect(store.get('s1').context).toBeNull()
+      expect(field()).toHaveValue('late answer')
+    })
+
+    it('a chosen Restart that became unavailable keeps the text and blocks with the reason and "Use Chat", never switching by itself', () => {
+      const { rerender, onSend } = renderComposer()
+      fireEvent.click(modeButton('Restart with note'))
+      fireEvent.change(field(), { target: { value: 'my note' } })
+      rerender(<FeedComposer stageId="s1" onSend={onSend} mesh={meshProps({ stages: [makeStage({ status: 'done' })] })} reviseAvailable={false} />)
+      expect(modeButton('Restart with note')).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('status')).toHaveTextContent("Restart with note isn't available now — the stage has finished. Your text is kept.")
+      expect(sendIn('Restart with note')).toBeDisabled()
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      expect(onSend).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Use Chat' }))
+      expect(modeButton('Chat')).toHaveAttribute('aria-pressed', 'true')
+      expect(field()).toHaveValue('my note')
+      expect(screen.getByText("Only the recipients above receive this. This stage has finished — its agent won't read it.")).toBeInTheDocument()
+    })
+
+    it('a second send of the same input is blocked while the first runs, even after switching the mode or a remount', async () => {
+      let finish: (v: { messageId: string }) => void = () => {}
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockReturnValue(new Promise((res) => { finish = res }))
+      const store = createComposerDraftStore()
+      const { onSend, unmount } = renderComposer(meshProps(), { draftStore: store })
+      type('only once')
+      fireEvent.click(sendIn('Send message'))
+      expect(post).toHaveBeenCalledTimes(1)
+      fireEvent.click(modeButton('Restart with note'))
+      expect(sendIn('Sending…')).toBeDisabled()
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      unmount()
+      const again = renderComposer(meshProps(), { draftStore: store })
+      expect(within(again.container).getByRole('button', { name: 'Sending…' })).toBeDisabled()
+      expect(again.onSend).not.toHaveBeenCalled()
+      expect(onSend).not.toHaveBeenCalled()
+      await act(async () => finish({ messageId: 'dm-1' }))
+      expect(store.get('s1')).toMatchObject({ text: '', inFlight: null, mode: 'restart' })
+    })
+
+    it('operations started before a re-render (double click, a switch and Enter) go out once: the shared lock refuses the rest', () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockReturnValue(new Promise(() => {}))
+      const { onSend } = renderComposer()
+      type('only once')
+      act(() => {
+        sendIn('Send message').click()
+        sendIn('Send message').click()
+        modeButton('Restart with note').click()
+        fireEvent.keyDown(field(), { key: 'Enter' })
+      })
+      expect(post).toHaveBeenCalledTimes(1)
+      expect(onSend).not.toHaveBeenCalled()
+    })
+
+    it('a failed Chat retried after a remount reuses its request id and body', async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({ messageId: 'dm-1' })
+      const store = createComposerDraftStore()
+      const first = renderComposer(meshProps(), { draftStore: store })
+      type('retry me')
+      fireEvent.click(sendIn('Send message'))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+      first.unmount()
+      renderComposer(meshProps(), { draftStore: store })
+      expect(screen.getByRole('alert')).toHaveTextContent('network')
+      fireEvent.click(sendIn('Send message'))
+      await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
+      expect(post.mock.calls[1]?.[1]).toBe(post.mock.calls[0]?.[1])
+      expect(post.mock.calls[1]?.[2]).toEqual(post.mock.calls[0]?.[2])
+    })
+
+    it('a late success after edits removes only what was sent and keeps the newer text and the new reply', async () => {
+      let finish: (v: { messageId: string }) => void = () => {}
+      vi.spyOn(runClient, 'postStageDiscussionMessage').mockReturnValue(new Promise((res) => { finish = res }))
+      const store = createComposerDraftStore()
+      renderComposer(meshProps(), { draftStore: store })
+      type('first')
+      fireEvent.click(sendIn('Send message'))
+      type('first and more')
+      await act(async () => finish({ messageId: 'dm-1' }))
+      expect(input().value).toBe('and more')
+
+      let finishSecond: (v: { messageId: string }) => void = () => {}
+      vi.spyOn(runClient, 'postStageDiscussionMessage').mockReturnValue(new Promise((res) => { finishSecond = res }))
+      fireEvent.click(sendIn('Send message'))
+      act(() => {
+        store.update('s1', (d) => selectThought(d, { key: 'k9', text: 'another thought' }, true))
+      })
+      await act(async () => finishSecond({ messageId: 'dm-2' }))
+      expect(input().value).toBe('and more')
+      expect(store.get('s1').context).toMatchObject({ kind: 'thought', key: 'k9' })
+    })
+
+    it('a restored draft with a reply does not take the focus or start Hold; ↩ focuses the field', () => {
+      const onFocus = vi.fn()
+      const store = createComposerDraftStore()
+      store.update('s1', (d) => selectThought(d, { key: 'k1', text: 'a thought' }, false))
+      const { rerender } = render(<FeedComposer stageId="s1" onSend={vi.fn()} draftStore={store} onFocus={onFocus} focusRequest={7} />)
+      expect(document.activeElement).not.toBe(field())
+      expect(onFocus).not.toHaveBeenCalled()
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} draftStore={store} onFocus={onFocus} focusRequest={8} />)
+      expect(field()).toHaveFocus()
+      expect(onFocus).toHaveBeenCalledTimes(1)
+    })
+
+    it('Hold: focus pauses only in Restart, an empty field resumes on blur in any mode, a mode switch neither pauses nor resumes', () => {
+      const onFocus = vi.fn()
+      const onBlur = vi.fn()
+      const onResumeNow = vi.fn()
+      renderComposer(meshProps(), { onFocus, onBlur, onResumeNow, pauseOnFocusEnabled: true, onTogglePauseOnFocus: vi.fn() })
+      fireEvent.focus(field())
+      expect(onFocus).not.toHaveBeenCalled()
+      fireEvent.click(modeButton('Restart with note'))
+      fireEvent.focus(field())
+      expect(onFocus).toHaveBeenCalledTimes(1)
+      fireEvent.change(field(), { target: { value: 'note' } })
+      fireEvent.blur(field())
+      expect(onBlur).toHaveBeenLastCalledWith(true)
+      fireEvent.click(modeButton('Chat'))
+      fireEvent.click(modeButton('Restart with note'))
+      expect(onFocus).toHaveBeenCalledTimes(1)
+      expect(onBlur).toHaveBeenCalledTimes(1)
+      expect(onResumeNow).not.toHaveBeenCalled()
+      fireEvent.click(modeButton('Chat'))
+      fireEvent.change(field(), { target: { value: '' } })
+      fireEvent.blur(field())
+      expect(onBlur).toHaveBeenLastCalledWith(false)
+    })
+
+    it('blur counts an attachment without text as a draft', () => {
+      const onBlur = vi.fn()
+      const store = createComposerDraftStore()
+      store.update('s1', (d) => ({ ...d, attachments: [{ id: '0', previewUrl: 'blob:x', uploading: true, failed: false, errorMsg: null, insertedText: null, file: new File([], 'x.png') }] }))
+      renderComposer(meshProps(), { draftStore: store, onBlur })
+      fireEvent.blur(field())
+      expect(onBlur).toHaveBeenLastCalledWith(true)
     })
 
     describe('"Attach to stage" opens a preview before anything is created', () => {
@@ -948,13 +1238,90 @@ describe('FeedComposer', () => {
         expect(input().value).toBe('please take a look')
       })
 
-      it('an attached helper gets the text alone: with other recipients Send says so', () => {
+      it('an attached helper gets the text alone: with other recipients Send is off and says why', () => {
         renderComposer()
         selectMention('@frontendDeveloper')
         type('@qa please')
-        fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-        expect(screen.getByRole('alert')).toHaveTextContent('An attached helper gets the text alone')
+        expect(screen.getByRole('status')).toHaveTextContent('An attached helper gets the text alone')
+        expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+        fireEvent.keyDown(input(), { key: 'Enter' })
         expect(screen.queryByRole('dialog', { name: /attach helper/i })).toBeNull()
+      })
+
+      it('choosing a reply drops the attaching helper but keeps the text', () => {
+        const store = createComposerDraftStore()
+        renderComposer(meshProps(), { draftStore: store })
+        selectMention('@frontendDeveloper')
+        type('please take a look')
+        act(() => {
+          store.update('s1', (d) => selectThought(d, { key: 'k1', text: 'a thought' }, true))
+        })
+        expect(within(recipients()).queryByText(/Attach helper/)).toBeNull()
+        expect(input().value).toBe('please take a look')
+      })
+
+      it('in Restart no helper is attached: the note goes to the stage agent', async () => {
+        const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
+        const { onSend } = renderComposer()
+        selectMention('@frontendDeveloper')
+        type('please take a look')
+        fireEvent.click(modeButton('Restart with note'))
+        fireEvent.click(sendIn('Restart with note'))
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('please take a look'))
+        expect(attachSpy).not.toHaveBeenCalled()
+        expect(screen.queryByRole('dialog', { name: /attach helper/i })).toBeNull()
+      })
+
+      it('a slow attach holds the shared lock: Restart cannot send the same text meanwhile', async () => {
+        let finish: (v: meshClient.MeshAttachAndSendResult) => void = () => {}
+        vi.spyOn(meshClient, 'attachAndSendMesh').mockReturnValue(new Promise((res) => { finish = res }))
+        const store = createComposerDraftStore()
+        renderComposer(meshProps(), { draftStore: store })
+        selectMention('@frontendDeveloper')
+        type('please take a look')
+        fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+        fireEvent.click(screen.getByRole('button', { name: /attach and send/i }))
+        expect(store.get('s1').inFlight).toMatchObject({ op: 'attach' })
+        await act(async () => finish({ task_id: 't1', participant_id: 'helper:t1', thread_id: 'mt-attach', message_id: 'm1' }))
+        expect(store.get('s1')).toMatchObject({ inFlight: null, text: '', attaching: null })
+      })
+
+      const backendProfile: AssistantProfile = { id: 'backendDeveloper', title: 'Backend reviewer', command: 'claude', commandName: 'Claude Code', available: true, unavailableReason: '' }
+      const ATTACHED: meshClient.MeshAttachAndSendResult = { task_id: 't1', participant_id: 'helper:t1', thread_id: 'mt-attach', message_id: 'm1' }
+
+      // cancelledAttach — "Attach and send" for the frontend helper is still in flight when its preview is cancelled.
+      function cancelledAttach(store: ComposerDraftStore) {
+        let finish: (v: meshClient.MeshAttachAndSendResult) => void = () => {}
+        const attach = vi.spyOn(meshClient, 'attachAndSendMesh').mockReturnValue(new Promise((res) => { finish = res }))
+        renderComposer(meshProps({ profiles: [...profiles, backendProfile] }), { draftStore: store })
+        selectMention('@frontendDeveloper')
+        type('please take a look')
+        fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+        fireEvent.click(screen.getByRole('button', { name: /attach and send/i }))
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+        return { attach, succeed: () => act(async () => finish(ATTACHED)) }
+      }
+
+      it('a late success of a cancelled attach keeps the helper picked since and its new assignment', async () => {
+        const { attach, succeed } = cancelledAttach(createComposerDraftStore())
+        selectMention('@backendDeveloper')
+        type('review the API')
+        await succeed()
+        expect(attach).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'frontendDeveloper', instruction: 'please take a look' }))
+        expect(within(recipients()).getByText('Attach helper: Backend reviewer')).toBeInTheDocument()
+        expect(input().value).toBe('review the API')
+      })
+
+      it('a late success of a cancelled attach shows no receipt once another reply was chosen', async () => {
+        const store = createComposerDraftStore()
+        const { succeed } = cancelledAttach(store)
+        act(() => {
+          store.update('s1', (d) => selectThought(d, { key: 'k9', text: 'another thought' }, true))
+        })
+        await succeed()
+        expect(screen.queryByRole('status', { name: 'Delivery' })).toBeNull()
+        expect(input().value).toBe('please take a look')
+        expect(store.get('s1').context).toMatchObject({ kind: 'thought', key: 'k9' })
       })
 
       it('a re-submit after a failed attach reuses the same request_id', async () => {
@@ -1375,14 +1742,21 @@ describe('FeedComposer', () => {
         const spies = spyOnMessageRoutes()
         const list = vi.spyOn(meshClient, 'listMeshLoops').mockResolvedValue({ loops: [] })
         const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2'] }
-        const { rerender } = renderComposer(loopMesh({ pick: { participantId: 'run:t-1', seq: 1 } }), { meshReply: reply })
+        const store = storeReplying(reply)
+        const { rerender } = renderComposer(loopMesh(), { draftStore: store })
+        rerender(<FeedComposer stageId="s1" onSend={vi.fn()} draftStore={store} mesh={loopMesh({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
         type('/loop list')
         expect(screen.queryByRole('group', { name: 'Recipients' })).toBeNull()
+        expect(screen.queryByRole('group', { name: 'Reply context' })).toBeNull()
         expect(sendButton('Run')).toBeEnabled()
         run()
         await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
         expectNothingSent(spies)
-        rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={loopMesh()} meshReply={null} />)
+        // The /loop ran without the reply and kept it for the next message.
+        expect(store.get('s1').context).toMatchObject({ kind: 'conversation' })
+        act(() => {
+          store.update('s1', cancelContext)
+        })
         type('')
         selectMention('@frontendDeveloper')
         type('/loop list')
@@ -1395,19 +1769,38 @@ describe('FeedComposer', () => {
         expect(within(recipients()).getByText(/Attach helper/)).toBeInTheDocument()
       })
 
-      it('a /loop note in Revise says slash commands run in Message and cannot be applied', () => {
+      it('a /loop note in Restart says slash commands run in Chat, offers "Use Chat" and keeps the text', () => {
         const { onSend } = renderComposer(loopMesh())
-        fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+        fireEvent.click(modeButton('Restart with note'))
         const note = screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
         fireEvent.change(note, { target: { value: '/loop 5m @qa check' } })
-        expect(screen.getByText('Slash commands run in Chat')).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: 'Restart with note' })).toBeDisabled()
+        expect(screen.getByRole('status')).toHaveTextContent('Slash commands run in Chat')
+        expect(sendIn('Restart with note')).toBeDisabled()
         fireEvent.keyDown(note, { key: 'Enter', metaKey: true })
         expect(onSend).not.toHaveBeenCalled()
         expect(note).toHaveValue('/loop 5m @qa check')
         fireEvent.change(note, { target: { value: '/loops are fine here' } })
         expect(screen.queryByText('Slash commands run in Chat')).toBeNull()
-        expect(screen.getByRole('button', { name: 'Restart with note' })).toBeEnabled()
+        expect(sendIn('Restart with note')).toBeEnabled()
+        fireEvent.change(note, { target: { value: '/loop list' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Use Chat' }))
+        expect(modeButton('Chat')).toHaveAttribute('aria-pressed', 'true')
+        expect(field()).toHaveValue('/loop list')
+        expect(sendButton('Run')).toBeEnabled()
+      })
+
+      it('without the mesh a /loop note never reaches the restart: blocked, the text kept, no "Use Chat"', () => {
+        const onSend = vi.fn().mockResolvedValue(undefined)
+        render(<FeedComposer stageId="s1" onSend={onSend} />)
+        const note = field()
+        fireEvent.change(note, { target: { value: '/loop list' } })
+        expect(screen.getByRole('status')).toHaveTextContent('Slash commands run in Chat')
+        expect(sendIn('Restart with note')).toBeDisabled()
+        fireEvent.keyDown(note, { key: 'Enter' })
+        fireEvent.click(sendIn('Restart with note'))
+        expect(onSend).not.toHaveBeenCalled()
+        expect(note).toHaveValue('/loop list')
+        expect(screen.queryByRole('button', { name: 'Use Chat' })).toBeNull()
       })
     })
   })

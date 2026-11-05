@@ -462,11 +462,15 @@ func (o *Orchestrator) ReadThread(ctx context.Context, req ReadThreadRequest) (M
 	if !ok {
 		return MessagePage{}, &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown thread %s", req.ThreadID)}
 	}
-	if req.Reader != meshUserParticipantID && req.Reader != "" && !threadHasMember(thread, req.Reader) {
+	owner := req.Reader == meshUserParticipantID || req.Reader == ""
+	if !owner && !threadHasMember(thread, req.Reader) {
 		return MessagePage{}, &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: fmt.Sprintf("%s is not a member of thread %s", req.Reader, req.ThreadID)}
 	}
-	ids := rs.Assistants.Mesh.MessagesByThread[req.ThreadID]
-	return pageMessages(rs, ids, req.Cursor, req.Limit), nil
+	mesh := rs.Assistants.Mesh
+	if !owner {
+		mesh = o.agentMesh(rs)
+	}
+	return pageMessages(mesh, mesh.MessagesByThread[req.ThreadID], req.Cursor, req.Limit), nil
 }
 
 // ListThreads implements Service.ListThreads: every thread req.Participant is a Member of, in the run's
@@ -548,13 +552,17 @@ func threadMessagePreview(body string) string {
 // handler), never by this read alone ("неявного ack при чтении нет", tmp/agent-mesh.md §6.1).
 func (o *Orchestrator) ReadInbox(ctx context.Context, req ReadInboxRequest) (MessagePage, error) {
 	rs := o.opts.Store.Snapshot()
-	ids := rs.Assistants.Mesh.Inbox[req.Participant]
+	mesh := rs.Assistants.Mesh
+	if req.Participant != meshUserParticipantID {
+		mesh = o.agentMesh(rs)
+	}
+	ids := mesh.Inbox[req.Participant]
 	if req.OnlyNew {
 		ids = slices.DeleteFunc(slices.Clone(ids), func(id agentcomm.MessageID) bool {
-			return rs.Assistants.Mesh.Receipts[id][req.Participant] != agentcomm.DeliveryAccepted
+			return mesh.Receipts[id][req.Participant] != agentcomm.DeliveryAccepted
 		})
 	}
-	return pageMessages(rs, ids, req.Cursor, req.Limit), nil
+	return pageMessages(mesh, ids, req.Cursor, req.Limit), nil
 }
 
 func threadHasMember(t *agentcomm.Thread, id agentcomm.ParticipantID) bool {
@@ -566,13 +574,15 @@ func threadHasMember(t *agentcomm.Thread, id agentcomm.ParticipantID) bool {
 	return false
 }
 
-func pageMessages(rs state.RunState, ids []agentcomm.MessageID, cursor uint64, limit int) MessagePage {
+// pageMessages pages over the ids with a message in mesh, so a message left out of a reader's mesh takes no place
+// in its page.
+func pageMessages(mesh state.MeshState, ids []agentcomm.MessageID, cursor uint64, limit int) MessagePage {
 	if limit <= 0 {
 		limit = defaultMeshPageLimit
 	}
 	var page MessagePage
 	for _, id := range ids {
-		m := rs.Assistants.Mesh.Messages[id]
+		m := mesh.Messages[id]
 		if m == nil || m.Seq <= cursor {
 			continue
 		}
@@ -615,7 +625,7 @@ func (o *Orchestrator) Acknowledge(ctx context.Context, req AcknowledgeRequest) 
 // The operation id is deterministic per (message, recipient) so calling this more than once for the same
 // pair (e.g. the message is re-included after a retry) is a harmless idempotent replay, never a conflict.
 func (o *Orchestrator) MarkMessageDelivered(ctx context.Context, messageID agentcomm.MessageID, recipient agentcomm.ParticipantID) error {
-	opID := "mesh-deliver-" + deriveMeshID("mesh-deliver", string(messageID)+"|"+string(recipient))
+	opID := meshDeliverOperationID(messageID, recipient)
 	eff, err := marshalEffect("mesh_message_delivered",
 		state.Target{MessageID: string(messageID), ParticipantID: string(recipient)}, state.MeshMessageReceiptPayload{})
 	if err != nil {
@@ -628,6 +638,11 @@ func (o *Orchestrator) MarkMessageDelivered(ctx context.Context, messageID agent
 		}})
 	})
 	return err
+}
+
+// meshDeliverOperationID is the id of the operation that records messageID's handover to recipient, one per pair.
+func meshDeliverOperationID(messageID agentcomm.MessageID, recipient agentcomm.ParticipantID) string {
+	return "mesh-deliver-" + deriveMeshID("mesh-deliver", string(messageID)+"|"+string(recipient))
 }
 
 // SideAgentMeshResponseFailed durably releases a source whose terminal response

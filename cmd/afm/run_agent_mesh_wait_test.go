@@ -29,6 +29,13 @@ type liveStageAgent struct {
 
 func startLiveStageAgent(t *testing.T) liveStageAgent {
 	t.Helper()
+	return startLiveStageAgentWith(t, func(*orchestrator.Options) {})
+}
+
+// startLiveStageAgentWith is startLiveStageAgent with mutate applied to the orchestrator options, which already
+// hold the run's store, before the orchestrator is built.
+func startLiveStageAgentWith(t *testing.T, mutate func(*orchestrator.Options)) liveStageAgent {
+	t.Helper()
 	dir := t.TempDir()
 	tokenPath := filepath.Join(dir, "token")
 	releasePath := filepath.Join(dir, "release")
@@ -54,10 +61,12 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stage tex
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	orch := orchestrator.New(orchestrator.Options{
+	opts := orchestrator.Options{
 		RunDir: runDir, RunID: "wait-token-test", Store: store, Config: config.Default(), Prompts: orchestrator.DefaultPrompts(),
 		Stages: []flow.Stage{{ID: "impl", Name: "impl", Agents: []flow.AgentType{flow.AgentAuto}, Command: script}},
-	})
+	}
+	mutate(&opts)
+	orch := orchestrator.New(opts)
 	httpServer := httptest.NewServer(server.New(server.Config{AgentMesh: agentMeshActions{orch}, Mesh: meshActions{orch}}).Handler())
 	t.Cleanup(httpServer.Close)
 	orch.SetDashboardURL(httpServer.URL) // without a mesh endpoint the agent gets no descriptor
