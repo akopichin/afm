@@ -54,3 +54,8 @@ scripts/test_dev_pipeline.py
 /go.work.sum
 /vendor/
 /module-cache/
+
+# Local release and documentation outputs.
+/dist/
+/binaries/
+/site/
