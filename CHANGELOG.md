@@ -11,6 +11,7 @@ older ones further down. Dates follow the commits that shipped each change.
 - Preserve the 2.x maintenance line with independent build, CI, Homebrew, and Docker channels.
 - Separate public contracts/UI/SDK checks from trusted full-product builds and record exact dependency revisions in release manifests.
 - Dashboard checkboxes (composer options, file picker, dialogs) follow the active theme in dark and light mode instead of the browser's native look.
+- Pin AFM Engine v1.0.0 and keep its internal tests in Engine CI while validating the AFM integration in product builds.
 
 ### Fix:
 

@@ -51,6 +51,55 @@ update its pin explicitly, and repeat AFM tests. Verify the final build with
 contracts before engine versions that require them, and engine before AFM builds
 that require that revision. An engine release does not release AFM automatically.
 
+AFM 3.x pins engine `v1.0.0`. Engine tags and AFM product tags are independent;
+upgrading the engine requires an explicit `go.mod`/`go.sum` change and AFM
+integration checks. The engine's own CI validates its internal suite before
+that version is adopted by a consumer.
+
+## Development in Docker
+
+Official AFM images can download private Go modules using mounted credentials
+and Go settings. These settings survive image upgrades without rebuilding a
+custom development image.
+
+On the host, add a GitHub entry to `~/.netrc` using a fine-grained personal access
+token with **Contents: read** access to `afm-engine`, and restrict the file to its
+owner with `chmod 600 ~/.netrc`. The Actions token used to dispatch CI builds
+does not grant source access.
+
+Create `~/.config/go/env` on the host with:
+
+```text
+GOPRIVATE=github.com/akopichin/afm-engine
+```
+
+Keep any other private module patterns in that value, separated by commas. On
+macOS, native Go normally uses a different settings path (`go env GOENV` shows
+it); this file supplies the Linux container's settings.
+
+Add both paths to the existing project `.afm/config.yaml` mount list:
+
+```yaml
+docker:
+  extra_mounts:
+    - ~/.netrc
+    - ~/.config/go
+```
+
+Preserve existing mounts: the project list replaces the global list. AFM mounts
+these paths read-only under `/home/afm`, where Git and Go read them automatically.
+Edit Go settings on the host; `go env -w` cannot update the read-only mounted file
+inside the container. Neither credentials nor private sources belong in the image.
+
+The mounts take effect when a new container starts. In a development pipeline,
+check access before implementation begins:
+
+```bash
+GIT_TERMINAL_PROMPT=0 timeout 60s go mod download
+```
+
+If this fails, fix access before running the usual build, test, and lint checks.
+
 ## Moving from 2.x
 
 The `v2.x` branch preserves the independent public build and its existing

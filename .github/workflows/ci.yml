@@ -40,3 +40,21 @@ jobs:
         run: |
           python3 scripts/check-public-tree.py
           python3 scripts/sync-schemas.py --check
+
+  request-engine-build:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'akopichin/afm'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request private validation without publication
+        env:
+          GH_TOKEN: ${{ secrets.ENGINE_BUILD_DISPATCH_TOKEN }}
+          AFM_REVISION: ${{ github.sha }}
+          ENGINE_BUILD_REF: ${{ vars.ENGINE_BUILD_REF }}
+        run: |
+          : "${GH_TOKEN:?Set the ENGINE_BUILD_DISPATCH_TOKEN repository secret}"
+          : "${ENGINE_BUILD_REF:?Set the ENGINE_BUILD_REF repository variable}"
+          gh api --method POST repos/akopichin/afm-engine/actions/workflows/afm-release.yml/dispatches \
+            -f "ref=$ENGINE_BUILD_REF" \
+            -f "inputs[afm_revision]=$AFM_REVISION" \
+            -f 'inputs[publish]=false'
