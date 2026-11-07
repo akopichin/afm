@@ -443,6 +443,9 @@ itself and is independent of the theme choice. A fully custom skin can be suppli
 via the top-level `skin_dir:` config option (a directory containing `index.css`),
 which overrides the built-in theme.
 
+Checkboxes (composer options, file picker, dialogs) take their colours from the
+active theme and mode instead of the browser's native look.
+
 A skin can also hide raw commands from the [executor-name](#executor-names)
 tooltips by setting `--afm-raw-command-tooltip: none` on `:root`. The tooltips then
 keep the full name (and a Verify step's number) without the command. To keep a

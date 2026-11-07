@@ -397,12 +397,13 @@
   color: var(--text-secondary);
 }
 /* Нативный checkbox прячем визуально, но оставляем доступным для клика/скринридера. */
-.switch input {
+.switch:not(.feed-composer-mode-option) input {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
   margin: 0;
+  border: 0;
 }
 .switch .track {
   position: relative;
@@ -490,15 +491,6 @@
   font-size: 11px;
   cursor: pointer;
 }
-.feed-composer-mode-option input {
-  position: static;
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  opacity: 1;
-  accent-color: var(--accent-primary);
-}
-.feed-composer-mode-option input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .feed-composer--mesh .pause-banner {
   padding: 7px 9px;
   border: 1px solid rgba(var(--attention-rgb), 0.55);

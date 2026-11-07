@@ -10,6 +10,7 @@ older ones further down. Dates follow the commits that shipped each change.
 - Embed the private, independently versioned AFM Engine module while retaining one AFM executable and the dashboard/core SDK contracts.
 - Preserve the 2.x maintenance line with independent build, CI, Homebrew, and Docker channels.
 - Separate public contracts/UI/SDK checks from trusted full-product builds and record exact dependency revisions in release manifests.
+- Dashboard checkboxes (composer options, file picker, dialogs) follow the active theme in dark and light mode instead of the browser's native look.
 
 ### Fix:
 

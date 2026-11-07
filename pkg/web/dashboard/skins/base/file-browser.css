@@ -196,7 +196,6 @@
 }
 .file-tree-row input[type='checkbox'] {
   flex: 0 0 auto;
-  accent-color: var(--accent-primary);
   cursor: pointer;
 }
 .file-tree-toggle {

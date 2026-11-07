@@ -35,6 +35,8 @@ const CHECKS: Check[] = [
     ...['--attention', '--success', '--danger', '--accent-primary', '--c-pending', '--c-awaiting-user'].map((fg) => ({ fg, bg, min: 4.5 })),
     ...['--c-pending', ...FILLED_STATUSES].map((fg) => ({ fg, bg, min: 3 })),
   ]),
+  // Dialogs and the file picker sit on the overlay surface, where the checkbox border and checked fill must stay visible.
+  ...['--control-border', '--accent-primary'].map((fg) => ({ fg, bg: '--surface-overlay', min: 3 })),
   // Filled rail node: the stage number and the done check are drawn in the canvas colour on the status fill.
   ...FILLED_STATUSES.map((bg) => ({ fg: '--surface-canvas', bg, min: 4.5 })),
   // Primary buttons (Approve, Revise, Send) draw canvas-coloured text on the accent or success fill, and on its

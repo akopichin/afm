@@ -28,6 +28,42 @@ html, body {
 /* Form controls ignore the page font by default; mono is opted into per selector via --font-mono. */
 button, input, textarea, select { font: inherit; }
 
+/* One themed checkbox for the whole dashboard: components may change its layout, never its colours. */
+input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  background: var(--surface-canvas);
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) ease, border-color var(--motion-fast, 120ms) ease;
+}
+input[type="checkbox"]::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background-color: var(--surface-canvas);
+  clip-path: polygon(14% 44%, 0 59%, 40% 100%, 100% 20%, 86% 6%, 40% 70%);
+  visibility: hidden;
+}
+input[type="checkbox"]:checked::before { visibility: visible; }
+input[type="checkbox"]:hover { border-color: var(--accent-primary); }
+input[type="checkbox"]:checked {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+input[type="checkbox"]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Opacity rather than a token: --text-disabled equals --control-border, so an empty box would not look muted. */
+input[type="checkbox"]:disabled { opacity: 0.5; cursor: default; }
+/* Forced colours repaint the tick's background as Canvas, which would hide it on the box. */
+@media (forced-colors: active) {
+  input[type="checkbox"]::before { background-color: CanvasText; }
+}
+
 a { color: var(--success-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
