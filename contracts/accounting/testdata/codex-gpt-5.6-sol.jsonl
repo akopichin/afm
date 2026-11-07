@@ -1,0 +1,1 @@
+{"type": "result", "subtype": "success", "usage_contract_version": 1, "usage_schema": "openai", "channel": "codex", "model": "gpt-5.6-sol", "usage": {"input_tokens": 22005, "cached_input_tokens": 10752, "output_tokens": 8}}

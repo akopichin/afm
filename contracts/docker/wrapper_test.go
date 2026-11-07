@@ -1,0 +1,476 @@
+package docker
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/akopichin/afm/contracts/config"
+)
+
+// stubClaudeOnPATH кладёт fake-claude в temp-dir и prepend'ит его к PATH.
+// Возвращает абсолютный путь к fake-claude.
+func stubClaudeOnPATH(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho fake\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	return bin
+}
+
+func mustRead(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// cleanup удаляет temp-директорию врапперов, игнорируя ошибку (errcheck-friendly).
+func cleanup(dir string) {
+	_ = os.RemoveAll(dir)
+}
+
+func TestCreateWrappers_AgentTemplate(t *testing.T) {
+	realClaude := stubClaudeOnPATH(t)
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Command:      "glm51",
+		AuthTo:       "ANTHROPIC_AUTH_TOKEN",
+		BaseURL:      "http://127.0.0.1:39217",
+		Model:        "glm-5.1",
+		HasSysPrompt: true,
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers: %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "glm51"))
+	s := string(script)
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export ANTHROPIC_AUTH_TOKEN="$AFM_SECRET_GLM51"`,
+		"unset AFM_SECRET_GLM51",
+		`export ANTHROPIC_BASE_URL="http://127.0.0.1:39217"`,
+		`export ANTHROPIC_DEFAULT_HAIKU_MODEL="glm-5.1"`,
+		`export ANTHROPIC_DEFAULT_SONNET_MODEL="glm-5.1"`,
+		`export ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5.1"`,
+		`"$AFM_SYSPROMPT_GLM51"`, // sysprompt guard
+		"--append-system-prompt-file",
+		`*) set -- "$@" --output-format stream-json ;; esac`, // stream-json dedup guard
+		`*"--output-format stream-json"*|*"--output-format=stream-json"*) set -- "$@" --include-partial-messages ;; esac`, // partial only with stream-json (не ломает supervisor json-вызов)
+		"exec " + realClaude + ` "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("agent wrapper missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	// Регресс: supervisor-ный вызов (--output-format json) НЕ должен получать --include-partial-messages —
+	// claude требует под него stream-json. Скрипт не содержит безусловного добавления partial.
+	if strings.Contains(s, "\nset -- \"$@\" --include-partial-messages\n") {
+		t.Errorf("wrapper must not unconditionally add --include-partial-messages (breaks json calls)\n--- script ---\n%s", s)
+	}
+}
+
+func TestCreateWrappers_NoSysPromptOmitsBlock(t *testing.T) {
+	stubClaudeOnPATH(t)
+	dir, err := CreateWrappers([]WrapperSpec{{Command: "glm52", AuthTo: "ANTHROPIC_AUTH_TOKEN", BaseURL: "https://x", Model: "glm-5.2"}})
+	if err != nil {
+		t.Fatalf("CreateWrappers: %v", err)
+	}
+	defer cleanup(dir)
+	s := string(mustRead(t, filepath.Join(dir, "glm52")))
+	if strings.Contains(s, "AFM_SYSPROMPT") {
+		t.Errorf("sysprompt block should be absent without HasSysPrompt:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_ClaudeShimTemplate(t *testing.T) {
+	realClaude := stubClaudeOnPATH(t)
+	dir, err := CreateWrappers([]WrapperSpec{{Command: "claude", BaseURL: "http://127.0.0.1:9999"}})
+	if err != nil {
+		t.Fatalf("CreateWrappers: %v", err)
+	}
+	defer cleanup(dir)
+	s := string(mustRead(t, filepath.Join(dir, "claude")))
+	if !strings.Contains(s, `export ANTHROPIC_BASE_URL="http://127.0.0.1:9999"`) {
+		t.Errorf("claude-shim should set BASE_URL:\n%s", s)
+	}
+	if strings.Contains(s, "ANTHROPIC_DEFAULT") || strings.Contains(s, "AFM_SECRET") {
+		t.Errorf("claude-shim must not emit agent-only lines:\n%s", s)
+	}
+	if !strings.Contains(s, "exec "+realClaude+` "$@"`) {
+		t.Errorf("claude-shim should exec real claude:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_NoClaudeHardError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // claude нет в PATH
+	_, err := CreateWrappers([]WrapperSpec{{Command: "glm51", Model: "m"}})
+	if err == nil {
+		t.Fatal("expected error when claude not in PATH")
+	}
+}
+
+func TestCreateWrappers_EmptySpecsNoop(t *testing.T) {
+	dir, err := CreateWrappers(nil)
+	if err != nil || dir != "" {
+		t.Errorf("empty specs: got (%q,%v), want (\"\",nil)", dir, err)
+	}
+}
+
+func TestCreateWrappers_OpenAITemplate(t *testing.T) {
+	// openai-тип не требует claude в PATH
+	t.Setenv("PATH", t.TempDir()) // claude нет в PATH
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeOpenAI,
+		Command: "cursor",
+		AuthTo:  "OPENAI_API_KEY",
+		BaseURL: "https://api2.cursor.sh/v1",
+		Model:   "claude-sonnet-4-5",
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (openai): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "cursor"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export OPENAI_API_KEY="$AFM_SECRET_CURSOR"`,
+		"unset AFM_SECRET_CURSOR",
+		`export OPENAI_BASE_URL="https://api2.cursor.sh/v1"`,
+		`export OPENAI_MODEL="claude-sonnet-4-5"`,
+		`exec /usr/local/bin/openai-as-claude "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("openai wrapper missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	// не должно быть claude-специфичных строк
+	if strings.Contains(s, "ANTHROPIC_DEFAULT") || strings.Contains(s, "ANTHROPIC_BASE_URL") {
+		t.Errorf("openai wrapper must not contain ANTHROPIC_ vars:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_OpenAINoClaudeRequired(t *testing.T) {
+	// только openai specs — claude не нужен в PATH
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir) // нет claude, нет docker, ничего
+
+	_, err := CreateWrappers([]WrapperSpec{
+		{Type: config.RecipeTypeOpenAI, Command: "cursor", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
+	})
+	if err != nil {
+		t.Errorf("openai-only wrappers must not fail when claude absent: %v", err)
+	}
+}
+
+func TestCreateWrappers_OpenAIAgentTemplate(t *testing.T) {
+	// openai-agent-тип не требует claude в PATH
+	t.Setenv("PATH", t.TempDir())
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:     config.RecipeTypeOpenAIAgent,
+		Command:  "idealab",
+		AuthTo:   "OPENAI_API_KEY",
+		BaseURL:  "https://idealab.alibaba-inc.com/api/openai/v1",
+		Model:    "qwen3-max",
+		MaxTurns: 25,
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (openai-agent): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "idealab"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export OPENAI_API_KEY="$AFM_SECRET_IDEALAB"`,
+		"unset AFM_SECRET_IDEALAB",
+		`export OPENAI_BASE_URL="https://idealab.alibaba-inc.com/api/openai/v1"`,
+		`export OPENAI_MODEL="qwen3-max"`,
+		`export OPENAI_AGENT_MAX_TURNS="25"`,
+		`exec /usr/local/bin/openai-agent-as-claude "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("openai-agent wrapper missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	if strings.Contains(s, "openai-as-claude") && !strings.Contains(s, "openai-agent-as-claude") {
+		t.Errorf("openai-agent wrapper must exec openai-agent-as-claude, not openai-as-claude:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_OpenAIAgentTemplate_NoMaxTurns(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeOpenAIAgent,
+		Command: "idealab",
+		AuthTo:  "OPENAI_API_KEY",
+		BaseURL: "https://idealab.alibaba-inc.com/api/openai/v1",
+		Model:   "qwen3-max",
+		// MaxTurns не задан (0) — переменная не экспортируется, скрипт берёт свой дефолт.
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (openai-agent): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "idealab"))
+	s := string(script)
+	if strings.Contains(s, "OPENAI_AGENT_MAX_TURNS") {
+		t.Errorf("wrapper must not export OPENAI_AGENT_MAX_TURNS when MaxTurns is 0:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_OpenAIAgentNoClaudeRequired(t *testing.T) {
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+
+	_, err := CreateWrappers([]WrapperSpec{
+		{Type: config.RecipeTypeOpenAIAgent, Command: "idealab", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
+	})
+	if err != nil {
+		t.Errorf("openai-agent-only wrappers must not fail when claude absent: %v", err)
+	}
+}
+
+func TestCreateWrappers_MixedTypes_RequiresClaude(t *testing.T) {
+	// смесь openai + claude без claude в PATH → ошибка
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+
+	_, err := CreateWrappers([]WrapperSpec{
+		{Type: config.RecipeTypeOpenAI, Command: "cursor", Model: "m", BaseURL: "http://x", AuthTo: "OPENAI_API_KEY"},
+		{Command: "glm51", Model: "glm-5.1", AuthTo: "ANTHROPIC_AUTH_TOKEN"}, // claude-тип
+	})
+	if err == nil {
+		t.Error("mixed openai+claude without claude in PATH: expected error")
+	}
+}
+
+func TestCreateWrappers_CursorTemplate(t *testing.T) {
+	// cursor-тип не требует claude в PATH
+	t.Setenv("PATH", t.TempDir()) // claude нет в PATH
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeCursor,
+		Command: "cursor",
+		AuthTo:  "CURSOR_API_KEY",
+		BaseURL: "https://api.cursor.com/v1",
+		Model:   "auto",
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (cursor): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "cursor"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export CURSOR_API_KEY="$AFM_SECRET_CURSOR"`,
+		"unset AFM_SECRET_CURSOR",
+		`export CURSOR_MODEL="auto"`,
+		"exec /usr/local/bin/cursor-agent-as-claude \"$@\"",
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("cursor wrapper missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	// не должно быть claude/openai-специфичных строк
+	// url из старого рецепта Cloud Agents API принимается и игнорируется.
+	for _, bad := range []string{"ANTHROPIC_DEFAULT", "ANTHROPIC_BASE_URL", "OPENAI_", "openai-as-claude", "CURSOR_BASE_URL", "api.cursor.com", "cursor-as-claude"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("cursor wrapper must not contain %q:\n%s", bad, s)
+		}
+	}
+}
+
+// Без модели в рецепте адаптер сам берёт auto: враппер не выставляет CURSOR_MODEL.
+func TestCreateWrappers_CursorWithoutModelLeavesDefaultToAdapter(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	s := wrapperScript(t, WrapperSpec{Type: config.RecipeTypeCursor, Command: "cursor", AuthTo: "CURSOR_API_KEY"})
+	if strings.Contains(s, "CURSOR_MODEL") {
+		t.Errorf("wrapper without a recipe model must not export CURSOR_MODEL:\n%s", s)
+	}
+}
+
+func TestCreateWrappers_CursorNoClaudeRequired(t *testing.T) {
+	// только cursor specs — claude не нужен в PATH
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir) // нет claude, нет docker, ничего
+
+	_, err := CreateWrappers([]WrapperSpec{
+		{Type: config.RecipeTypeCursor, Command: "cursor", Model: "auto", BaseURL: "http://x", AuthTo: "CURSOR_API_KEY"},
+	})
+	if err != nil {
+		t.Errorf("cursor-only wrappers must not fail when claude absent: %v", err)
+	}
+}
+
+// stubCodexOnPATH кладёт fake-codex в temp-dir и prepend'ит его к PATH.
+// Возвращает абсолютный путь к fake-codex.
+func stubCodexOnPATH(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho fake-codex\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	return bin
+}
+
+func TestCreateWrappers_CodexTemplate(t *testing.T) {
+	realCodex := stubCodexOnPATH(t)
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeCodex,
+		Command: "codex",
+		Model:   "gpt-5.1-codex",
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (codex): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "codex"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export CODEX_BIN="` + realCodex + `"`,
+		`export CODEX_MODEL="gpt-5.1-codex"`,
+		`exec /usr/local/bin/codex-as-claude "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("codex wrapper missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	for _, bad := range []string{"ANTHROPIC_", "OPENAI_", "CURSOR_", "AFM_SECRET_", "unset AFM_SECRET"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("codex wrapper must not contain %q:\n%s", bad, s)
+		}
+	}
+}
+
+func TestCreateWrappers_CodexWithAuth(t *testing.T) {
+	realCodex := stubCodexOnPATH(t)
+
+	dir, err := CreateWrappers([]WrapperSpec{{
+		Type:    config.RecipeTypeCodex,
+		Command: "codex",
+		AuthTo:  "OPENAI_API_KEY",
+		Model:   "gpt-5.1-codex",
+	}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (codex with auth): %v", err)
+	}
+	defer cleanup(dir)
+
+	script, _ := os.ReadFile(filepath.Join(dir, "codex"))
+	s := string(script)
+
+	wantSubstrings := []string{
+		"#!/bin/sh",
+		`export OPENAI_API_KEY="$AFM_SECRET_CODEX"`,
+		"unset AFM_SECRET_CODEX",
+		`export CODEX_BIN="` + realCodex + `"`,
+		`export CODEX_MODEL="gpt-5.1-codex"`,
+		`exec /usr/local/bin/codex-as-claude "$@"`,
+	}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(s, w) {
+			t.Errorf("codex wrapper with auth missing %q\n--- script ---\n%s", w, s)
+		}
+	}
+	for _, bad := range []string{"ANTHROPIC_", "CURSOR_"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("codex wrapper must not contain %q:\n%s", bad, s)
+		}
+	}
+}
+
+func TestCreateWrappers_CodexModelOptional(t *testing.T) {
+	stubCodexOnPATH(t)
+	for _, model := range []string{"", "default"} {
+		dir, err := CreateWrappers([]WrapperSpec{{Type: config.RecipeTypeCodex, Command: "codex", Model: model}})
+		if err != nil {
+			t.Fatalf("CreateWrappers (codex, model=%q): %v", model, err)
+		}
+		s := string(mustRead(t, filepath.Join(dir, "codex")))
+		cleanup(dir)
+		if strings.Contains(s, "CODEX_MODEL") {
+			t.Errorf("model=%q should omit CODEX_MODEL:\n%s", model, s)
+		}
+	}
+}
+
+func TestCreateWrappers_CodexNoClaudeRequired(t *testing.T) {
+	// codex-тип не требует claude в PATH
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+	if err := os.WriteFile(filepath.Join(emptyDir, "codex"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := CreateWrappers([]WrapperSpec{
+		{Type: config.RecipeTypeCodex, Command: "codex", Model: "m"},
+	})
+	if err != nil {
+		t.Errorf("codex-only wrappers must not fail when claude absent: %v", err)
+	}
+}
+
+func TestCreateWrappers_CodexNoBinaryHardError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // ни claude, ни codex
+	_, err := CreateWrappers([]WrapperSpec{{Type: config.RecipeTypeCodex, Command: "codex"}})
+	if err == nil {
+		t.Fatal("expected error when codex not in PATH")
+	}
+}
+
+func TestCreateWrappers_BareFlag(t *testing.T) {
+	stubClaudeOnPATH(t)
+
+	// Bare=true → claude-враппер prepends --bare.
+	dir, err := CreateWrappers([]WrapperSpec{{Command: "glm52", AuthTo: "ANTHROPIC_AUTH_TOKEN", BaseURL: "https://x", Model: "glm-5.2", Bare: true}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (bare): %v", err)
+	}
+	defer cleanup(dir)
+	s := string(mustRead(t, filepath.Join(dir, "glm52")))
+	if !strings.Contains(s, `set -- "$@" --bare`) {
+		t.Errorf("bare wrapper should prepend --bare:\n%s", s)
+	}
+
+	// Bare=false → --bare в скрипте нет.
+	dir2, err := CreateWrappers([]WrapperSpec{{Command: "glm53", AuthTo: "ANTHROPIC_AUTH_TOKEN", BaseURL: "https://x", Model: "glm-5.2", Bare: false}})
+	if err != nil {
+		t.Fatalf("CreateWrappers (non-bare): %v", err)
+	}
+	defer cleanup(dir2)
+	s2 := string(mustRead(t, filepath.Join(dir2, "glm53")))
+	if strings.Contains(s2, "--bare") {
+		t.Errorf("non-bare wrapper must not contain --bare:\n%s", s2)
+	}
+}

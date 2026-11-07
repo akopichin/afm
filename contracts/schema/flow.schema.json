@@ -1,0 +1,610 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json",
+  "title": "afm flow",
+  "description": "Schema for an afm flow.yaml — a multi-stage AI task description. See https://akopichin.github.io/afm/flow-reference/",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "stages"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Flow name."
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of the flow."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Shared instruction added to the system prompt of every stage and phase."
+    },
+    "max_parallel": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum number of stages running in parallel (0 = unlimited)."
+    },
+    "root_dir": {
+      "type": "string",
+      "description": "Project root = agents' working directory. A relative path is resolved from the afm root (--dir); empty inherits the afm process CWD."
+    },
+    "memory": {
+      "$ref": "#/definitions/memory"
+    },
+    "skills_dir": { "$ref": "#/definitions/skillsDir" },
+    "hooks": {
+      "type": "array",
+      "description": "Lifecycle hooks: observer commands receiving event JSON on stdin (flow layer, gets all stages' events).",
+      "items": { "$ref": "#/definitions/lifecycleHook" }
+    },
+    "side_agent": {
+      "type": "boolean",
+      "description": "Enable the dashboard side-agent for this flow. Highest precedence: overrides env AFM_SIDEAGENT and config side_agent.enabled. Omitted = defer to env/config (default ON)."
+    },
+    "worktrees": {
+      "type": "boolean",
+      "description": "Enable per-flow git worktrees for this flow. Highest precedence: overrides env AFM_WORKTREES and config worktrees.enabled. Omitted = defer to env/config (default OFF)."
+    },
+    "collaboration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-flow override of the helper-agent delegation depth and the dashboard collaboration mode. There is deliberately no per-flow \"enabled\" — turn the feature on/off via config.yaml's collaboration.enabled or AFM_COLLABORATION.",
+      "properties": {
+        "max_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum helper delegation depth for this flow. Explicit 0 means no helpers at all. Highest-precedence layer, but cannot re-enable a feature disabled by config/env."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["team", "assistants"],
+          "description": "Collaboration mode for this flow. team (default) shows Team, Board and People and keeps the Board available; assistants hides them, keeps the helpers under stages and also turns the Board off in the API, in afm agent board/task/wait --condition board_key and in the built-in agent instructions. Highest-precedence layer; neither value enables or disables collaboration itself."
+        }
+      }
+    },
+    "team": {
+      "type": "array",
+      "description": "Run agents created before the stages start, in this order — the same agents the dashboard's Add run agent creates. Needs collaboration: with it disabled, afm warns and runs without them. A resumed run keeps the agents it already created.",
+      "items": { "$ref": "#/definitions/teamMember" }
+    },
+    "repeat": {
+      "description": "Restart the flow in a new run after every successful pass. true repeats with the defaults (no cycle limit, keep the 2 most recent successful runs of this afm run invocation); false or a missing key runs the flow once; an object tunes the loop.",
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_cycles": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of successful passes after which the loop stops. 0 or omitted = no limit."
+            },
+            "keep_runs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many successful runs created by this afm run invocation stay on disk (default 2); older runs of the flow are never touched. Explicit 0 keeps them all."
+            }
+          }
+        }
+      ]
+    },
+    "stages": {
+      "type": "array",
+      "description": "The stages of the flow.",
+      "items": { "$ref": "#/definitions/stage" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stages": {
+            "contains": { "required": ["reflect"] }
+          }
+        }
+      },
+      "then": {
+        "required": ["memory"],
+        "properties": {
+          "memory": {
+            "required": ["path"],
+            "properties": { "path": { "minLength": 1 } }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "skillNames": {
+      "description": "Skills the agent must load before the task: one name or a list. Exact repeats are dropped, order is kept, names (including namespaced ones like superpowers:test-driven-development) are used as written. An empty list means none.",
+      "oneOf": [
+        { "$ref": "#/definitions/skillName" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/skillName" }
+        }
+      ]
+    },
+    "skillName": {
+      "type": "string",
+      "description": "A skill name: not blank, no control characters.",
+      "allOf": [
+        { "pattern": "\\S" },
+        { "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$" }
+      ]
+    },
+    "skillsDir": {
+      "type": "string",
+      "description": "One extra local skill library: a directory of <name>/SKILL.md folders. The nearest level that sets it wins (stage, stage assistant or team member, then flow, then config skills_dir); libraries are never merged. A relative path is resolved from the effective project root (worktree, else root_dir from the afm root). Empty values, a leading ~ and control characters are rejected.",
+      "allOf": [
+        { "pattern": "\\S" },
+        { "pattern": "^[^~]" },
+        { "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$" }
+      ]
+    },
+    "duration": {
+      "type": "string",
+      "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+    },
+    "verifyRunStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run"],
+      "description": "A verify step that runs a shell command.",
+      "properties": {
+        "name": { "type": "string", "pattern": "\\S", "description": "Optional label shown in the dashboard: what this step checks, not who runs it. Must contain a non-space character." },
+        "run": { "type": "string", "minLength": 1, "description": "Shell command for this verify step." },
+        "timeout": { "$ref": "#/definitions/duration", "description": "Optional per-step timeout." }
+      }
+    },
+    "verifyCommandStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "description": "A verify step delegated to an agent (e.g. codex).",
+      "properties": {
+        "name": { "type": "string", "pattern": "\\S", "description": "Optional label shown in the dashboard: what this step checks, not who runs it. Must contain a non-space character." },
+        "command": { "type": "string", "minLength": 1, "description": "Agent alias that performs this verify step (e.g. codex)." },
+        "prompt": { "type": "string", "description": "Extra criteria for the verify agent." },
+        "timeout": { "$ref": "#/definitions/duration", "description": "Optional per-step timeout." }
+      }
+    },
+    "verifyContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps"],
+      "description": "Container form: an ordered list of verify steps plus an optional per-stage max_failures and review_patience budget.",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "description": "Several verify steps run in order.",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/verifyRunStep" },
+              { "$ref": "#/definitions/verifyCommandStep" }
+            ]
+          }
+        },
+        "max_failures": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many verify rejections (needs_changes) are allowed before the stage fails: N = number of retry-corrections. Overrides the global verify.max_failures; 0 = fail on the first rejection."
+        },
+        "review_patience": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many CONSECUTIVE verify rejections that left the working tree unchanged (the author stopped editing in response to review) are tolerated before the stage is accepted as complete (reviewer/author stalemate). Overrides the global verify.review_patience; 0 = disabled (today's behavior). For this to engage, max_failures must be >= review_patience — otherwise the stage fails on the failure budget before the stalemate count is reached and the setting is a silent no-op."
+        },
+        "fresh_correction": {
+          "type": "boolean",
+          "description": "Give the author a FRESH session (no --resume) on a verify correction for THIS stage. Overrides the global verify.fresh_correction; default true."
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Agent-memory configuration. A non-empty `path` enables the feature.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Directory (relative to root_dir) where memory files live. A non-empty value enables agent memory."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["r", "w", "rw"],
+          "description": "Lifecycle of the shared memory.md: r (read-only), w (write-only), rw (both). Default rw."
+        },
+        "memory_use": {
+          "type": "boolean",
+          "description": "Master switch for READING memory into stage prompts. Default false."
+        },
+        "max_rules": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of patterns kept per file. Default 25."
+        },
+        "commit": {
+          "type": "boolean",
+          "description": "Git-commit the memory directory at the end of the run (never pushes). Default false."
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "description": "A single stage. Must have at least one of: a planning agent, `plan`, `interactive: true`, `agents: [auto]`, or `script`.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier restricted to [A-Za-z0-9._-] (it is also used in filesystem paths, the managed-browser session URL, and a Chrome profile dir name). Not '.' or '..'.",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "not": { "enum": [".", ".."] }
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name for logs and the dashboard."
+        },
+        "description": {
+          "type": "string",
+          "description": "Task description for the AI (background/context)."
+        },
+        "agents": {
+          "type": "array",
+          "description": "Agent phases: any combination of planning/implementation/review (plus custom command names), OR exactly [auto] for the autonomous track.",
+          "oneOf": [
+            {
+              "minItems": 1,
+              "maxItems": 1,
+              "items": { "const": "auto" }
+            },
+            {
+              "not": { "contains": { "const": "auto" } }
+            }
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["planning", "implementation", "review", "auto"]
+              },
+              {
+                "type": "string",
+                "description": "A custom agent command name (counts as the implementation phase)."
+              }
+            ]
+          }
+        },
+        "skills": { "$ref": "#/definitions/skillNames" },
+        "skills_dir": { "$ref": "#/definitions/skillsDir" },
+        "depends_on": {
+          "type": "array",
+          "description": "IDs of stages that must complete first.",
+          "items": { "type": "string" }
+        },
+        "eager_planning": {
+          "type": "boolean",
+          "description": "Start planning immediately when the flow runs, without waiting for depends_on."
+        },
+        "plan": {
+          "type": "string",
+          "description": "Path to a ready-made plan file (skips the planning agent)."
+        },
+        "command": {
+          "type": "string",
+          "description": "AI command for this stage (overrides client.command)."
+        },
+        "max_parallel": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Limit on parallel stages using this command."
+        },
+        "artifacts": {
+          "type": "array",
+          "description": "Files this stage produces for other stages.",
+          "items": { "$ref": "#/definitions/artifact" }
+        },
+        "inputs": {
+          "type": "array",
+          "description": "Artifacts consumed from dependency stages.",
+          "items": { "$ref": "#/definitions/input" }
+        },
+        "interactive": {
+          "type": "boolean",
+          "description": "Enable the file-based dialog protocol with the user via the dashboard."
+        },
+        "verify": {
+          "description": "Stage-completion check(s) run after .done: a shell command (legacy scalar), one step object ({run: ...} or {command: ...}), an ordered list of step objects, or a container object ({steps: [...], max_failures: N}) that also sets a per-stage verify failure budget. A non-zero shell exit means the stage is not actually complete.",
+          "oneOf": [
+            { "type": "string", "description": "Shell command (legacy form)." },
+            { "$ref": "#/definitions/verifyRunStep" },
+            { "$ref": "#/definitions/verifyCommandStep" },
+            {
+              "type": "array",
+              "description": "Several verify steps run in order.",
+              "minItems": 1,
+              "items": {
+                "oneOf": [
+                  { "$ref": "#/definitions/verifyRunStep" },
+                  { "$ref": "#/definitions/verifyCommandStep" }
+                ]
+              }
+            },
+            { "$ref": "#/definitions/verifyContainer" }
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Explicit instruction delivered to the agent after the stage context block."
+        },
+        "script": {
+          "type": "string",
+          "description": "Run this shell script instead of an AI agent. Mutually exclusive with agents/command/interactive/plan/verify."
+        },
+        "script_timeout": { "$ref": "#/definitions/duration", "description": "Hard timeout for `script` (default 5m)." },
+        "script_before": {
+          "type": "string",
+          "description": "Shell script run immediately before the stage's own content."
+        },
+        "script_before_timeout": { "$ref": "#/definitions/duration", "description": "Hard timeout for `script_before` (default 5m)." },
+        "script_after": {
+          "type": "string",
+          "description": "Shell script run right after the stage completes."
+        },
+        "script_after_timeout": { "$ref": "#/definitions/duration", "description": "Hard timeout for `script_after` (default 5m)." },
+        "auto_approve": {
+          "type": "boolean",
+          "description": "Approve this stage's plan automatically the instant it's ready (for CI)."
+        },
+        "auto_run": {
+          "type": "boolean",
+          "description": "false pauses the stage at its first activation until you click Continue. Default true."
+        },
+        "buttons": {
+          "type": "object",
+          "description": "Predefined stage-header buttons: label -> canned prompt delivered to the live agent.",
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "reflect": { "$ref": "#/definitions/reflect" },
+        "memory_use": {
+          "type": "boolean",
+          "description": "Override the flow-level memory.memory_use for this stage (controls reading only)."
+        },
+        "hooks": {
+          "type": "array",
+          "description": "Lifecycle hooks scoped to this stage. Flow-level events are not allowed here.",
+          "items": { "$ref": "#/definitions/lifecycleHook" }
+        },
+        "browser": {
+          "type": "boolean",
+          "description": "Explicit false opts this stage out of the managed Chrome DevTools (afm_chrome) capability. Omitted inherits the global browser policy."
+        },
+        "assistants": {
+          "description": "Helper profiles (collaboration.profiles) auto-attached at the start of this stage's execution phase, the same way a manual dashboard Attach click would: a profile name, an object with profile plus optional title/instruction/mode/trigger/skills/skills_dir, or a list mixing both forms.",
+          "oneOf": [
+            { "type": "string", "minLength": 1, "description": "Profile name." },
+            { "$ref": "#/definitions/stageAssistant" },
+            {
+              "type": "array",
+              "description": "Several declared assistants, attached in order.",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "oneOf": [
+                  { "type": "string", "minLength": 1, "description": "Profile name." },
+                  { "$ref": "#/definitions/stageAssistant" }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": ["agents"],
+              "properties": { "agents": { "contains": { "const": "planning" } } }
+            },
+            {
+              "required": ["agents"],
+              "properties": { "agents": { "contains": { "const": "auto" } } }
+            },
+            {
+              "required": ["plan"],
+              "properties": { "plan": { "minLength": 1 } }
+            },
+            {
+              "required": ["interactive"],
+              "properties": { "interactive": { "const": true } }
+            },
+            {
+              "required": ["script"],
+              "properties": { "script": { "minLength": 1 } }
+            }
+          ]
+        },
+        {
+          "if": {
+            "required": ["script"],
+            "properties": { "script": { "minLength": 1 } }
+          },
+          "then": {
+            "properties": {
+              "agents": { "maxItems": 0 },
+              "command": { "maxLength": 0 },
+              "interactive": { "const": false },
+              "plan": { "maxLength": 0 },
+              "verify": { "not": {} },
+              "buttons": { "maxProperties": 0 },
+              "assistants": { "not": {} }
+            }
+          }
+        }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path"],
+      "properties": {
+        "name": { "type": "string", "description": "Artifact name (referenced by inputs as <stage>.<name>)." },
+        "path": { "type": "string", "description": "File path; './' is relative to the stage directory in the run." },
+        "description": { "type": "string", "description": "Human-readable description." },
+        "inline": {
+          "type": "boolean",
+          "description": "true (default) inlines the file contents into the prompt; false passes the path instead."
+        }
+      }
+    },
+    "input": {
+      "description": "An artifact consumed from a dependency: either the string \"stage.artifact\" or an object.",
+      "anyOf": [
+        {
+          "type": "string",
+          "description": "\"<stage>.<artifact>\" reference."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "ref": { "type": "string", "description": "\"<stage>.<artifact>\" reference." },
+            "optional": { "type": "boolean", "description": "If true, the stage runs even if the file is missing." }
+          }
+        }
+      ]
+    },
+    "reflect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file"],
+      "description": "Opts the stage into agent memory. Requires the flow-level memory: block.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The stage's own memory file, relative to memory.path. Absolute paths, '..' segments, and the reserved project file memory.md are not allowed.",
+          "allOf": [
+            { "not": { "pattern": "^(?:[/\\\\]|[A-Za-z]:[/\\\\])" } },
+            { "not": { "pattern": "(^|[/\\\\])\\.\\.([/\\\\]|$)" } },
+            { "not": { "pattern": "^(\\./)*memory\\.md$" } }
+          ]
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["r", "w", "rw"],
+          "description": "Access mode for this stage's file: r/w/rw. Default rw."
+        }
+      }
+    },
+    "teamMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "profile", "title"],
+      "description": "One run agent of the flow's team.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Declaration key, unique in the team, restricted to [A-Za-z0-9._-]. Identifies the agent across resumes; it is not the agent's @name.",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "not": { "enum": [".", ".."] }
+        },
+        "profile": { "type": "string", "minLength": 1, "description": "Assistant profile id (a key under collaboration.profiles)." },
+        "title": { "type": "string", "minLength": 1, "description": "Display name; the agent's @name is made from it (a taken name gets a -2, -3 suffix)." },
+        "instruction": { "type": "string", "description": "Instruction given to the agent, as in Add run agent." },
+        "skills": { "$ref": "#/definitions/skillNames" },
+        "skills_dir": { "$ref": "#/definitions/skillsDir" }
+      }
+    },
+    "stageAssistant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "description": "One declared assistant, object form: a profile reference plus optional overrides.",
+      "properties": {
+        "profile": { "type": "string", "minLength": 1, "description": "Assistant profile id (a key under collaboration.profiles)." },
+        "title": { "type": "string", "description": "Short label for this helper task, shown in the dashboard." },
+        "instruction": { "type": "string", "description": "Instruction given to the helper agent." },
+        "mode": {
+          "type": "string",
+          "enum": ["", "advisory", "required"],
+          "description": "advisory (default, same as omitting this key or an explicit empty string): the task does not block stage completion. required: the stage cannot complete until it reaches pass."
+        },
+        "trigger": {
+          "type": "string",
+          "enum": ["", "one_shot", "checkpoints", "on_completion", "on_message"],
+          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion. on_message: waits for messages addressed to it and answers each in its own turn."
+        },
+        "skills": { "$ref": "#/definitions/skillNames" },
+        "skills_dir": { "$ref": "#/definitions/skillsDir" }
+      }
+    },
+    "lifecycleHook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "events", "command"],
+      "description": "A lifecycle hook: an observer command that receives the event JSON payload on stdin. Its exit status never affects the flow.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique hook id within its layer; also the hook log file name (must be a safe path component)."
+        },
+        "events": {
+          "$ref": "#/definitions/lifecycleEventSelector"
+        },
+        "skip_events": {
+          "type": "array",
+          "description": "Event names excluded from `events: all`.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The command line, run via `sh -c` with the event JSON payload on stdin."
+        },
+        "timeout": {
+          "$ref": "#/definitions/duration",
+          "description": "Per-invocation timeout. Default 30s (DefaultHookTimeout)."
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Extra retry attempts after a non-zero exit. Default 0 (single attempt)."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Hook process env: target var -> env:NAME | file:PATH source reference"
+        },
+        "inherit_env": {
+          "type": "boolean",
+          "description": "Inherit the whole afm process environment. Default false (minimal env)."
+        }
+      }
+    },
+    "lifecycleEventSelector": {
+      "description": "Either the scalar \"all\", or a non-empty list of event names (validated by afm at load time).",
+      "oneOf": [
+        {
+          "const": "all"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      ]
+    }
+  }
+}
