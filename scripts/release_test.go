@@ -392,16 +392,16 @@ func TestMainRequestsPrivateValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var workflow struct {
-		Jobs map[string]struct {
-			Needs string
-			If    string
-			Steps []struct {
-				Env map[string]string
-				Run string
-			}
-		}
+	type workflowStep struct {
+		Env map[string]string
+		Run string
 	}
+	type workflowJob struct {
+		Needs string
+		If    string
+		Steps []workflowStep
+	}
+	var workflow struct{ Jobs map[string]workflowJob }
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
 		t.Fatal(err)
 	}
@@ -413,11 +413,12 @@ func TestMainRequestsPrivateValidation(t *testing.T) {
 		t.Fatal("the public job must only dispatch the private build")
 	}
 	step := job.Steps[0]
-	for name, want := range map[string]string{
+	wantEnv := map[string]string{ //nolint:gosec // These are GitHub Actions references, not credential values.
 		"GH_TOKEN":         "${{ secrets.ENGINE_BUILD_DISPATCH_TOKEN }}",
 		"AFM_REVISION":     "${{ github.sha }}",
 		"ENGINE_BUILD_REF": "${{ vars.ENGINE_BUILD_REF }}",
-	} {
+	}
+	for name, want := range wantEnv {
 		if step.Env[name] != want {
 			t.Fatalf("%s = %q, want %q", name, step.Env[name], want)
 		}
