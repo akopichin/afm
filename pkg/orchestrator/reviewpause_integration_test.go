@@ -150,6 +150,7 @@ func TestIntegration_PauseInjectResume(t *testing.T) {
 
 	// --- Step 1: PauseFlow while s1 is running, s2 still pending on s1. ---
 	waitForStatus(t, stateFile, "s1", state.StatusRunning, 10*time.Second)
+	pollUntil(t, 10*time.Second, func() bool { runner.mu.Lock(); defer runner.mu.Unlock(); return runner.agentCalls["s1"] > 0 })
 
 	owners, err := orch.PauseFlow(ctx)
 	if err != nil {

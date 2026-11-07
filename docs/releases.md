@@ -6,13 +6,23 @@ Each channel has its own cask and command. They can be installed together:
 
 | Channel | Install | Command | Update |
 |---|---|---|---|
-| Stable (2.x) | `brew install --cask akopichin/afm/afm` | `afm` | `brew upgrade --cask afm` |
+| Primary stable (3.x after the transition) | `brew install --cask akopichin/afm/afm` | `afm` | `brew upgrade --cask afm` |
+| Stable (2.x maintenance) | `brew install --cask akopichin/afm/afm@2` | `afm-2` | `brew upgrade --cask afm@2` |
 | Stable (1.x) | `brew install --cask akopichin/afm/afm@1` | `afm-1` | `brew upgrade --cask afm@1` |
 | Alpha | `brew install --cask akopichin/afm/afm-alpha` | `afm-alpha` | `brew upgrade --cask afm-alpha` |
 | Beta | `brew install --cask akopichin/afm/afm-beta` | `afm-beta` | `brew upgrade --cask afm-beta` |
 
-The `afm@1` cask and Docker `1` tag become available after the first maintenance
-release published with this configuration.
+The `afm@1`/`afm@2` casks and Docker `1`/`2` tags become available after the first
+maintenance release of each line published with this configuration. Until 3.0.0
+is published, the primary stable installation remains the previously released
+2.x version; preparing these settings does not publish or switch any channel.
+
+The `v2.x` branch starts at `v2.2.6`. Use `make release-patch v2.x` or
+`make release-minor v2.x` after pushing the reviewed maintenance commit. Major
+bumps are rejected. A later 2.x release updates only its versioned artifacts,
+`afm@2`, and Docker `:2`; it cannot replace the primary 3.x channels.
+Prereleases of 1.x and 2.x publish versioned artifacts only. Alpha and beta casks
+belong to the current product line.
 
 An alpha or beta cask becomes available after the first release of that channel
 has been published. For example:

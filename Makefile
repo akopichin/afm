@@ -40,7 +40,7 @@ build: web
 # TESTFLAGS передаёт флаги go test; CI использует -p 1, чтобы race-пакеты не конкурировали за два CPU и не
 # давали ложных таймаутов.
 test:
-	$(GOENV) go test ./... -v -race $(TESTFLAGS)
+	$(GOENV) go test ./... -v -race -timeout 30m $(TESTFLAGS)
 
 # schema-check — compiles the hand-written JSON Schemas, checks exact field paths and parser edge cases,
 # and validates repository examples.
@@ -131,13 +131,13 @@ RELEASE_TARGETS := $(addprefix release-,patch minor major \
 	patch-alpha minor-alpha major-alpha patch-beta minor-beta major-beta)
 
 # Проверяем все цели до выполнения рецептов, чтобы опечатка ветки не выпустила HEAD.
-RELEASE_BRANCH := $(filter main v1.x,$(MAKECMDGOALS))
+RELEASE_BRANCH := $(filter main v1.x v2.x,$(MAKECMDGOALS))
 ifneq ($(filter $(RELEASE_TARGETS),$(MAKECMDGOALS)),)
 ifneq ($(words $(filter $(RELEASE_TARGETS),$(MAKECMDGOALS))),1)
 $(error Specify exactly one release target)
 endif
-ifneq ($(filter-out $(RELEASE_TARGETS) main v1.x,$(MAKECMDGOALS)),)
-$(error Release targets accept only an optional main or v1.x branch)
+ifneq ($(filter-out $(RELEASE_TARGETS) main v1.x v2.x,$(MAKECMDGOALS)),)
+$(error Release targets accept only an optional main, v1.x or v2.x branch)
 endif
 endif
 ifneq ($(RELEASE_BRANCH),)

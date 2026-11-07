@@ -146,6 +146,11 @@ func TestBuildTaskContext_SkillsBlock(t *testing.T) {
 	o, stage, task := contextTestFixture(t)
 	lib := t.TempDir()
 	writeSkillLibrary(t, lib, map[string]string{"tdd": "Test first", "docs": "Write docs"})
+	resolved, resolveErr := filepath.EvalSymlinks(lib)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	lib = resolved
 	task.Skills = []string{"tdd"}
 	task.SkillsDir = lib
 

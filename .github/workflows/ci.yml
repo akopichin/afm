@@ -40,5 +40,11 @@ jobs:
       - name: SDK tests
         run: make sdk-test
 
+      - name: SDK integration and lint
+        run: make sdk-test-integration sdk-lint
+
+      - name: Generated contracts and schemas
+        run: make generate-check schema-check
+
       - name: Lint
         run: make lint-ci

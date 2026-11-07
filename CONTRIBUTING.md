@@ -28,6 +28,25 @@ For stable and numbered alpha/beta releases, see
 [Releases and prereleases](docs/releases.md). Release script and publication
 configuration regression tests are included in `make test` (`go test ./scripts`).
 
+## Maintaining the 2.x release line
+
+`v2.x` starts at `v2.2.6` and keeps the independently buildable AFM 2.x source,
+including vendored dependencies. It does not depend on the private engine.
+Create fixes from `v2.x` and merge them back into that branch; do not merge the
+3.x development history into it.
+
+After publishing a reviewed maintenance commit, use `make release-patch v2.x`
+or `make release-minor v2.x`. These commands select the published remote commit,
+create a tag and push it. Preview with
+`./scripts/release.sh --dry-run patch --branch v2.x` first. Major releases are
+rejected on maintenance branches.
+
+2.x releases update `afm@2` (command `afm-2`) and Docker `:2`. They do not update
+the primary cask, alpha/beta casks, Docker `latest`, or GitHub Latest. Those
+installation channels become available after their first published release.
+The workflow and GoReleaser changes must be present in the maintenance commit
+itself; changing only `main` does not update older branches' releases.
+
 ## Maintaining the 1.x release line
 
 `v1.x` maintains the old release line, starting from `v1.2.17`. Develop its fixes

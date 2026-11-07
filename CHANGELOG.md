@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-07
+
+### Improvement:
+
+- Prepare the independent 2.x maintenance line with `afm@2`, the `afm-2` command,
+  Docker `:2`, and release guards that preserve the primary 3.x channels.
+
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 

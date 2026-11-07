@@ -253,17 +253,18 @@ func TestHomebrewReleaseChannels(t *testing.T) {
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	if config.Release.Prerelease != "auto" || len(config.Casks) != 4 {
-		t.Fatal("expected automatic prereleases and four Homebrew channels")
+	if config.Release.Prerelease != "auto" || len(config.Casks) != 5 {
+		t.Fatal("expected automatic prereleases and five Homebrew channels")
 	}
 	for _, tt := range []struct {
 		major                             uint64
 		prerelease, cask, command, latest string
 	}{
-		{2, "", "afm", "afm", "true"}, {2, "alpha.1", "afm-alpha", "afm-alpha", "false"},
-		{2, "alpha.10", "afm-alpha", "afm-alpha", "false"}, {2, "beta.1", "afm-beta", "afm-beta", "false"},
-		{2, "rc.1", "", "", "false"}, {1, "", "afm@1", "afm-1", "false"},
+		{3, "", "afm", "afm", "true"}, {3, "alpha.1", "afm-alpha", "afm-alpha", "false"},
+		{3, "alpha.10", "afm-alpha", "afm-alpha", "false"}, {3, "beta.1", "afm-beta", "afm-beta", "false"},
+		{3, "rc.1", "", "", "false"}, {1, "", "afm@1", "afm-1", "false"},
 		{1, "alpha.1", "", "", "false"}, {1, "beta.1", "", "", "false"},
+		{2, "", "afm@2", "afm-2", "false"}, {2, "alpha.1", "", "", "false"}, {2, "beta.1", "", "", "false"},
 	} {
 		t.Run(fmt.Sprintf("%d/%s", tt.major, tt.prerelease), func(t *testing.T) {
 			if got := renderReleaseTemplate(t, config.Release.MakeLatest, tt.major, tt.prerelease); got != tt.latest {
@@ -333,7 +334,7 @@ func TestReleaseDockerTags(t *testing.T) {
 	// A shell function, not a fake executable in PATH: a just-written file can briefly fail to exec (ETXTBSY
 	// while a parallel test forks), and sh then silently falls through to the real docker later in PATH.
 	fakeDocker := "docker() { printf '%s\\n' \"$@\"; }\n"
-	for _, tag := range []string{"v1.2.18", "v1.3.0", "v2.0.5", "v1.3.0-alpha.1", "v2.0.0-alpha.1", "v2.0.0-beta.1"} {
+	for _, tag := range []string{"v1.2.18", "v1.3.0", "v2.0.5", "v1.3.0-alpha.1", "v2.0.0-alpha.1", "v2.0.0-beta.1", "v3.0.0", "v3.0.0-alpha.1", "v3.0.0-beta.1", "v2.2.7"} {
 		cmd := releaseCommand(t.TempDir(), "sh", "-eu", "-c", fakeDocker+script)
 		cmd.Env = append(cmd.Env, "RELEASE_TAG="+tag)
 		out, err := cmd.CombinedOutput()
@@ -345,9 +346,14 @@ func TestReleaseDockerTags(t *testing.T) {
 			t.Fatalf("missing version tag or build argument: %s", out)
 		}
 		stable := !strings.Contains(tag, "-")
-		legacy := strings.HasPrefix(tag, "v1.")
-		if slices.Contains(args, "akopichin/afm:1") != (stable && legacy) {
+		legacy := strings.HasPrefix(tag, "v1.") || strings.HasPrefix(tag, "v2.")
+		if slices.Contains(args, "akopichin/afm:1") != (stable && strings.HasPrefix(tag, "v1.")) {
 			t.Fatalf("incorrect maintenance tag for %s: %s", tag, out)
+		}
+		for _, major := range []string{"2", "3"} {
+			if slices.Contains(args, "akopichin/afm:"+major) != (stable && strings.HasPrefix(tag, "v"+major+".")) {
+				t.Fatalf("incorrect major tag for %s: %s", tag, out)
+			}
 		}
 		if latest := slices.Contains(args, "akopichin/afm:latest"); latest != (stable && !legacy) {
 			t.Fatalf("incorrect latest tag for %s: %s", tag, out)
@@ -487,12 +493,41 @@ func TestReleaseMaintenanceDryRun(t *testing.T) {
 func TestReleaseBranchMakeGuards(t *testing.T) {
 	t.Parallel()
 	dir := releaseRepo(t)
-	for _, args := range [][]string{{"v1.x"}, {"release-patch", "v1.x", "main"}, {"release-patch", "release-minor", "v1.x"}, {"release-patch", "v1.x", "build"}, {"release-patch", "v.1.x"}, {"release-patch", "v2.x"}, {"release-patch", "unknown"}} {
+	for _, args := range [][]string{{"v1.x"}, {"release-patch", "v1.x", "main"}, {"release-patch", "release-minor", "v1.x"}, {"release-patch", "v1.x", "build"}, {"release-patch", "v.1.x"}, {"release-patch", "v3.x"}, {"release-patch", "unknown"}} {
 		if out, err := releaseCommand(dir, "make", args...).CombinedOutput(); err == nil || !strings.Contains(string(out), "***") {
 			t.Fatalf("expected invalid goals %v to fail: %v %s", args, err, out)
 		}
 		if tags := run(t, dir, "git", "tag", "--list"); tags != "" {
 			t.Fatalf("invalid goals %v created tags: %s", args, tags)
 		}
+	}
+}
+
+func TestReleaseV2AfterV3UsesMaintenanceCommit(t *testing.T) {
+	t.Parallel()
+	dir := releaseRepo(t)
+	origin := t.TempDir()
+	run(t, origin, "git", "init", "--bare")
+	run(t, dir, "git", "remote", "add", "origin", origin)
+	run(t, dir, "git", "tag", "v2.2.6")
+	run(t, dir, "git", "checkout", "-b", "v2.x")
+	run(t, dir, "git", "commit", "--allow-empty", "-m", "Maintenance fix")
+	maintenanceSHA := run(t, dir, "git", "rev-parse", "HEAD")
+	run(t, dir, "git", "push", "origin", "v2.x", "--tags")
+	run(t, dir, "git", "checkout", "main")
+	run(t, dir, "git", "commit", "--allow-empty", "-m", "Third major")
+	run(t, dir, "git", "tag", "v3.0.0")
+	run(t, dir, "git", "push", "origin", "main", "--tags")
+	run(t, dir, "make", "release-patch", "v2.x")
+	if got := run(t, origin, "git", "rev-parse", "refs/tags/v2.2.7^{}"); got != maintenanceSHA {
+		t.Fatalf("maintenance tag points to %s, want %s", got, maintenanceSHA)
+	}
+	before := run(t, origin, "git", "tag", "--list")
+	out, err := releaseCommand(dir, "make", "release-major", "v2.x").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "major releases are not allowed") {
+		t.Fatalf("major maintenance release was not rejected: %v: %s", err, out)
+	}
+	if after := run(t, origin, "git", "tag", "--list"); after != before {
+		t.Fatal("rejected major release changed remote tags")
 	}
 }

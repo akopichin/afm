@@ -47,7 +47,11 @@ func writeLibrary(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: tdd\ndescription: Test first\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return lib
+	resolved, err := filepath.EvalSymlinks(lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 // Every phase prompt of a stage — planning, implementation, embedded review and the autonomous track — carries

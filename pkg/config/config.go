@@ -556,7 +556,7 @@ func (d DockerConfig) GetImage() string {
 	if d.Image != "" {
 		return d.Image
 	}
-	return "akopichin/afm:latest"
+	return "akopichin/afm:2"
 }
 
 // Config is the merged configuration for afm.

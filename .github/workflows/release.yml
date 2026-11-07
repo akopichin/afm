@@ -43,7 +43,8 @@ jobs:
           case "$RELEASE_TAG" in
             *-*) ;;
             v1.*) set -- "$@" -t akopichin/afm:1 ;;
-            *) set -- "$@" -t akopichin/afm:latest ;;
+            v2.*) set -- "$@" -t akopichin/afm:2 ;;
+            *) major="${RELEASE_TAG#v}"; major="${major%%.*}"; set -- "$@" -t "akopichin/afm:$major" -t akopichin/afm:latest ;;
           esac
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
