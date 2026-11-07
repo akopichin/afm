@@ -35,6 +35,50 @@ afm-alpha run
 
 The commands use the same project configuration and run directories as `afm`.
 
+## AFM 3.x CI configuration
+
+Public CI validates contracts, SDK, and dashboard changes. After these checks
+succeed on a push to `akopichin/afm`'s `main`, it requests `afm-release.yml` in the
+private `akopichin/afm-engine` repository with the exact AFM commit and
+`publish=false`. Pull requests and other branches do not dispatch private builds.
+The public job confirms that GitHub accepted the request; the full build result
+and archives are available in the private repository's Actions run.
+
+Configure these under AFM **Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Value |
+|---|---|---|
+| Repository variable | `ENGINE_BUILD_REF` | A reviewed engine workflow branch or tag, initially `main` |
+| Repository secret | `ENGINE_BUILD_DISPATCH_TOKEN` | A dedicated fine-grained personal access token |
+
+Create the token in [GitHub developer settings](https://github.com/settings/personal-access-tokens/new).
+Select resource owner `akopichin`, repository access **Only select repositories →
+afm-engine**, and repository permission **Actions → Read and write**. Set an
+expiration and replace the secret before it expires. The token can operate on
+Actions in that repository; it is not restricted to a single workflow. It does
+not need Contents write permission. Store it directly in GitHub or use the
+interactive prompt; do not put the value in command arguments:
+
+```bash
+gh secret set ENGINE_BUILD_DISPATCH_TOKEN --repo akopichin/afm
+gh variable set ENGINE_BUILD_REF --body main --repo akopichin/afm
+```
+
+The engine revision used by the product still comes from AFM's `go.mod`.
+`ENGINE_BUILD_REF` selects the workflow and integration-test checkout. Engine
+module downloads use the private repository's built-in `GITHUB_TOKEN`.
+
+For actual publication, the private engine's `afm-release` environment also needs
+`AFM_PUBLISH_TOKEN` (AFM Contents write), `HOMEBREW_PUBLISH_TOKEN`
+(`homebrew-afm` Contents write), and `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` for the
+image publisher. These are not needed for validation-only builds. Enable
+`AFM_DISTRIBUTION_APPROVED=true` there only after resolving engine distribution.
+Existing AFM secrets cannot be read back through GitHub's API to copy them.
+
+The temporary `engine-contracts` branch can be deleted after the clean `main`
+has been pushed and contains its commits. Pinned contracts versions remain
+reachable through `main` and need no version changes for that deletion.
+
 ## Publish a version
 
 Start from a clean working tree and fetch tags before calculating a version:
