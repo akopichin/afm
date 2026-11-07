@@ -1,4 +1,4 @@
-name: CI
+name: Contracts CI
 
 on:
   push:
@@ -8,37 +8,25 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  contracts:
     runs-on: ubuntu-latest
+    env:
+      GOWORK: 'off'
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
-
-      - uses: actions/setup-node@v4
+          go-version-file: contracts/go.mod
+          cache-dependency-path: contracts/go.sum
+      - name: Build public contracts
+        working-directory: contracts
+        run: go build ./...
+      - name: Test public contracts
+        working-directory: contracts
+        run: go test -race -timeout 15m ./...
+      - uses: golangci/golangci-lint-action@v9
         with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: pkg/web/dashboard/package-lock.json
-
-      - name: Build
-        run: make build
-
-      - name: Test
-        # -p 1: сериализуем race-бинари пакетов на 2-ядерном раннере, иначе переподписка CPU роняет
-        # wall-clock ожидания в pkg/orchestrator по таймауту (см. комментарий у цели test в Makefile).
-        run: make test TESTFLAGS="-p 1"
-
-      - name: UI unit tests
-        run: make web-test
-
-      - name: UI typecheck
-        run: make web-typecheck
-
-      - name: SDK tests
-        run: make sdk-test
-
-      - name: Lint
-        run: make lint-ci
+          version: v2.11.4
+          working-directory: contracts
+      - name: Check source formatting
+        run: git diff --exit-code
