@@ -10,6 +10,7 @@ older ones further down. Dates follow the commits that shipped each change.
 - Embed the private, independently versioned AFM Engine module while retaining one AFM executable and the dashboard/core SDK contracts.
 - Preserve the 2.x maintenance line with independent build, CI, Homebrew, and Docker channels.
 - Separate public contracts/UI/SDK checks from trusted full-product builds and record exact dependency revisions in release manifests.
+- Pin AFM Engine v1.0.0 and keep its internal tests in Engine CI while validating the AFM integration in product builds.
 
 ### Fix:
 

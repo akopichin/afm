@@ -48,7 +48,7 @@ Configure these under AFM **Settings → Secrets and variables → Actions**:
 
 | Kind | Name | Value |
 |---|---|---|
-| Repository variable | `ENGINE_BUILD_REF` | A reviewed engine workflow branch or tag, initially `main` |
+| Repository variable | `ENGINE_BUILD_REF` | A reviewed engine workflow branch or tag, currently `v1.0.0` |
 | Repository secret | `ENGINE_BUILD_DISPATCH_TOKEN` | A dedicated fine-grained personal access token |
 
 Create the token in [GitHub developer settings](https://github.com/settings/personal-access-tokens/new).
@@ -61,12 +61,15 @@ interactive prompt; do not put the value in command arguments:
 
 ```bash
 gh secret set ENGINE_BUILD_DISPATCH_TOKEN --repo akopichin/afm
-gh variable set ENGINE_BUILD_REF --body main --repo akopichin/afm
+gh variable set ENGINE_BUILD_REF --body v1.0.0 --repo akopichin/afm
 ```
 
 The engine revision used by the product still comes from AFM's `go.mod`.
 `ENGINE_BUILD_REF` selects the workflow and integration-test checkout. Engine
 module downloads use the private repository's built-in `GITHUB_TOKEN`.
+Engine CI runs the internal engine suite on Linux and macOS. The AFM product
+workflow runs AFM, UI, SDK, and shared-host integration tests without repeating
+the internal engine suite. Pin only an engine revision with successful Engine CI.
 
 For actual publication, the private engine's `afm-release` environment also needs
 `AFM_PUBLISH_TOKEN` (AFM Contents write), `HOMEBREW_PUBLISH_TOKEN`
