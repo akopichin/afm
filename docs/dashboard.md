@@ -1,5 +1,8 @@
 # Web dashboard
 
+The dashboard is the default `afm run` mode. `afm run --mode core` serves the same
+API without the Web UI: see [Core mode](core-mode.md).
+
 On startup (if `server.open_browser: true`) the dashboard opens. Its URL is always
 printed as a separate block set off by blank lines, so it stands out from the run
 header and stage logs:

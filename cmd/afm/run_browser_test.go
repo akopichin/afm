@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/browser"
-	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/contracts/browser"
+	"github.com/akopichin/afm/contracts/config"
 )
 
 func stubBrowserPreflight(t *testing.T, st config.BrowserStatus, err error) {

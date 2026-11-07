@@ -1,4 +1,4 @@
-name: Contracts CI
+name: Public CI
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
+  validate:
     runs-on: ubuntu-latest
     env:
       GOWORK: 'off'
@@ -17,16 +17,26 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: contracts/go.mod
-          cache-dependency-path: contracts/go.sum
-      - name: Build public contracts
-        working-directory: contracts
-        run: go build ./...
-      - name: Test public contracts
-        working-directory: contracts
-        run: go test -race -timeout 15m ./...
-      - uses: golangci/golangci-lint-action@v9
+          cache-dependency-path: |
+            contracts/go.sum
+            sdk/go.sum
+      - uses: actions/setup-node@v4
         with:
-          version: v2.11.4
-          working-directory: contracts
-      - name: Check source formatting
-        run: git diff --exit-code
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pkg/web/dashboard/package-lock.json
+      - name: Public contracts
+        run: cd contracts && go test -race -timeout 15m ./...
+      - name: SDK unit tests
+        run: cd sdk && go test -race ./...
+      - name: Dashboard
+        run: |
+          cd pkg/web/dashboard
+          npm ci
+          npm test
+          npm run typecheck
+          npm run build
+      - name: Public source boundary
+        run: |
+          python3 scripts/check-public-tree.py
+          python3 scripts/sync-schemas.py --check

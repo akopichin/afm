@@ -14,13 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/spf13/cobra"
 )
 
 // fakeCLIAgentMesh is a minimal server.AgentMeshActions good enough to exercise the afm agent CLI end to
@@ -573,9 +572,9 @@ func TestAgentWait_BatchEndToEndOverTheRealService(t *testing.T) {
 		requests, thread = append(requests, string(sent.MessageID)), sent.ThreadID
 	}
 	cli := func(participant string, cmd *cobra.Command, args ...string) (map[string]any, map[string]any, error) {
-		mesh, token := server.AgentMeshActions(asParticipant{agentMeshActions{orch}, "tok", participant}), "tok"
+		mesh, token := server.AgentMeshActions(asParticipant{agentMeshActions{Mesh: orch}, "tok", participant}), "tok"
 		if participant == stage {
-			mesh, token = agentMeshActions{orch}, agent.token
+			mesh, token = agentMeshActions{Mesh: orch}, agent.token
 		}
 		httpSrv := httptest.NewServer(server.New(server.Config{AgentMesh: mesh}).Handler())
 		t.Cleanup(httpSrv.Close)
@@ -638,7 +637,7 @@ func TestAgentWait_RepeatedSingleWaitReportsTheSameWaitAsAlreadyPending(t *testi
 	}
 	wait := func() map[string]any {
 		t.Helper()
-		httpSrv := httptest.NewServer(server.New(server.Config{AgentMesh: agentMeshActions{orch}}).Handler())
+		httpSrv := httptest.NewServer(server.New(server.Config{AgentMesh: agentMeshActions{Mesh: orch}}).Handler())
 		t.Cleanup(httpSrv.Close)
 		writeTestMeshDescriptor(t, httpSrv, agent.token, stage)
 		cmd := newAgentWaitCmd()
@@ -800,7 +799,7 @@ func TestAgentCmd_HasSpawnAndHelperResult(t *testing.T) {
 // Through the real adapter and orchestrator: only a stage agent may spawn, and an unknown task is not found.
 func TestAgentMeshActions_SpawnAndHelperResultOverTheRealService(t *testing.T) {
 	orch, _ := newSideMeshOrch(t)
-	actions := agentMeshActions{orch}
+	actions := agentMeshActions{Mesh: orch}
 	ctx := context.Background()
 
 	_, err := actions.Spawn(ctx, "op-1", "run:t-9", server.MeshSpawnRequest{ProfileID: "reviewer", Title: "T", Instruction: "I"})

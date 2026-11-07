@@ -63,7 +63,8 @@ PID. `Wait` and `Cleanup` are only for a run launched by `Client.Start`.
 It waits for the dashboard to respond. The flow path should be absolute when it
 is outside `workDir`. The returned `Run` exposes `Dir()`, `Port()`, and `PID()`.
 
-`Run.Wait(ctx)` waits for the subprocess to exit. If `ctx` is cancelled, it
+`Run.Wait(ctx)` waits for the subprocess to exit (in core mode that happens only
+after `Shutdown`; see [Core mode](#core-mode)). If `ctx` is cancelled, it
 sends `SIGINT`, waits up to 15 seconds, then kills the process if needed. A
 failed AFM stage can keep the process alive for a retry, so cancel the context
 before waiting if your service is giving up. `Run.Cleanup()` removes **the
@@ -75,6 +76,78 @@ process when you have retained all three values. It checks the PID and dashboard
 port, but it does not own that subprocess, so `Wait` and `Cleanup` are
 unavailable on the attached handle. `Config.MaxConcurrent` limits subprocesses
 started by one `Client` (zero means unlimited).
+
+## Core mode
+
+`Config.Mode` chooses what `Client.Start` launches. The zero value and
+`ModeDashboard` pass no `--mode` flag, so older `afm` binaries keep working.
+`ModeCore` adds `--mode core`: the HTTP API without the Web UI (see
+[Core mode](../docs/core-mode.md)). An unknown mode is rejected by `New`.
+
+```go
+func runCore(ctx context.Context, flowPath, workDir string) error {
+	client, err := afmsdk.New(afmsdk.Config{Mode: afmsdk.ModeCore})
+	if err != nil {
+		return err
+	}
+	run, err := client.Start(ctx, flowPath, workDir)
+	if err != nil {
+		return err
+	}
+	// Stop the core on every return path, including a failed WaitResult; use a
+	// context of its own, not one cancelled by the failed request. Do not call
+	// log.Fatal after this point: it skips deferred calls.
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if err := run.Shutdown(stopCtx); err != nil {
+			log.Print(err)
+		}
+	}()
+
+	status, err := run.WaitResult(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Println(status.RunState)
+	return nil
+}
+```
+
+- **Start.** For `ModeCore`, `Start` returns after `/api/runtime` reports mode
+  `core`, protocol 1 and `ready: true`, `/api/status` has the same `run_id`, and
+  the run directory exists. Any failure (an old `afm` that rejects `--mode`, an
+  early exit, a timeout, cancellation) stops the process, frees the
+  `MaxConcurrent` slot and keeps `workDir`. There is no silent fallback to the
+  dashboard. `Run.Mode()` after `Start` is the mode that was launched; `Connect`
+  and `Attach` read it from `/api/runtime` and leave it empty for an `afm` without
+  that endpoint.
+  An unknown mode or protocol gives `ErrIncompatibleRuntime`.
+- **WaitResult.** `Run.WaitResult(ctx)` returns the workflow's final `RunStatus`
+  (`RunState` is `RunStateFinished`, `RunStateFailed` or `RunStateInterrupted`),
+  not the process exit. A failed stage in a running workflow is not final: you can
+  `Retry` and keep waiting. It waits for `ready` first, so the result of an
+  earlier process on the same directory is never returned. If the API starts
+  serving another run (for example the next `repeat` cycle), it returns
+  `*RunChangedError{Expected, Current}`; use `errors.As`. If `afm` becomes
+  unreachable before a final status, the error wraps `ErrResultUnavailable` (and
+  the `*exec.ExitError` for an owned process: 1 with `--exit-on-fail`, 130 when
+  interrupted). A `Connect` handle tolerates an unreachable API for 30 seconds. A
+  cancelled `ctx` only stops the waiting.
+- **Shutdown.** `Run.Shutdown(ctx)` works only for a process started by this
+  `Client`; otherwise it returns `ErrNotOwned`. It sends SIGINT and waits until
+  `ctx` ends (30 seconds when `ctx` has no deadline, longer than afm's own drain);
+  then it kills the process and the error wraps `ErrKilled`. The result is `nil`
+  for exit code 0, otherwise `*exec.ExitError` (130 when an active workflow was
+  interrupted). Repeated and concurrent calls return the same result. A kill
+  cannot remove a Docker container.
+- **Wait and slot.** Core keeps running after the result, so
+  `Wait(context.Background())` does not return until `Shutdown`, and the
+  `MaxConcurrent` slot stays taken until the process exits. `Wait` and `Cleanup`
+  on a `Connect`/`Attach` handle return an error matching `ErrNotOwned`.
+- **Output.** The SDK keeps only the last 4 KiB of afm's output for error
+  messages, and a child holding the pipes cannot block `Shutdown` for more than 5
+  seconds.
 
 ## Read and control a run
 

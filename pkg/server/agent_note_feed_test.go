@@ -1,6 +1,11 @@
 package server
 
 import (
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
+
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,9 +16,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	bus "github.com/akopichin/afm/contracts/events"
+	"github.com/akopichin/afm/contracts/mcp"
 )
 
 // agentNoteNotice — поле "data" одной строки notices.jsonl для agent_note.
@@ -74,7 +78,7 @@ func runningNoteServer(t *testing.T, isScript bool, revise func(context.Context,
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,15 +87,15 @@ func runningNoteServer(t *testing.T, isScript bool, revise func(context.Context,
 		t.Fatal(err)
 	}
 
-	uiBus := bus.NewUIBus()
+	uiBus := implbus.NewUIBus()
 	cfg := Config{
 		Port: 0, RunDir: runDir, Store: store, UIBus: uiBus,
-		Actions: fakeStageActions{revise: revise},
 	}
 	if isScript {
 		cfg.Stages = StaticStageConfigs{testStageID: {IsScript: true}}
 	}
 	srv := New(cfg)
+	srv.useFakes(fakeStageActions{revise: revise}, nil)
 	subID, events := uiBus.Subscribe(64)
 	t.Cleanup(func() { uiBus.Unsubscribe(subID) })
 	return srv, runDir, events

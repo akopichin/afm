@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/assets"
-	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/contracts/assets"
+	"github.com/akopichin/afm/contracts/config"
 )
 
 // embeddedSkillNames — скиллы, вшитые в бинарник.

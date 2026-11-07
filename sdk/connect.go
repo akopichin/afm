@@ -69,6 +69,10 @@ func Connect(ctx context.Context, dashboardPort int) (*Run, error) {
 		transport.CloseIdleConnections()
 		return nil, errors.New("afmsdk: connect: dashboard status lacks flow_name or started_at")
 	}
+	if err := run.detectMode(ctx); err != nil {
+		transport.CloseIdleConnections()
+		return nil, fmt.Errorf("afmsdk: connect: %w", err)
+	}
 	return run, nil
 }
 

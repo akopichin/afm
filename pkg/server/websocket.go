@@ -6,9 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	bus "github.com/akopichin/afm/contracts/events"
 	"github.com/gorilla/websocket"
-
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
 
 var upgrader = websocket.Upgrader{

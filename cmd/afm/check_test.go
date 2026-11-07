@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // captureStream redirects *streamVar (os.Stdout or os.Stderr) for the duration of fn and returns everything
@@ -110,7 +111,7 @@ func TestCheckDoesNotBlockOnActiveRunLock(t *testing.T) {
 
 	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusRunning)
 
-	store, err := state.Open(runDir, []string{cmdInit})
+	store, err := implstate.Open(runDir, []string{cmdInit})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}

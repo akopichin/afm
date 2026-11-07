@@ -1,0 +1,5 @@
+name: core-board
+stages:
+  - id: build
+    agents: [auto]
+    command: __BOARD_AGENT__

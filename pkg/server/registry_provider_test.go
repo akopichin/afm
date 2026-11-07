@@ -1,17 +1,16 @@
 package server
 
-// T8.3 — dashboard reads stage config through a RuntimeStageProvider (re-derived from the orchestrator's
-// runtime registry on every call) instead of a map frozen once at startup.
-
 import (
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
 )
+
+// The server resolves stage configuration through the live registry.
 
 // versionedStageProvider's StageConfigs() reflects whatever revision is currently stored — exactly the shape
 // an orchestrator-registry-backed provider has (its answer can change between two calls, unlike a frozen
@@ -114,19 +113,19 @@ func TestStatusRead_NeverMixesTwoGraphVersions(t *testing.T) {
 	provider := versionTaggedProvider{ids: ids, version: &version}
 
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, ids)
+	store, err := implstate.Open(runDir, ids)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
 	srv := New(Config{
-		RunDir:  runDir,
-		Store:   store,
-		UIBus:   bus.NewUIBus(),
-		Actions: fakeStageActions{},
-		Stages:  provider,
+		RunDir: runDir,
+		Store:  store,
+		UIBus:  implbus.NewUIBus(),
+		Stages: provider,
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup

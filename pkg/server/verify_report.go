@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	implstagefiles "github.com/akopichin/afm-engine/engine/inspection/stagefiles"
 )
 
 // maxVerifyReportBytes caps the report.md we'll read into memory.
@@ -37,7 +37,7 @@ func (s *Server) handleVerifyReport(w http.ResponseWriter, r *http.Request) {
 
 	// root.Open resolves the path relative to the pinned runDir fd — any symlink component escaping the root
 	// is rejected by os.Root itself (TOCTOU-free, same guarantee as handleArtifact).
-	f, err := root.Open(filepath.Join(id, stagefiles.ReportRelPath(verID)))
+	f, err := root.Open(filepath.Join(id, implstagefiles.ReportRelPath(verID)))
 	if err != nil {
 		http.NotFound(w, r)
 		return

@@ -1,0 +1,6 @@
+name: core-preplanned
+stages:
+  - id: build
+    agents: [implementation]
+    plan: __PLAN__
+    command: __AGENT__

@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/skills"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/skills"
 )
 
 func newInstallSkillsCmd() *cobra.Command {

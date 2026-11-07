@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // Задача помощника, ждущая сброса usage-limit, отдаёт дашборду свою quota (until/provider/источник/причину паузы),

@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // appendControlLine appends one raw state.Control record to runDir/events.jsonl with the given seq — the
@@ -17,7 +18,7 @@ import (
 // (package main cannot reach pkg/state's unexported AppendControl machinery convenience wrappers used by
 // pkg/state's own tests) so these tests can seed a required-task barrier without spinning up a full
 // orchestrator.
-func appendControlLine(t *testing.T, runDir string, seq uint64, c state.Control) {
+func appendControlLine(t *testing.T, runDir string, seq uint64, c implstate.Control) {
 	t.Helper()
 	c.Seq = seq
 	c.SchemaVersion = state.ControlSchemaVersion
@@ -46,21 +47,21 @@ func TestCheck_ShowsAwaitingAssistantsAndBlockingTask(t *testing.T) {
 	chdirTemp(t)
 	runDir := makeRunState(t, "flow-20260101-120000", "impl", state.StatusAwaitingAssistants)
 
-	appendControlLine(t, runDir, 2, state.Control{
+	appendControlLine(t, runDir, 2, implstate.Control{
 		Kind:   "task_created",
 		Actor:  state.Actor{Kind: "user"},
-		Target: state.Target{TaskID: "sec-1", StageID: "impl"},
-		Payload: mustJSON(t, state.TaskCreatedPayload{
+		Target: implstate.Target{TaskID: "sec-1", StageID: "impl"},
+		Payload: mustJSON(t, implstate.TaskCreatedPayload{
 			ProfileID: "security-reviewer",
 			Title:     "Security pass on the new endpoint",
 			Mode:      "required",
 			CreatedBy: "user",
 		}),
 	})
-	appendControlLine(t, runDir, 3, state.Control{
+	appendControlLine(t, runDir, 3, implstate.Control{
 		Kind:    "task_status_changed",
-		Target:  state.Target{TaskID: "sec-1"},
-		Payload: mustJSON(t, state.TaskStatusChangedPayload{Status: "failed", Reason: "helper process crashed"}),
+		Target:  implstate.Target{TaskID: "sec-1"},
+		Payload: mustJSON(t, implstate.TaskStatusChangedPayload{Status: "failed", Reason: "helper process crashed"}),
 	})
 
 	stdout := captureStdout(t, func() {
@@ -98,13 +99,13 @@ func TestCheck_ReadsDynamicStageIds(t *testing.T) {
 	chdirTemp(t)
 	runDir := filepath.Join(".afm", "runs", "flow-20260101-120000")
 
-	store, err := state.Open(runDir, []string{"a"})
+	store, err := implstate.Open(runDir, []string{"a"})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	op := state.StageGraphOperation{
+	op := implstate.StageGraphOperation{
 		ID: "add-n",
-		Payload: state.StageGraphPayload{
+		Payload: implstate.StageGraphPayload{
 			Stage: flow.Stage{ID: "n", DependsOn: []string{"a"}},
 			Order: []string{"a", "n"},
 		},

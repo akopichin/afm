@@ -1,6 +1,17 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	"github.com/akopichin/afm/contracts/state"
+
+	orchestrator "github.com/akopichin/afm/contracts/control"
+
+	implexecutor "github.com/akopichin/afm-engine/testkit/executor"
+
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
+	implsideagent "github.com/akopichin/afm-engine/testkit/sideagent"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,15 +24,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/executor"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	sideagent "github.com/akopichin/afm/contracts/assistant"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/sideagent"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 const boardUnavailableMessage = "Board is unavailable in assistants mode"
@@ -31,13 +40,13 @@ const boardUnavailableMessage = "Board is unavailable in assistants mode"
 type boardGateRun struct {
 	agent liveStageAgent
 	srv   *httptest.Server
-	opts  orchestrator.Options
+	opts  implorchestrator.Options
 }
 
 func startBoardGateRun(t *testing.T, mode assistants.CollaborationMode) boardGateRun {
 	t.Helper()
-	var runOpts orchestrator.Options
-	agent := startLiveStageAgentWith(t, func(opts *orchestrator.Options) {
+	var runOpts implorchestrator.Options
+	agent := startLiveStageAgentWith(t, func(opts *implorchestrator.Options) {
 		opts.CollaborationMode = mode
 		if err := opts.Store.RecordBoardTaskProtocol(agentcomm.BoardTaskProtocolTypedV1, state.Actor{Kind: "system", ID: "afm"}); err != nil {
 			t.Fatalf("RecordBoardTaskProtocol: %v", err)
@@ -45,7 +54,7 @@ func startBoardGateRun(t *testing.T, mode assistants.CollaborationMode) boardGat
 		runOpts = *opts
 	})
 	srv := httptest.NewServer(server.New(server.Config{
-		AgentMesh: agentMeshActions{agent.orch}, Mesh: meshActions{agent.orch}, CollaborationMode: mode,
+		AgentMesh: agentMeshActions{Mesh: agent.orch}, Mesh: meshActions{agent.orch}, CollaborationMode: mode,
 	}).Handler())
 	t.Cleanup(srv.Close)
 	return boardGateRun{agent: agent, srv: srv, opts: runOpts}
@@ -269,7 +278,7 @@ func (r boardGateRun) boardNoticeToStageAgent(t *testing.T) agentcomm.Message {
 	teamOpts := r.opts
 	teamOpts.CollaborationMode = assistants.CollaborationModeTeam
 	stage := agentcomm.ParticipantID("stage:impl")
-	if _, err := orchestrator.New(teamOpts).Publish(r.agent.ctx, orchestrator.PublishRequest{
+	if _, err := implorchestrator.New(teamOpts).Publish(r.agent.ctx, orchestrator.PublishRequest{
 		OperationID: "gate-notice-publish", Author: agentcomm.UserParticipantID, Key: "notes/api", Status: "ready",
 		Notify: []agentcomm.ParticipantID{stage}, Actor: state.Actor{Kind: "user"},
 	}); err != nil {
@@ -340,7 +349,7 @@ func TestAgentMailboxHidesBoardNoticeInAssistantsMode(t *testing.T) {
 
 // promptRunner reports each prompt it is given, the way a real Assistant turn would receive it.
 type promptRunner struct {
-	cfg     executor.Config
+	cfg     implexecutor.Config
 	prompts chan<- string
 }
 
@@ -360,16 +369,16 @@ func TestSideAgentMesh_AssistantsModeDoesNotPromptBoardNotice(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	runDir := t.TempDir()
-	teamStore, err := state.Open(runDir, []string{"impl"})
+	teamStore, err := implstate.Open(runDir, []string{"impl"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := orchestrator.Options{
-		RunDir: runDir, RunID: "side-test", Store: teamStore, Config: config.Default(), Prompts: orchestrator.DefaultPrompts(),
+	opts := implorchestrator.Options{
+		RunDir: runDir, RunID: "side-test", Store: teamStore, Config: config.Default(), Prompts: implorchestrator.DefaultPrompts(),
 		Stages:            []flow.Stage{{ID: "impl", Name: "impl", Agents: []flow.AgentType{flow.AgentAuto}}},
 		CollaborationMode: assistants.CollaborationModeTeam,
 	}
-	team := orchestrator.New(opts)
+	team := implorchestrator.New(opts)
 	if _, err := team.RegisterSideAgent(ctx, orchestrator.RegisterSideAgentRequest{Command: "codex", Actor: state.Actor{Kind: "system"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -394,17 +403,17 @@ func TestSideAgentMesh_AssistantsModeDoesNotPromptBoardNotice(t *testing.T) {
 	}
 
 	// The restart: the journal is replayed from disk and the run continues without the Board.
-	store, err := state.Open(runDir, []string{"impl"})
+	store, err := implstate.Open(runDir, []string{"impl"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	opts.Store = store
 	opts.CollaborationMode = assistants.CollaborationModeAssistants
-	orch := orchestrator.New(opts)
+	orch := implorchestrator.New(opts)
 
 	// The Assistant answered the notice in team mode: its journal still holds that turn.
-	sideStore, err := sideagent.Open(t.TempDir(), "side-test")
+	sideStore, err := implsideagent.Open(t.TempDir(), "side-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +433,7 @@ func TestSideAgentMesh_AssistantsModeDoesNotPromptBoardNotice(t *testing.T) {
 	}
 
 	prompts := make(chan string, 2)
-	mgr := newStartedSideManager(sideagent.Config{
+	mgr := newStartedSideManager(implsideagent.Config{
 		Store: sideStore, Command: "codex", SourceReply: orch.SideAgentExplicitReply,
 		HideSource: func(id string) bool { return orch.HidesFromAgents(agentcomm.MessageID(id)) },
 		OnSourceDelivered: func(id string) {
@@ -432,9 +441,11 @@ func TestSideAgentMesh_AssistantsModeDoesNotPromptBoardNotice(t *testing.T) {
 				t.Errorf("deliver: %v", err)
 			}
 		},
-		NewExecutor: func(cfg executor.Config) sideagent.AgentRunner { return &promptRunner{cfg: cfg, prompts: prompts} },
+		NewExecutor: func(cfg implexecutor.Config) implsideagent.AgentRunner {
+			return &promptRunner{cfg: cfg, prompts: prompts}
+		},
 	})
-	bridge := startSideAgentMesh(orch, mgr)
+	bridge := engine.StartAssistantMesh(orch, mgr)
 	t.Cleanup(func() {
 		bridge.Abort()
 		mgr.Shutdown()

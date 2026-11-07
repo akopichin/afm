@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // loopRejectingMesh is a fakeCLIAgentMesh whose loop changes are refused with err.

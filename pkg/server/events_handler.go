@@ -1,6 +1,11 @@
 package server
 
 import (
+	implexecutor "github.com/akopichin/afm-engine/engine/inspection/executor"
+	bus "github.com/akopichin/afm/contracts/events"
+
+	implstagefiles "github.com/akopichin/afm-engine/engine/inspection/stagefiles"
+
 	"bufio"
 	"encoding/json"
 	"net/http"
@@ -9,11 +14,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/akopichin/afm/pkg/executor"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // maxReplayEvents bounds the GLOBAL /api/events history. Raised to 10000 so the whole-flow feed is deep
@@ -128,7 +130,7 @@ func reconstructAgentActions(runDir, stageID string) []feedEvent {
 		step := time.Second
 		start := end.Add(-time.Duration(len(lines)) * step)
 		for i, line := range lines {
-			toolName, detail, ok := executor.ParseToolAction(line, 200)
+			toolName, detail, ok := implexecutor.ParseToolAction(line, 200)
 			if !ok {
 				continue
 			}
@@ -207,7 +209,7 @@ func reconstructNotices(runDir, stageID string, commandName func(string) string)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
-		if stagefiles.IsActivityLine(sc.Bytes()) {
+		if implstagefiles.IsActivityLine(sc.Bytes()) {
 			continue // the activity API replays these; here they would evict real notices from the ring
 		}
 		var e struct {

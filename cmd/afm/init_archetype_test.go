@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/contracts/flow"
 	"gopkg.in/yaml.v3"
 )
 

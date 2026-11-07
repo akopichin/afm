@@ -5,7 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func timingViewOf(t *testing.T, tm state.StageTiming) *StageTimingView {
@@ -82,7 +83,7 @@ func TestStageTimingView_FilledWithoutAccounting(t *testing.T) {
 // open is read from the stored interval, so a finished run exposes none.
 func TestBuildStageViews_TimingOpenAbsentAfterEndRun(t *testing.T) {
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{"s1"})
+	store, err := implstate.Open(runDir, []string{"s1"})
 	if err != nil {
 		t.Fatal(err)
 	}

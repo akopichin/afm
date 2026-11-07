@@ -6,9 +6,8 @@ import (
 	"testing"
 	"time"
 
+	bus "github.com/akopichin/afm/contracts/events"
 	"github.com/gorilla/websocket"
-
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
 
 func TestWebSocket_ReceivesEvents(t *testing.T) {
@@ -25,7 +24,7 @@ func TestWebSocket_ReceivesEvents(t *testing.T) {
 
 	// Give the subscription a moment to register, then publish.
 	time.Sleep(50 * time.Millisecond)
-	srv.uiBus.Publish(bus.Event{
+	writableBus(srv).Publish(bus.Event{
 		Type:    bus.EventStageStatusChanged,
 		StageID: "s1",
 		Data:    "awaiting_approval",

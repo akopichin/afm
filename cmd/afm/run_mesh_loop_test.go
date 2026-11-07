@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	orchestrator "github.com/akopichin/afm/contracts/control"
 	"github.com/akopichin/afm/pkg/server"
 )
 
@@ -25,7 +25,7 @@ func loopAdapterFixture(t *testing.T) (human meshActions, agent agentMeshActions
 	if err != nil {
 		t.Fatalf("AttachAndSend: %v", err)
 	}
-	return human, agentMeshActions(human), res.ParticipantID
+	return human, agentMeshActions{Mesh: human.orch}, res.ParticipantID
 }
 
 // The human adds a loop for an agent from a Feed; the agent adds its own for itself. Each caller is the loop's

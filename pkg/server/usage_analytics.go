@@ -11,7 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/contracts/accounting"
 )
 
 // UsageAnalyticsSource is the read model behind GET /api/usage/analytics; *accounting.Analytics satisfies it.

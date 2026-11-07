@@ -1,22 +1,17 @@
 package server
 
-// Этап 9, T9.5 — TestRestart_DisplayOrderRecomputedFromSnapshot: after a restart, the dashboard's stage rail
-// must reflect the RECOVERED registry (frozen stages + every stage_graph_added record folded on top via
-// graph.Materialize, exactly like cmd/afm/run.go's restart path) and the run's restored StageOrder — not some
-// stale, pre-addition order. buildStageViews/topoOrder is this codebase's single display-ordering authority
-// (AGENTS.md's "Stage order in the dashboard" section); this feeds it the SAME shape run.go produces on
-// restart and checks the dynamically added stage renders strictly between its dependency and its dependent.
-
 import (
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/state"
+	implgraph "github.com/akopichin/afm-engine/testkit/orchestrator/graph"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 )
+
+// Display order follows the recovered graph, including dynamically added dependencies.
 
 func TestRestart_DisplayOrderRecomputedFromSnapshot(t *testing.T) {
 	runDir := t.TempDir()
@@ -29,7 +24,7 @@ func TestRestart_DisplayOrderRecomputedFromSnapshot(t *testing.T) {
 	// Payload.Order would have recorded it durably.
 	restoredOrder := []string{"a", "n", "b"}
 
-	materialized := graph.Materialize(frozen, dynamic, restoredOrder)
+	materialized := implgraph.Materialize(frozen, dynamic, restoredOrder)
 	for _, s := range materialized {
 		if err := os.MkdirAll(filepath.Join(runDir, s.ID), 0755); err != nil {
 			t.Fatal(err)

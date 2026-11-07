@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm-engine/engine"
 )
 
 func newApproveCmd() *cobra.Command {
@@ -16,36 +16,19 @@ func newApproveCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stageID := args[0]
-			runDir, stageIDs, err := state.FindLatestRunForStage(runsDir(), stageID)
-			if err != nil {
-				return err
-			}
-			store, err := state.Open(runDir, stageIDs)
-			if err != nil {
-				if errors.Is(err, state.ErrRunLocked) {
-					return errors.New("run is active — approve via the dashboard, or stop `afm run` first")
-				}
-				return fmt.Errorf("open store: %w", err)
-			}
-			defer store.Close()
-
-			current := store.Get(stageID)
-			if current != state.StatusAwaitingApproval {
-				if msg := explainAwaitingAssistants(store, stageID); msg != "" {
-					return errors.New(msg)
-				}
-				return fmt.Errorf("stage %q is %v, not awaiting_approval", stageID, current)
-			}
-			if err := store.Apply(&state.Transition{
-				StageID: stageID,
-				From:    state.StatusAwaitingApproval,
-				To:      state.StatusReady,
-				Event:   "cli_approve",
-			}); err != nil {
-				return fmt.Errorf("approve: %w", err)
+			if err := engine.ApproveOffline(runsDir(), stageID); err != nil {
+				return offlineCLIError(err, "approve")
 			}
 			fmt.Printf("approved stage %q: ready to run\n", stageID)
 			return nil
 		},
 	}
+}
+
+// offlineCLIError words the active-run rejection for the CLI; other errors already read well.
+func offlineCLIError(err error, verb string) error {
+	if errors.Is(err, engine.ErrRunActive) {
+		return fmt.Errorf("run is active — %s via the dashboard, or stop `afm run` first", verb)
+	}
+	return err
 }

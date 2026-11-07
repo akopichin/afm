@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	implstagefiles "github.com/akopichin/afm-engine/testkit/orchestrator/stagefiles"
 )
 
 // getVerifyReport вызывает handleVerifyReport напрямую (без routeFiles/mux) —
@@ -23,7 +23,7 @@ func getVerifyReport(t *testing.T, srv *Server, stageID, verID string) *httptest
 
 func writeVerifyReport(t *testing.T, runDir, stageID, verID, content string) {
 	t.Helper()
-	path := filepath.Join(runDir, stageID, stagefiles.ReportRelPath(verID))
+	path := filepath.Join(runDir, stageID, implstagefiles.ReportRelPath(verID))
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

@@ -1,28 +1,26 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/engine/inspection/orchestrator"
+	"github.com/akopichin/afm/contracts/state"
+
 	"context"
 	"slices"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
+	orchestrator "github.com/akopichin/afm/contracts/control"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
-// Agent Mesh Phase 7 (T7.1): adapts *orchestrator.Orchestrator to server.MeshActions, the UI-facing
-// /api/mesh/* surface. Unlike agentMeshActions (run_agent_mesh.go), whose actor comes from a per-invocation
-// bearer token, every call here is the human dashboard operator — meshUIActor/meshUIParticipant are fixed
-// constants, never a value derived from the HTTP request, mirroring collaborationActions'
-// state.Actor{Kind: "user"} convention (run_collaboration.go).
-type meshActions struct{ orch *orchestrator.Orchestrator }
+// meshActions adapts engine.Mesh to server.MeshActions, the UI-facing /api/mesh/* surface. Every call is the
+// human dashboard operator: meshUIActor/meshUIParticipant are fixed, never derived from the HTTP request.
+type meshActions struct{ orch engine.Mesh }
 
-// meshServerActions returns the UI-facing adapter. Wired into server.Config unconditionally from
-// startDashboard, the SAME way agentMeshServerActions is: the underlying Service methods (not this adapter)
-// are what reject a request when collaboration is disabled (e.g. AttachAndSend's own
-// assistants.CodeFeatureDisabled check) — there is no separate gate to mirror here.
-func meshServerActions(orch *orchestrator.Orchestrator) server.MeshActions {
+// meshServerActions returns the UI-facing adapter, wired unconditionally: the Service methods themselves
+// reject requests when collaboration is disabled, so there is no gate to mirror here.
+func meshServerActions(orch engine.Mesh) server.MeshActions {
 	return meshActions{orch}
 }
 
@@ -231,7 +229,7 @@ func (a meshActions) Loop(ctx context.Context, requestID string, cmd server.Mesh
 
 // ownerWaitActions adapts the orchestrator to server.OwnerWaitActions; the server has already authenticated the
 // run owner by token, so every call is the human, whatever the request says.
-type ownerWaitActions struct{ orch *orchestrator.Orchestrator }
+type ownerWaitActions struct{ orch engine.Mesh }
 
 func (a ownerWaitActions) StageWaits(_ context.Context, stageID string) ([]orchestrator.StageWaitView, error) {
 	return a.orch.StageWaits(stageID)
@@ -245,7 +243,7 @@ func (a ownerWaitActions) CancelStageWaits(ctx context.Context, requestID, stage
 		waitIDs[i] = agentcomm.WaitID(id)
 	}
 	err := a.orch.CancelWait(ctx, orchestrator.CancelWaitRequest{
-		OperationID: orchestrator.OwnerCancelOperationID(stageID, requestID), WaitIDs: waitIDs, StageID: stageID, Reason: req.Reason, Actor: meshUIActor,
+		OperationID: implorchestrator.OwnerCancelOperationID(stageID, requestID), WaitIDs: waitIDs, StageID: stageID, Reason: req.Reason, Actor: meshUIActor,
 	})
 	if err != nil {
 		return nil, err

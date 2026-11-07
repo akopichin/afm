@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/akopichin/afm/pkg/gitcmd"
+	"github.com/akopichin/afm/contracts/gitcmd"
 )
 
 // nameStatusRec is one record of `git diff --name-status -z` (rename/copy

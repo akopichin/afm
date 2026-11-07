@@ -3,12 +3,8 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/akopichin/afm/pkg/config"
 )
 
 func TestServerRouteStages(t *testing.T) {
@@ -25,422 +21,41 @@ func TestServerRouteStages(t *testing.T) {
 	}
 }
 
-func TestServerServesReactBundle(t *testing.T) {
+// Без UI сервер — чистый API: UI-пути дают 404, API отвечает.
+func TestServer_WithoutUIServesNoWebPaths(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	handler := srv.Handler()
 
-	// Шаг 1. GET /assets/ через fileServer возвращает HTML-листинг каталога
-	// (http.FileServer отдаёт directory listing), значит каталог существует.
-	dirReq := httptest.NewRequest("GET", "/assets/", nil)
-	dirW := httptest.NewRecorder()
-	handler.ServeHTTP(dirW, dirReq)
-	if dirW.Code != http.StatusOK {
-		t.Fatalf("GET /assets/: ожидался 200, получен %d", dirW.Code)
-	}
-	if !strings.Contains(dirW.Body.String(), ".js") {
-		t.Fatalf("GET /assets/: в листинге нет .js-бандла (body=%q)", dirW.Body.String())
-	}
-
-	// Шаг 2. Извлечь имя бандла из листинга и запросить его напрямую.
-	bundleName := extractFirstJSBundle(dirW.Body.String())
-	if bundleName == "" {
-		t.Fatal("не удалось извлечь имя .js-бандла из листинга /assets/")
-	}
-	bundleReq := httptest.NewRequest("GET", "/assets/"+bundleName, nil)
-	bundleW := httptest.NewRecorder()
-	handler.ServeHTTP(bundleW, bundleReq)
-	if bundleW.Code != http.StatusOK {
-		t.Fatalf("GET /assets/%s: ожидался 200, получен %d", bundleName, bundleW.Code)
-	}
-	if bundleW.Body.Len() == 0 {
-		t.Errorf("GET /assets/%s: тело бандла пустое", bundleName)
-	}
-}
-
-// extractFirstJSBundle достаёт первое имя вида index-<hash>.js из HTML-листинга
-// http.FileServer (формат "<a href="index-HASH.js">"). Возвращает "" если не нашёл.
-func extractFirstJSBundle(listing string) string {
-	const marker = `href="`
-	start := strings.Index(listing, marker)
-	for start != -1 {
-		start += len(marker)
-		end := strings.IndexByte(listing[start:], '"')
-		if end == -1 {
-			break
-		}
-		name := listing[start : start+end]
-		if strings.HasSuffix(name, ".js") {
-			return name
-		}
-		next := strings.Index(listing[start:], marker)
-		if next == -1 {
-			break
-		}
-		start = start + next
-	}
-	return ""
-}
-
-// TestServer_ConfigAcceptsAccountant и TestServer_UsageRouteWired удалены вместе
-// с роутом /api/usage и пакетом accounting (см. task-2-brief).
-
-func TestServer_IndexDefaultTheme(t *testing.T) {
-	srv := New(Config{})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /: got %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, `href="./skins/graphite/index.css"`) {
-		t.Error("default скин должен ссылаться на ./skins/graphite/index.css")
-	}
-	if !strings.Contains(body, `class="theme-graphite"`) {
-		t.Error("default скин должен ставить class theme-graphite")
-	}
-	if !strings.Contains(body, `href="./favicon.svg"`) {
-		t.Error("default скин должен использовать общий favicon.svg")
-	}
-	if !strings.Contains(body, `id="root"`) {
-		t.Error("index должен содержать точку монтирования React (#root)")
-	}
-	if strings.Contains(body, "skins/goga") || strings.Contains(body, "skins/custom") {
-		t.Error("default скин не должен ссылаться на goga/custom")
-	}
-}
-
-// permanentStylesheets — структурный CSS, который доставляется ПОСТОЯННОЙ ссылкой мимо скина: skin_dir
-// заменяет основной stylesheet, а модалка бокового агента и чат-композеры должны оставаться свёрстанными.
-// marker — правило, которое обязано быть в файле.
-var permanentStylesheets = []struct{ path, marker string }{
-	{"side-agent.css", ".side-agent-modal"},
-	{"chat-composer.css", ".chat-composer-row"},
-}
-
-// Постоянные ссылки есть в index (их добавляет index.dev.html, сборка переносит в index.html), а файлы
-// реально отдаются: HTML-only проверка не поймала бы 404 из-за отсутствия файла в //go:embed.
-func TestServer_PermanentStylesheetsLinkedAndServed(t *testing.T) {
-	handler := New(Config{}).Handler()
-
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
-	body := w.Body.String()
-	if !strings.Contains(body, `href="./skins/graphite/index.css"`) {
-		t.Error("index должен сохранять активную skin-ссылку")
-	}
-	for _, css := range permanentStylesheets {
-		if !strings.Contains(body, `href="./`+css.path+`"`) {
-			t.Errorf("index должен содержать постоянную ссылку на /%s", css.path)
-		}
-		cssW := httptest.NewRecorder()
-		handler.ServeHTTP(cssW, httptest.NewRequest("GET", "/"+css.path, nil))
-		if cssW.Code != http.StatusOK {
-			t.Fatalf("GET /%s: got %d, want 200 (файл обязан быть в //go:embed)", css.path, cssW.Code)
-		}
-		if !strings.Contains(cssW.Body.String(), css.marker) {
-			t.Errorf("/%s должен содержать структурные правила %s", css.path, css.marker)
-		}
-	}
-}
-
-// При custom skin постоянные таблицы стилей всё равно подключены и отдаются из web.FS.
-func TestServer_PermanentStylesheetsSurviveSkinDir(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root{--x:1;}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	handler := New(Config{SkinDir: dir}).Handler()
-
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
-	body := w.Body.String()
-	if !strings.Contains(body, `href="./skins/custom/index.css"`) {
-		t.Error("skin_dir должен давать custom skin-ссылку")
-	}
-	for _, css := range permanentStylesheets {
-		if !strings.Contains(body, `href="./`+css.path+`"`) {
-			t.Errorf("ссылка /%s должна оставаться и для skin_dir", css.path)
-		}
-		cssW := httptest.NewRecorder()
-		handler.ServeHTTP(cssW, httptest.NewRequest("GET", "/"+css.path, nil))
-		if cssW.Code != http.StatusOK {
-			t.Fatalf("GET /%s под skin_dir: got %d, want 200", css.path, cssW.Code)
-		}
-	}
-}
-
-func TestServer_IndexGogaTheme(t *testing.T) {
-	srv := New(Config{Theme: config.ThemeGoga})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /: got %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, `class="theme-goga"`) {
-		t.Error("goga скин должен ставить class theme-goga")
-	}
-	if strings.Contains(body, "theme-graphite") {
-		t.Error("goga скин не должен содержать theme-graphite")
-	}
-	if !strings.Contains(body, `href="./skins/goga/index.css"`) {
-		t.Error("goga скин должен ссылаться на ./skins/goga/index.css")
-	}
-	if strings.Contains(body, `href="./skins/graphite/index.css"`) {
-		t.Error("goga скин не должен ссылаться на дефолтный graphite")
-	}
-}
-
-func TestServer_IndexNovacorpsTheme(t *testing.T) {
-	srv := New(Config{Theme: config.ThemeNovacorps})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /: got %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, `class="theme-novacorps"`) {
-		t.Error("novacorps скин должен ставить class theme-novacorps")
-	}
-	if strings.Contains(body, "theme-graphite") {
-		t.Error("novacorps скин не должен содержать theme-graphite")
-	}
-	if !strings.Contains(body, `href="./skins/novacorps/index.css"`) {
-		t.Error("novacorps скин должен ссылаться на ./skins/novacorps/index.css")
-	}
-	if strings.Contains(body, `href="./skins/graphite/index.css"`) {
-		t.Error("novacorps скин не должен ссылаться на дефолтный graphite")
-	}
-}
-
-func TestServer_ServesGogaStylesheet(t *testing.T) {
-	srv := New(Config{Theme: config.ThemeGoga})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/skins/goga/index.css", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /skins/goga/index.css: got %d, want 200", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "--mint") {
-		t.Error("skins/goga/index.css должен определять CSS-токен --mint")
-	}
-}
-
-func TestServer_ServesBaseSkinPartial(t *testing.T) {
-	srv := New(Config{})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/skins/base/header.css", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /skins/base/header.css: got %d, want 200", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), ".global-header") {
-		t.Error("skins/base/header.css должен содержать структурные правила .global-header")
-	}
-}
-
-// Скины отдаются с фиксированными именами и меняются между пересборками — браузер не должен кэшировать
-// старый CSS. Проверяем no-store и на CSS скина, и на index.html.
-func TestServer_SkinsAndIndexAreNotCached(t *testing.T) {
-	srv := New(Config{})
-	handler := srv.Handler()
-
-	for _, path := range []string{"/skins/base/header.css", "/skins/graphite/index.css", "/", "/index.html"} {
-		req := httptest.NewRequest("GET", path, nil)
+	for _, path := range []string{"/", "/index.html", "/favicon.svg", "/assets/index.js", "/skins/graphite/index.css"} {
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
-			t.Errorf("GET %s: Cache-Control=%q, ожидался no-store", path, cc)
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusNotFound {
+			t.Errorf("GET %s без UI: got %d, want 404", path, w.Code)
 		}
 	}
-}
 
-func TestServer_SkinDirOverridesTheme(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root[data-theme="dark"]{--mint:#123456;}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	srv := New(Config{Theme: config.ThemeGoga, SkinDir: dir})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	body := w.Body.String()
-	if !strings.Contains(body, `href="./skins/custom/index.css"`) {
-		t.Error("skin_dir должен побеждать theme: ожидался href на ./skins/custom/index.css")
-	}
-	if !strings.Contains(body, `class="theme-custom"`) {
-		t.Error("skin_dir должен ставить class theme-custom")
-	}
-
-	cssReq := httptest.NewRequest("GET", "/skins/custom/index.css", nil)
-	cssW := httptest.NewRecorder()
-	handler.ServeHTTP(cssW, cssReq)
-	if cssW.Code != http.StatusOK {
-		t.Fatalf("GET /skins/custom/index.css: got %d, want 200", cssW.Code)
-	}
-	if !strings.Contains(cssW.Body.String(), "#123456") {
-		t.Error("GET /skins/custom/index.css должен отдавать содержимое из SkinDir, а не embed")
-	}
-}
-
-func TestServer_SkinDirMissingIndexFallsBack(t *testing.T) {
-	dir := t.TempDir() // пустая директория, index.css нет
-
-	srv := New(Config{Theme: config.ThemeGoga, SkinDir: dir})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	body := w.Body.String()
-	if !strings.Contains(body, `href="./skins/goga/index.css"`) {
-		t.Error("без index.css в skin_dir должен быть fallback на встроенный скин из theme")
-	}
-	if !strings.Contains(body, `class="theme-goga"`) {
-		t.Error("fallback должен ставить class theme-goga, не theme-custom")
-	}
-
-	cssReq := httptest.NewRequest("GET", "/skins/custom/index.css", nil)
-	cssW := httptest.NewRecorder()
-	handler.ServeHTTP(cssW, cssReq)
-	if cssW.Code != http.StatusNotFound {
-		t.Errorf("/skins/custom/ не должен монтироваться при невалидном skin_dir: got %d, want 404", cssW.Code)
-	}
-}
-
-func TestServer_SkinDirCustomFavicon(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root[data-theme="dark"]{--mint:#000;}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "favicon.svg"), []byte("<svg></svg>"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	srv := New(Config{SkinDir: dir})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if !strings.Contains(w.Body.String(), `href="./skins/custom/favicon.svg"`) {
-		t.Error("skin_dir со своим favicon.svg должен переопределять ссылку на иконку")
-	}
-}
-
-func TestServer_SkinDirWithoutFaviconUsesDefault(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root[data-theme="dark"]{--mint:#000;}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	srv := New(Config{SkinDir: dir})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if !strings.Contains(w.Body.String(), `href="./favicon.svg"`) {
-		t.Error("skin_dir без favicon.svg должен оставлять дефолтную иконку")
-	}
-}
-
-func TestServer_IndexGogaTheme_TitleAndFavicon(t *testing.T) {
-	srv := New(Config{Theme: config.ThemeGoga})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	body := w.Body.String()
-	if !strings.Contains(body, `<title>Goga</title>`) {
-		t.Error("goga скин должен подставлять <title>Goga</title> из title.txt")
-	}
-	if strings.Contains(body, `<title>afm Dashboard</title>`) {
-		t.Error("goga скин не должен оставлять дефолтный <title>")
-	}
-	if !strings.Contains(body, `type="image/png" href="./skins/goga/favicon.png"`) {
-		t.Error("goga скин должен использовать растровый favicon.png с type=image/png")
-	}
-}
-
-func TestServer_ServesGogaLogoAsset(t *testing.T) {
-	srv := New(Config{Theme: config.ThemeGoga})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/skins/goga/quarium-logo.png", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/status", nil))
 	if w.Code != http.StatusOK {
-		t.Fatalf("GET /skins/goga/quarium-logo.png: got %d, want 200", w.Code)
-	}
-	if w.Body.Len() == 0 {
-		t.Error("quarium-logo.png должен быть непустым")
+		t.Errorf("GET /api/status: got %d, want 200", w.Code)
 	}
 }
 
-func TestServer_SkinDirCustomTitle(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root[data-theme="dark"]{--mint:#000;}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "title.txt"), []byte("My Skin"), 0644); err != nil {
-		t.Fatal(err)
-	}
+func TestServer_UIHandlerServesRoot(t *testing.T) {
+	ui := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("stub ui"))
+	})
+	handler := New(Config{UI: ui}).Handler()
 
-	srv := New(Config{SkinDir: dir})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if !strings.Contains(w.Body.String(), `<title>My Skin</title>`) {
-		t.Error("skin_dir с title.txt должен подставлять свой <title>")
-	}
-}
-
-func TestServer_SkinDirWithoutTitleKeepsDefault(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root[data-theme="dark"]{--mint:#000;}`), 0644); err != nil {
-		t.Fatal(err)
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != http.StatusOK || w.Body.String() != "stub ui" {
+		t.Errorf("GET /: got %d %q, want UI stub", w.Code, w.Body.String())
 	}
 
-	srv := New(Config{SkinDir: dir})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if !strings.Contains(w.Body.String(), `<title>afm Dashboard</title>`) {
-		t.Error("skin_dir без title.txt должен оставлять дефолтный <title>")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/files/x", nil))
+	if strings.Contains(w.Body.String(), "stub ui") {
+		t.Error("GET /api/files/x с UI: API-маршрут не должен уходить в UI")
 	}
 }

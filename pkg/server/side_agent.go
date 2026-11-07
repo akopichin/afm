@@ -9,7 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/sideagent"
+	"github.com/akopichin/afm-engine/engine"
+
+	implsideagent "github.com/akopichin/afm-engine/engine/inspection/sideagent"
+	sideagent "github.com/akopichin/afm/contracts/assistant"
 )
 
 // SideAgentService — узкий интерфейс «бокового» разговора, потребляемый сервером вместо конкретного
@@ -26,7 +29,7 @@ type SideAgentService interface {
 }
 
 // *sideagent.Manager удовлетворяет интерфейсу — проверка на этапе компиляции.
-var _ SideAgentService = (*sideagent.Manager)(nil)
+var _ SideAgentService = engine.AssistantService(nil)
 
 // maxSideAgentBodyBytes ограничивает тело POST-запроса.
 const maxSideAgentBodyBytes = sideagent.MaxMessageBytes + (16 << 10)
@@ -114,7 +117,7 @@ func (s *Server) routeSideAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 	history := s.sideAgent.History()
 	lastSeq := lastSideSeq(history)
-	conv := sideagent.ProjectConversation(history)
+	conv := implsideagent.ProjectConversation(history)
 	after := parseUintQuery(r, "after_seq")
 	limit := parseSideAgentLimit(r)
 
@@ -191,7 +194,7 @@ func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(sideAgentSendResponse{
 		MessageID: receipt.MessageID, MessageState: string(receipt.State), ErrorCode: string(receipt.ErrorCode),
-		TurnID: receipt.TurnID, State: sideagent.ProjectConversation(h).State(), Cursor: lastSideSeq(h),
+		TurnID: receipt.TurnID, State: implsideagent.ProjectConversation(h).State(), Cursor: lastSideSeq(h),
 	})
 }
 

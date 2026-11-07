@@ -1,0 +1,4 @@
+name: core-script
+stages:
+  - id: glue
+    script: echo ok

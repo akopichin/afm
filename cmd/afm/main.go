@@ -6,11 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akopichin/afm-engine/host"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/docker"
 	"github.com/spf13/cobra"
-
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/executor"
 )
 
 var rootDir string
@@ -24,10 +23,15 @@ var version = "dev"
 // Пути, выведенные из afm-root (раны, worktree, root_dir, память), уходят агентам, чей CWD может быть
 // worktree, поэтому они должны быть абсолютными.
 func absRootDir() string {
-	if abs, err := filepath.Abs(rootDir); err == nil {
+	return absPath(rootDir)
+}
+
+// absPath is filepath.Abs that keeps the path as is when the working directory is unreadable.
+func absPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
 		return abs
 	}
-	return rootDir
+	return p
 }
 
 // fmDir возвращает путь к служебному каталогу .afm относительно rootDir. rootDir задаётся флагом --dir,
@@ -83,7 +87,7 @@ func parseEnvBool(env string) (enabled, known bool) {
 
 func main() {
 	// A copy of afm started as an agent's process group anchor does nothing else (see pkg/executor).
-	if executor.ServeProcessGroupAnchor(os.Args) {
+	if host.Bootstrap(os.Args) {
 		return
 	}
 	os.Exit(runMain(os.Args[1:]))

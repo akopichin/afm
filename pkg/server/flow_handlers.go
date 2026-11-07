@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implorchestrator "github.com/akopichin/afm-engine/engine/inspection/orchestrator"
 )
 
 // codeNoNotes is shared with flow_handlers_test.go so the expected error
@@ -41,31 +41,31 @@ func writeFlowError(w http.ResponseWriter, status int, code string) {
 // machine-readable error code.
 func flowErrCode(err error) (int, string) {
 	switch {
-	case errors.Is(err, orchestrator.ErrRunFinalizing):
+	case errors.Is(err, implorchestrator.ErrRunFinalizing):
 		return http.StatusConflict, "run_finalizing"
-	case errors.Is(err, orchestrator.ErrNoReviewPause):
+	case errors.Is(err, implorchestrator.ErrNoReviewPause):
 		return http.StatusConflict, codeFlowNotPaused
-	case errors.Is(err, orchestrator.ErrResumeInProgress):
+	case errors.Is(err, implorchestrator.ErrResumeInProgress):
 		return http.StatusConflict, "resume_in_progress"
-	case errors.Is(err, orchestrator.ErrNoNotes):
+	case errors.Is(err, implorchestrator.ErrNoNotes):
 		return http.StatusBadRequest, codeNoNotes
-	case errors.Is(err, orchestrator.ErrNotOwned):
+	case errors.Is(err, implorchestrator.ErrNotOwned):
 		return http.StatusBadRequest, "not_owned"
-	case errors.Is(err, orchestrator.ErrTargetNotPaused):
+	case errors.Is(err, implorchestrator.ErrTargetNotPaused):
 		return http.StatusBadRequest, "target_not_paused"
-	case errors.Is(err, orchestrator.ErrRevConflict):
+	case errors.Is(err, implorchestrator.ErrRevConflict):
 		return http.StatusConflict, codeRevConflict
-	case errors.Is(err, orchestrator.ErrStaleContent):
+	case errors.Is(err, implorchestrator.ErrStaleContent):
 		return http.StatusConflict, "stale_content"
-	case errors.Is(err, orchestrator.ErrStaleLine):
+	case errors.Is(err, implorchestrator.ErrStaleLine):
 		return http.StatusConflict, "stale_line"
-	case errors.Is(err, orchestrator.ErrEmptyText):
+	case errors.Is(err, implorchestrator.ErrEmptyText):
 		return http.StatusBadRequest, "empty_text"
-	case errors.Is(err, orchestrator.ErrNoteTooLong):
+	case errors.Is(err, implorchestrator.ErrNoteTooLong):
 		return http.StatusRequestEntityTooLarge, "note_too_long"
-	case errors.Is(err, orchestrator.ErrTooManyNotes):
+	case errors.Is(err, implorchestrator.ErrTooManyNotes):
 		return http.StatusConflict, "too_many_notes"
-	case errors.Is(err, orchestrator.ErrNoteNotFound):
+	case errors.Is(err, implorchestrator.ErrNoteNotFound):
 		return http.StatusNotFound, "note_not_found"
 	default:
 		return http.StatusInternalServerError, errCodeInternal

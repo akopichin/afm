@@ -10,12 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/lifecyclehooks"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/config"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/docker"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/lifecyclehooks"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func TestExitOnFailResolver(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // fakeAssistantProfiles is a test double for AssistantProfilesService: profiles are the run-level views, byStage

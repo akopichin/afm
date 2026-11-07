@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/worktree"
+	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/docker"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/worktree"
 )
 
 // parentDir is the ".." path segment, named so goconst (min-occurrences: 2) does not flag its reuse
-// across this package (isSubPath here and resolveExplicitRunDir in memory_rebuild.go).
+// across this package (engine.IsSubPath here and resolveExplicitRunDir in memory_rebuild.go).
 const parentDir = ".."
 
 // flowLocksDir holds one flock file per flow (worktree.FlowLock), separate from any run directory so
@@ -45,22 +45,6 @@ func worktreesEnabled(worktreeName string, cfg config.Config, f *flow.Flow) bool
 // prefix of .afm/runs/<name>-... and the worktree's branch/directory name.
 func runNameFor(worktreeName, flowName string) string {
 	return cmp.Or(worktreeName, flowName)
-}
-
-// worktreeBase returns the project root the worktree anchors to: flow.root_dir resolved against afmRoot
-// when set, otherwise afm-root itself. Unlike absoluteAgentRoot this never falls back to the process CWD —
-// the worktree must live in the repository that owns .afm/, and afm-root (the parent of .afm/) is what
-// AGENTS.md defines as that project root. absoluteAgentRoot serves a different purpose (giving agents
-// *some* real CWD) and its os.Getwd() fallback would be the wrong anchor for a git worktree.
-func worktreeBase(afmRoot string, f *flow.Flow) (string, error) {
-	if f.RootDir == "" {
-		return filepath.Abs(afmRoot)
-	}
-	base := f.RootDir
-	if !filepath.IsAbs(base) {
-		base = filepath.Join(afmRoot, base)
-	}
-	return filepath.Abs(base)
 }
 
 // clearModeFromFlags turns the two mutually exclusive CLI flags into a worktree.ClearMode. Extracted as its
@@ -110,7 +94,7 @@ func resolveWorktree(ctx context.Context, afmRoot string, f *flow.Flow, cfg conf
 		return "", nil, nil
 	}
 
-	base, err := worktreeBase(afmRoot, f)
+	base, err := engine.WorktreeBase(afmRoot, f)
 	if err != nil {
 		return "", nil, err
 	}
@@ -124,7 +108,7 @@ func resolveWorktree(ctx context.Context, afmRoot string, f *flow.Flow, cfg conf
 		if absErr != nil {
 			return "", nil, absErr
 		}
-		if !isSubPath(absAfmRoot, base) {
+		if !engine.IsSubPath(absAfmRoot, base) {
 			return "", nil, fmt.Errorf("worktree: root_dir resolves to %q, which is outside the Docker-mounted project directory %q; move root_dir inside the project, or disable Docker", base, absAfmRoot)
 		}
 	}
@@ -157,13 +141,4 @@ func flowLockError(err error, name string) error {
 		return fmt.Errorf("worktree: %q's worktree is in use by another `afm run` or `--worktree-clear`; wait a moment and retry", name)
 	}
 	return err
-}
-
-// isSubPath reports whether child is parent itself or lives somewhere underneath it.
-func isSubPath(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	return rel != parentDir && !strings.HasPrefix(rel, parentDir+string(filepath.Separator))
 }

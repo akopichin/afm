@@ -9,19 +9,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // liveStageAgent is a running stage "impl" whose agent holds a real executor-minted mesh token, the one an agent
 // process reads from its descriptor, until release is called.
 type liveStageAgent struct {
-	orch    *orchestrator.Orchestrator
-	store   *state.Store
+	orch    *implorchestrator.Orchestrator
+	store   *implstate.Store
 	ctx     context.Context
 	token   string
 	release func()
@@ -29,12 +29,12 @@ type liveStageAgent struct {
 
 func startLiveStageAgent(t *testing.T) liveStageAgent {
 	t.Helper()
-	return startLiveStageAgentWith(t, func(*orchestrator.Options) {})
+	return startLiveStageAgentWith(t, func(*implorchestrator.Options) {})
 }
 
 // startLiveStageAgentWith is startLiveStageAgent with mutate applied to the orchestrator options, which already
 // hold the run's store, before the orchestrator is built.
-func startLiveStageAgentWith(t *testing.T, mutate func(*orchestrator.Options)) liveStageAgent {
+func startLiveStageAgentWith(t *testing.T, mutate func(*implorchestrator.Options)) liveStageAgent {
 	t.Helper()
 	dir := t.TempDir()
 	tokenPath := filepath.Join(dir, "token")
@@ -56,20 +56,20 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stage tex
 	t.Setenv("AFM_TEST_RELEASE_PATH", releasePath)
 
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{"impl"})
+	store, err := implstate.Open(runDir, []string{"impl"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	opts := orchestrator.Options{
-		RunDir: runDir, RunID: "wait-token-test", Store: store, Config: config.Default(), Prompts: orchestrator.DefaultPrompts(),
+	opts := implorchestrator.Options{
+		RunDir: runDir, RunID: "wait-token-test", HumanControl: true, Store: store, Config: config.Default(), Prompts: implorchestrator.DefaultPrompts(),
 		Stages: []flow.Stage{{ID: "impl", Name: "impl", Agents: []flow.AgentType{flow.AgentAuto}, Command: script}},
 	}
 	mutate(&opts)
-	orch := orchestrator.New(opts)
-	httpServer := httptest.NewServer(server.New(server.Config{AgentMesh: agentMeshActions{orch}, Mesh: meshActions{orch}}).Handler())
+	orch := implorchestrator.New(opts)
+	httpServer := httptest.NewServer(server.New(server.Config{AgentMesh: agentMeshActions{Mesh: orch}, Mesh: meshActions{orch}}).Handler())
 	t.Cleanup(httpServer.Close)
-	orch.SetDashboardURL(httpServer.URL) // without a mesh endpoint the agent gets no descriptor
+	orch.SetAgentAPIURL(httpServer.URL) // without a mesh endpoint the agent gets no descriptor
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	runDone := make(chan struct{})
 	go func() { _ = orch.Run(ctx); close(runDone) }()
@@ -102,7 +102,7 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"stage tex
 func TestAgentMeshWait_IsDecidedAgainstTheInvocationOfItsToken(t *testing.T) {
 	agent := startLiveStageAgent(t)
 	orch, store, ctx, token := agent.orch, agent.store, agent.ctx, agent.token
-	actions := agentMeshActions{orch}
+	actions := agentMeshActions{Mesh: orch}
 	deadline := time.Now().Add(time.Hour).Unix()
 	boardWait := func(key string) server.MeshWaitRequest {
 		return server.MeshWaitRequest{

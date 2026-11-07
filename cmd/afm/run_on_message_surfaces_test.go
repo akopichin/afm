@@ -1,6 +1,9 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // postAttachStatus POSTs an attach to the dashboard handler and returns the HTTP status, so a refusal can be
@@ -41,7 +44,7 @@ func TestOnMessage_AttachAndSpawnSurfacesOverTheRealStack(t *testing.T) {
 
 	runDir := t.TempDir()
 	const stageID = "work"
-	store, err := state.Open(runDir, []string{stageID})
+	store, err := implstate.Open(runDir, []string{stageID})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -53,16 +56,17 @@ func TestOnMessage_AttachAndSpawnSurfacesOverTheRealStack(t *testing.T) {
 		Enabled:  &enabled,
 		Profiles: map[string]config.ProfileConfig{"reviewer": {Title: "Reviewer", Command: "codex-as-claude", Instructions: "Answer questions."}},
 	}
-	collab := startCollaboration(store, cfg, &flow.Flow{Name: "on-message"})
+	collab := engine.StartCollaboration(store, cfg, &flow.Flow{Name: "on-message"})
 	runner := &fakeAutoRunner{acquired: make(chan string, 1), release: make(chan struct{})}
-	orch := orchestrator.New(orchestrator.Options{
+	orch := implorchestrator.New(implorchestrator.Options{
 		RunDir: runDir, Stages: []flow.Stage{{ID: stageID, Name: "Work", Agents: []flow.AgentType{flow.AgentAuto}}},
-		Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(), Runner: runner,
-		AssistantsEnabled: collab.policy.Enabled, AssistantsRegistry: collab.registry,
+		Store: store, Config: cfg, Prompts: implorchestrator.DefaultPrompts(), Runner: runner,
+		AssistantsEnabled: collab.Policy.Enabled, AssistantsRegistry: collab.Registry,
 	})
+	control := engine.StageControlFor(orch, runDir, store)
 	srv := server.New(server.Config{
-		RunDir: runDir, Store: store, UIBus: orch.UIBus(), Actions: orch, Secondary: orch, FlowActions: orch,
-		Stages: registryStageProvider{orch: orch}, AssistantActions: collab.actions(orch), AssistantsReader: collab.reader(orch),
+		RunDir: runDir, Store: store, UIBus: orch.UIBus(), Actions: control, Secondary: control, FlowActions: orch,
+		Stages: registryStageProvider{reader: orchStages{orch}}, AssistantActions: assistantActions(collab, orch), AssistantsReader: assistantsReader(collab, orch),
 	})
 	handler := srv.Handler()
 
@@ -94,7 +98,7 @@ func TestOnMessage_AttachAndSpawnSurfacesOverTheRealStack(t *testing.T) {
 	if code := postAttachStatus(t, handler, stageID, attach); code != http.StatusOK {
 		t.Fatalf("attach to a running stage: HTTP %d, want 200", code)
 	}
-	spawned, err := agentMeshActions{orch}.Spawn(ctx, "req-spawn", "stage:"+stageID, server.MeshSpawnRequest{
+	spawned, err := agentMeshActions{Mesh: orch}.Spawn(ctx, "req-spawn", "stage:"+stageID, server.MeshSpawnRequest{
 		ProfileID: "reviewer", Title: "Spawned Q&A", Instruction: "Answer questions.", Trigger: "on_message",
 	})
 	if err != nil {
@@ -124,7 +128,7 @@ func TestOnMessage_AttachAndSpawnSurfacesOverTheRealStack(t *testing.T) {
 		}
 	}
 
-	_, err = agentMeshActions{orch}.Spawn(ctx, "req-bad", "stage:"+stageID, server.MeshSpawnRequest{
+	_, err = agentMeshActions{Mesh: orch}.Spawn(ctx, "req-bad", "stage:"+stageID, server.MeshSpawnRequest{
 		ProfileID: "reviewer", Title: "T", Instruction: "I", Trigger: "checkpoints",
 	})
 	var rejected *state.OperationRejectedError

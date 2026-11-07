@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	orchestrator "github.com/akopichin/afm/contracts/control"
 	"github.com/akopichin/afm/pkg/server"
 )
 

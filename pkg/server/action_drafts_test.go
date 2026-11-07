@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/sideagent"
+	sideagent "github.com/akopichin/afm/contracts/assistant"
+	"github.com/akopichin/afm/contracts/graph"
 )
 
 // turnCompletedEvent builds a durable turn_completed event carrying the given action drafts — the only way

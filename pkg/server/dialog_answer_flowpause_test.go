@@ -1,6 +1,11 @@
 package server
 
 import (
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
+
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -10,9 +15,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
 )
 
 func TestHandleDialogAnswer_RejectedWhileFlowPaused(t *testing.T) {
@@ -27,7 +30,7 @@ func TestHandleDialogAnswer_RejectedWhileFlowPaused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,15 +41,14 @@ func TestHandleDialogAnswer_RejectedWhileFlowPaused(t *testing.T) {
 
 	notifyCalled := false
 	srv := New(Config{
-		Port: 0, RunDir: runDir, Store: store, UIBus: bus.NewUIBus(),
-		Actions: fakeStageActions{},
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			notifyCalled = true
-			return nil
-		}},
+		Port: 0, RunDir: runDir, Store: store, UIBus: implbus.NewUIBus(),
 		// Flow is held for review.
 		ReviewState: func() (string, []string) { return "paused", []string{"other"} },
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		notifyCalled = true
+		return nil
+	}})
 
 	body, _ := json.Marshal(dialogAnswerRequest{ID: testQuestionID, Phase: "planning", Answer: "yes"})
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/dialog/answer", bytes.NewReader(body))
@@ -80,7 +82,7 @@ func TestHandleDialogAnswer_TOCTOURollsBackBothDurableWrites(t *testing.T) {
 	if err := os.WriteFile(questionPath, []byte(`{"id":"q1","question":"?","allow_custom":true}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,14 +92,13 @@ func TestHandleDialogAnswer_TOCTOURollsBackBothDurableWrites(t *testing.T) {
 	}
 
 	srv := New(Config{
-		Port: 0, RunDir: runDir, Store: store, UIBus: bus.NewUIBus(),
-		Actions: fakeStageActions{},
+		Port: 0, RunDir: runDir, Store: store, UIBus: implbus.NewUIBus(),
 		// Guard passes (reviewState "none"), but a pause races in before notify.
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			return orchestrator.ErrFlowPaused
-		}},
 		ReviewState: func() (string, []string) { return "none", nil },
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		return implorchestrator.ErrFlowPaused
+	}})
 
 	body, _ := json.Marshal(dialogAnswerRequest{ID: testQuestionID, Phase: "planning", Answer: "yes"})
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/dialog/answer", bytes.NewReader(body))
@@ -133,7 +134,7 @@ func TestHandleDialogAnswer_AllowedWhenNotPaused(t *testing.T) {
 	if err := os.WriteFile(questionPath, []byte(`{"id":"q1","question":"?","allow_custom":true}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,14 +145,13 @@ func TestHandleDialogAnswer_AllowedWhenNotPaused(t *testing.T) {
 
 	notifyCalled := false
 	srv := New(Config{
-		Port: 0, RunDir: runDir, Store: store, UIBus: bus.NewUIBus(),
-		Actions: fakeStageActions{},
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			notifyCalled = true
-			return nil
-		}},
+		Port: 0, RunDir: runDir, Store: store, UIBus: implbus.NewUIBus(),
 		ReviewState: func() (string, []string) { return "none", nil },
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		notifyCalled = true
+		return nil
+	}})
 
 	body, _ := json.Marshal(dialogAnswerRequest{ID: testQuestionID, Phase: "planning", Answer: "yes"})
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/dialog/answer", bytes.NewReader(body))
@@ -183,7 +183,7 @@ func TestHandleDialogAnswer_RejectsOutOfOrder(t *testing.T) {
 		}
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,14 +193,13 @@ func TestHandleDialogAnswer_RejectsOutOfOrder(t *testing.T) {
 	}
 
 	srv := New(Config{
-		Port: 0, RunDir: runDir, Store: store, UIBus: bus.NewUIBus(),
-		Actions: fakeStageActions{},
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			return nil
-		}},
+		Port: 0, RunDir: runDir, Store: store, UIBus: implbus.NewUIBus(),
 		ReviewState: func() (string, []string) { return "none", nil },
 		Stages:      StaticStageConfigs{testStageID: {Interactive: true}},
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		return nil
+	}})
 
 	postAnswer := func(id string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(dialogAnswerRequest{ID: id, Phase: "autonomous_execution", Answer: "x"})
@@ -242,7 +241,7 @@ func TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock(t *testing.T) {
 		}
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,14 +251,13 @@ func TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock(t *testing.T) {
 	}
 
 	srv := New(Config{
-		Port: 0, RunDir: runDir, Store: store, UIBus: bus.NewUIBus(),
-		Actions: fakeStageActions{},
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			return nil
-		}},
+		Port: 0, RunDir: runDir, Store: store, UIBus: implbus.NewUIBus(),
 		ReviewState: func() (string, []string) { return "none", nil },
 		Stages:      StaticStageConfigs{testStageID: {Interactive: true}},
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		return nil
+	}})
 
 	postAnswer := func(id string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(dialogAnswerRequest{ID: id, Phase: "autonomous_execution", Answer: "x"})

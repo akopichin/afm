@@ -30,6 +30,14 @@ const (
 	StagePaused             StageStatus = "paused"
 )
 
+// Values of RunStatus.RunState. Finished, Failed and Interrupted are terminal.
+const (
+	RunStateRunning     = "running"
+	RunStateFinished    = "finished"
+	RunStateFailed      = "failed"
+	RunStateInterrupted = "interrupted"
+)
+
 // StageView is the dashboard's joined runtime and configuration view. It has
 // updated_at but no per-stage sequence or conditional action token.
 type StageView struct {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/contracts/flow"
 )
 
 const (

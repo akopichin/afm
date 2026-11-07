@@ -1,6 +1,13 @@
 package main
 
 import (
+	implexecutor "github.com/akopichin/afm-engine/engine/inspection/executor"
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
+
+	"github.com/akopichin/afm/contracts/state"
+
+	orchestrator "github.com/akopichin/afm/contracts/control"
+
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -16,17 +23,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akopichin/afm-engine/engine"
+	implmemorypipeline "github.com/akopichin/afm-engine/engine/inspection/memorypipeline"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/docker"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/memory"
+	"github.com/akopichin/afm/contracts/worktree"
 	"github.com/spf13/cobra"
-
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/executor"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/memory"
-	"github.com/akopichin/afm/pkg/memorypipeline"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/state"
-	"github.com/akopichin/afm/pkg/worktree"
 )
 
 // rebuildOptions — параметры `afm memory rebuild`, собранные из флагов команды.
@@ -38,8 +42,8 @@ type rebuildOptions struct {
 
 // newRebuildPipeline — seam over memorypipeline.New: тесты подменяют её на memorypipeline.New(p, a,
 // memorypipeline.WithRunner(stub)), чтобы не запускать реального агента.
-var newRebuildPipeline = func(p memorypipeline.Prompts, a memorypipeline.AgentConfig) *memorypipeline.Pipeline {
-	return memorypipeline.New(p, a)
+var newRebuildPipeline = func(p implmemorypipeline.Prompts, a implmemorypipeline.AgentConfig) *implmemorypipeline.Pipeline {
+	return implmemorypipeline.New(p, a)
 }
 
 // rebuildHandler выполняет preflight, capture и finalize, соблюдая порядок run-lock → memory-lock и
@@ -49,7 +53,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	defer stop()
 
 	home, _ := os.UserHomeDir()
-	cfg, err := config.LoadFrom(filepath.Join(home, config.AfmDir), fmDir())
+	cfg, err := loadProductConfig(filepath.Join(home, config.AfmDir), fmDir())
 	if err != nil {
 		return err
 	}
@@ -75,7 +79,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 
 	// rebuild нужен стабильный АБСОЛЮТНЫЙ корень — в отличие от `afm run`, который может отдать агентам
 	// унаследованный CWD процесса при пустом root_dir.
-	agentRoot, err := absoluteAgentRoot(rootDir, f)
+	agentRoot, err := engine.AbsoluteAgentRoot(rootDir, f)
 	if err != nil {
 		return err
 	}
@@ -83,7 +87,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	// по имени флоу (нашёл бы `<flow>-...` в основном чекауте, не `<worktree>-...`) и считал бы memory.path от
 	// основного agentRoot, а не от ворктри, где эта память реально писалась.
 	if o.Worktree != "" {
-		base, err := worktreeBase(rootDir, f) // тот же анкор, что у `afm run`
+		base, err := engine.WorktreeBase(rootDir, f) // тот же анкор, что у `afm run`
 		if err != nil {
 			return err
 		}
@@ -96,7 +100,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		}
 		agentRoot = p.Path
 	}
-	memDir, err := resolveMemoryDir(rootDir, agentRoot, f)
+	memDir, err := engine.ResolveMemoryDir(rootDir, agentRoot, f)
 	if err != nil {
 		return err
 	}
@@ -107,7 +111,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 	if o.RunID != "" {
 		runDir, err = resolveExplicitRunDir(runsDir(), runName, o.RunID)
 	} else {
-		runDir, err = state.FindLatestCompletedRunDir(runsDir(), runName, stageIDs)
+		runDir, err = implstate.FindLatestCompletedRunDir(runsDir(), runName, stageIDs)
 	}
 	if err != nil {
 		return err
@@ -123,16 +127,16 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		return err
 	}
 
-	runLock, err := state.TryLockRun(runDir)
+	runLock, err := implstate.TryLockRun(runDir)
 	if err != nil {
-		if errors.Is(err, state.ErrRunLocked) {
+		if errors.Is(err, implstate.ErrRunLocked) {
 			return fmt.Errorf("run %s is active; stop `afm run` or wait", filepath.Base(runDir))
 		}
 		return err
 	}
 	defer runLock.Close() //nolint:errcheck
 
-	rs, err := state.LoadRunState(runDir)
+	rs, err := implstate.LoadRunState(runDir)
 	if err != nil {
 		return err
 	}
@@ -154,11 +158,11 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		}
 	}
 
-	if warns := memorypipeline.ScanUnfinishedPromotions(runDir); len(warns) > 0 {
+	if warns := implmemorypipeline.ScanUnfinishedPromotions(runDir); len(warns) > 0 {
 		fmt.Printf("warning: previous rebuild left an unfinished promotion in %v; re-running rebuilds cleanly\n", warns)
 	}
 
-	prompts, err := loadPrompts(cfg.PromptsDir)
+	prompts, err := engine.LoadPrompts(cfg.PromptsDir)
 	if err != nil {
 		return err
 	}
@@ -175,7 +179,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		used := docker.UsedRecipeCommands(nil, cfg.Client.Command, cfg.Docker.Agents)
 		for cmd := range used {
 			generatedAgents[cmd] = true
-			wrapperSpecs = append(wrapperSpecs, buildWrapperSpec(cmd, cfg.Docker.Agents[cmd], cfg.Client.IsClaudeBare()))
+			wrapperSpecs = append(wrapperSpecs, engine.BuildWrapperSpec(cmd, cfg.Docker.Agents[cmd], cfg.Client.IsClaudeBare()))
 		}
 	}
 	var wrapperDir string
@@ -188,23 +192,23 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		defer os.RemoveAll(wd) //nolint:errcheck
 	}
 
-	agentCfg := memorypipeline.AgentConfig{
+	agentCfg := implmemorypipeline.AgentConfig{
 		Command:     cfg.Client.Command,
 		ExtraArgs:   cfg.Client.ExtraArgs,
-		WrapperDir:  executor.WrapperDirFor(cfg.Client.Command, wrapperDir, generatedAgents),
+		WrapperDir:  implexecutor.WrapperDirFor(cfg.Client.Command, wrapperDir, generatedAgents),
 		RootDir:     agentRoot,
 		IdleTimeout: cfg.Executor.IdleTimeout,
 		Debug:       debugEnabled,
 		Reasoning:   cfg.Client.Reasoning,
 	}
 
-	work, err := memorypipeline.NewUniqueAttemptDir(filepath.Join(runDir, "memory-rebuild"), newAttemptID)
+	work, err := implmemorypipeline.NewUniqueAttemptDir(filepath.Join(runDir, "memory-rebuild"), newAttemptID)
 	if err != nil {
 		return err
 	}
 	agentCfg.RunDir = work // debug.log остаётся внутри рабочей директории попытки
 	pipe := newRebuildPipeline(
-		memorypipeline.Prompts{Reflect: prompts.Reflect, Aggregate: prompts.Aggregate, Prioritize: prompts.Prioritize, Update: prompts.Update},
+		implmemorypipeline.Prompts{Reflect: prompts.Reflect, Aggregate: prompts.Aggregate, Prioritize: prompts.Prioritize, Update: prompts.Update},
 		agentCfg)
 
 	fmt.Printf("using current flow definition and current prompts for historical run %s\n", filepath.Base(runDir))
@@ -213,14 +217,14 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 
 	// CLI создаёт манифест (статус "running", полные метаданные) и центральным defer'ом переводит любой ещё
 	// нетерминальный манифест в failed/cancelled при любом раннем возврате.
-	if err := memorypipeline.WriteManifest(manifestPath, memorypipeline.NewRunningManifest(meta)); err != nil {
+	if err := implmemorypipeline.WriteManifest(manifestPath, implmemorypipeline.NewRunningManifest(meta)); err != nil {
 		return err
 	}
 	var finalErr error
-	defer memorypipeline.FinalizeManifestOnExit(manifestPath, &finalErr, ctx)
+	defer implmemorypipeline.FinalizeManifestOnExit(manifestPath, &finalErr, ctx)
 
 	// Фаза 1: capture (без лока памяти).
-	datasets, err := pipe.CaptureAll(ctx, memorypipeline.CaptureRequest{
+	datasets, err := pipe.CaptureAll(ctx, implmemorypipeline.CaptureRequest{
 		RunDir: runDir, WorkDir: work, Stages: f.Stages, ForceReflect: o.ForceReflect, ManifestPath: manifestPath})
 	if err != nil {
 		finalErr = err
@@ -229,7 +233,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 
 	// Фаза 2: лок памяти -> повторный commit-preflight -> finalize -> коммит
 	// (всё под локом).
-	memLock, err := memorypipeline.AcquireMemoryLock(ctx, memDir)
+	memLock, err := implmemorypipeline.AcquireMemoryLock(ctx, memDir)
 	if err != nil {
 		finalErr = err
 		return err
@@ -242,7 +246,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 		}
 	}
 
-	report, err := pipe.Finalize(ctx, memorypipeline.FinalizeRequest{
+	report, err := pipe.Finalize(ctx, implmemorypipeline.FinalizeRequest{
 		Meta: meta, RunDir: runDir, WorkDir: work, MemoryDir: memDir, Stages: f.Stages, Memory: f.Memory,
 		Datasets: datasets, DryRun: o.DryRun, ManifestPath: manifestPath})
 	if err != nil {
@@ -260,7 +264,7 @@ var rebuildHandler = func(ctx context.Context, o rebuildOptions) error {
 			return err
 		}
 	}
-	return memorypipeline.MarkManifestCompleted(manifestPath) // CLI пишет ФИНАЛЬНЫЙ "completed"
+	return implmemorypipeline.MarkManifestCompleted(manifestPath) // CLI пишет ФИНАЛЬНЫЙ "completed"
 }
 
 // hasWritableTarget проверяет наличие non-script стадии с write-reflect; одного memory.mode:w
@@ -327,12 +331,12 @@ func sha256Hex(data []byte) string {
 
 // buildOperationMeta собирает OperationMeta для манифеста этой попытки: хэширование содержимого флоу и
 // промптов — забота CLI, не пакета конвейера.
-func buildOperationMeta(cfg config.Config, f *flow.Flow, flowPath, runDir, agentRoot, memDir string, prompts orchestrator.Prompts, effectiveCommit bool) memorypipeline.OperationMeta {
+func buildOperationMeta(cfg config.Config, f *flow.Flow, flowPath, runDir, agentRoot, memDir string, prompts orchestrator.Prompts, effectiveCommit bool) implmemorypipeline.OperationMeta {
 	flowSHA := ""
 	if data, err := os.ReadFile(flowPath); err == nil {
 		flowSHA = sha256Hex(data)
 	}
-	return memorypipeline.OperationMeta{
+	return implmemorypipeline.OperationMeta{
 		RunID:           filepath.Base(runDir),
 		RunPath:         runDir,
 		FlowPath:        flowPath,
@@ -344,10 +348,10 @@ func buildOperationMeta(cfg config.Config, f *flow.Flow, flowPath, runDir, agent
 		EffectiveCommit: effectiveCommit,
 		PromptsDir:      cfg.PromptsDir,
 		PromptSHA256: map[string]string{
-			memorypipeline.KindReflect:    sha256Hex([]byte(prompts.Reflect)),
-			memorypipeline.KindAggregate:  sha256Hex([]byte(prompts.Aggregate)),
-			memorypipeline.KindPrioritize: sha256Hex([]byte(prompts.Prioritize)),
-			memorypipeline.KindUpdate:     sha256Hex([]byte(prompts.Update)),
+			implmemorypipeline.KindReflect:    sha256Hex([]byte(prompts.Reflect)),
+			implmemorypipeline.KindAggregate:  sha256Hex([]byte(prompts.Aggregate)),
+			implmemorypipeline.KindPrioritize: sha256Hex([]byte(prompts.Prioritize)),
+			implmemorypipeline.KindUpdate:     sha256Hex([]byte(prompts.Update)),
 		},
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -355,7 +359,7 @@ func buildOperationMeta(cfg config.Config, f *flow.Flow, flowPath, runDir, agent
 
 // printReport печатает сводку прогона: счётчики плюс unified diff для изменённых целей. НИКОГДА не
 // печатает stdout агента/промпты/диалог — Report их и не содержит, только пути/хэши/diff.
-func printReport(report memorypipeline.Report, dryRun bool) {
+func printReport(report implmemorypipeline.Report, dryRun bool) {
 	changed := 0
 	for _, t := range report.Targets {
 		if t.Changed {
@@ -434,7 +438,7 @@ func nearestExistingAncestor(p string) string {
 
 // maybeCommit коммитит ТОЛЬКО опубликованные изменённые цели — явным списком путей через
 // memory.CommitPaths, а не весь memDir целиком. На успехе патчит манифест CommitCreated/CommitSHA.
-func maybeCommit(memDir string, report memorypipeline.Report, manifestPath string) error {
+func maybeCommit(memDir string, report implmemorypipeline.Report, manifestPath string) error {
 	var paths []string
 	for _, t := range report.Targets {
 		if t.Changed && t.Published {
@@ -447,7 +451,7 @@ func maybeCommit(memDir string, report memorypipeline.Report, manifestPath strin
 
 	committed, sha, commitErr := memory.CommitPaths(memDir, fmt.Sprintf("chore(memory): rebuild from %s", report.RunID), paths)
 
-	m, lerr := memorypipeline.LoadManifest(manifestPath)
+	m, lerr := implmemorypipeline.LoadManifest(manifestPath)
 	if lerr != nil {
 		// Манифест нечитаем — сама попытка коммита уже произошла (или провалилась) независимо от этого; сообщаем
 		// об исходной ошибке коммита, если она есть, иначе о невозможности записать исход.
@@ -458,17 +462,17 @@ func maybeCommit(memDir string, report memorypipeline.Report, manifestPath strin
 	}
 
 	if commitErr != nil {
-		m.Status = memorypipeline.StatusFailed
+		m.Status = implmemorypipeline.StatusFailed
 		m.Errors = append(m.Errors, commitErr.Error())
 		m.CommitError = commitErr.Error()
 		m.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-		_ = memorypipeline.WriteManifest(manifestPath, m)
+		_ = implmemorypipeline.WriteManifest(manifestPath, m)
 		return fmt.Errorf("memory files updated but commit failed: %w", commitErr)
 	}
 
 	m.CommitCreated = committed
 	m.CommitSHA = sha
-	_ = memorypipeline.WriteManifest(manifestPath, m)
+	_ = implmemorypipeline.WriteManifest(manifestPath, m)
 	return nil
 }
 
@@ -533,7 +537,7 @@ func resolveExplicitRunDir(runsBase, name, id string) (string, error) {
 		strings.ContainsAny(id, `/\`) {
 		return "", fmt.Errorf("invalid run id %q: must be a bare run directory name", id)
 	}
-	if !state.RunIDBelongsTo(id, name) {
+	if !implstate.RunIDBelongsTo(id, name) {
 		return "", fmt.Errorf("run id %q does not belong to %q", id, name)
 	}
 	dir := filepath.Join(runsBase, id)

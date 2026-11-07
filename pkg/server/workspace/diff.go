@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akopichin/afm/pkg/gitcmd"
+	"github.com/akopichin/afm/contracts/gitcmd"
 	"github.com/aymanbagabas/go-udiff"
 )
 

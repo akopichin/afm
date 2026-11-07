@@ -1,6 +1,9 @@
 package server
 
 import (
+	implstagefiles "github.com/akopichin/afm-engine/testkit/orchestrator/stagefiles"
+	stagefiles "github.com/akopichin/afm/contracts/activity"
+
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,9 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func getActivity(t *testing.T, srv *Server, target string) *httptest.ResponseRecorder {
@@ -112,7 +114,7 @@ func TestAssistantActivity_MapsReaderErrors(t *testing.T) {
 		wantBody string
 	}{
 		{"unknown task", &state.OperationRejectedError{Code: assistants.CodeNotFound}, http.StatusNotFound, "not_found"},
-		{"bad cursor", fmt.Errorf("read: %w", stagefiles.ErrInvalidCursor), http.StatusBadRequest, "invalid_cursor"},
+		{"bad cursor", fmt.Errorf("read: %w", implstagefiles.ErrInvalidCursor), http.StatusBadRequest, "invalid_cursor"},
 		{"unavailable", ErrAssistantsUnavailable, http.StatusServiceUnavailable, "service_unavailable"},
 		{"unexpected", errors.New("disk exploded"), http.StatusInternalServerError, errCodeInternal},
 	}
@@ -147,14 +149,14 @@ func (f *fileActivityReader) TaskActivity(taskID string, q stagefiles.ActivityQu
 	if !f.tasks[taskID] {
 		return stagefiles.ActivityPage{}, &state.OperationRejectedError{Code: assistants.CodeNotFound}
 	}
-	return stagefiles.ReadTaskActivity(f.runDir, taskID, q)
+	return implstagefiles.ReadTaskActivity(f.runDir, taskID, q)
 }
 
 func TestAssistantActivity_PagesThroughARealNoticesFile(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 5; i++ {
-		stagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: fmt.Sprint("a", i), TaskID: "t-1", Detail: fmt.Sprint("a", i)})
-		stagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: fmt.Sprint("b", i), TaskID: "t-2", Detail: "other"})
+		implstagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: fmt.Sprint("a", i), TaskID: "t-1", Detail: fmt.Sprint("a", i)})
+		implstagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: fmt.Sprint("b", i), TaskID: "t-2", Detail: "other"})
 	}
 	srv := newTestServer(t, Config{AssistantsReader: &fileActivityReader{runDir: dir, tasks: map[string]bool{"t-1": true, "t-2": true}}})
 
@@ -186,7 +188,7 @@ func TestAssistantActivity_PagesThroughARealNoticesFile(t *testing.T) {
 	if ids(older) != "a1,a2" || !older.HasOlder {
 		t.Fatalf("older = %s older=%v", ids(older), older.HasOlder)
 	}
-	stagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: "a5", TaskID: "t-1"})
+	implstagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: "a5", TaskID: "t-1"})
 	fresh := page(fmt.Sprintf("/api/assistants/t-1/activity?after=%d", tail.After))
 	if ids(fresh) != "a5" {
 		t.Fatalf("after = %s, want only the entry written since the tail", ids(fresh))
@@ -201,7 +203,7 @@ func TestAssistantActivity_PagesThroughARealNoticesFile(t *testing.T) {
 
 func TestAssistantActivity_CursorsAreJSONStrings(t *testing.T) {
 	dir := t.TempDir()
-	stagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: "a1", TaskID: "t-1"})
+	implstagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: "a1", TaskID: "t-1"})
 	srv := newTestServer(t, Config{AssistantsReader: &fileActivityReader{runDir: dir, tasks: map[string]bool{"t-1": true}}})
 	w := getActivity(t, srv, "/api/assistants/t-1/activity")
 	var raw struct {
@@ -223,7 +225,7 @@ func TestAssistantActivity_ResponseSizeIsBoundedByTheLimitCap(t *testing.T) {
 	dir := t.TempDir()
 	big := strings.Repeat("x", 16*1024)
 	for i := 0; i < 3*stagefiles.MaxActivityLimit; i++ {
-		stagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: fmt.Sprint("e", i), TaskID: "t-1", Detail: big})
+		implstagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{EventID: fmt.Sprint("e", i), TaskID: "t-1", Detail: big})
 	}
 	srv := newTestServer(t, Config{AssistantsReader: &fileActivityReader{runDir: dir, tasks: map[string]bool{"t-1": true}}})
 	w := getActivity(t, srv, "/api/assistants/t-1/activity?limit=1000")
@@ -239,7 +241,7 @@ func TestAssistantActivity_ResponseSizeIsBoundedByTheLimitCap(t *testing.T) {
 func TestAssistantActivity_PassesTypedFieldsToTheWire(t *testing.T) {
 	dir := t.TempDir()
 	exit := 3
-	stagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{
+	implstagefiles.AppendNotice(dir, "", "assistant_activity", stagefiles.ActivityData{
 		EventID: "a1", TaskID: "t-1", Tool: "Bash", Kind: "tool_finished", InvocationID: "inv-1", ItemID: "tool:c1",
 		Revision: 2, Outcome: "failed", ExitCode: &exit, StartedAt: "2026-10-27T10:00:00Z", FinishedAt: "2026-10-27T10:00:01Z",
 	})

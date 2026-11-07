@@ -2,13 +2,21 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/pkg/server"
 )
 
 var ansiSequence = regexp.MustCompile("\033\\[[0-9;]*m")
@@ -129,7 +137,7 @@ func decodeDashboardJSON(t *testing.T, url string, into any) {
 	}
 }
 
-// TestStartDashboard_HideAttachHelpersInStatus: startDashboard resolves config and env once and the result reaches
+// TestStartDashboard_HideAttachHelpersInStatus: startServer resolves config and env once and the result reaches
 // /api/status; an explicit env overrides the config value in both directions.
 func TestStartDashboard_HideAttachHelpersInStatus(t *testing.T) {
 	hide, show := true, false
@@ -170,4 +178,125 @@ func TestStartDashboard_HideAttachHelpersInStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The dashboard launcher mounts the Web UI; the API server alone does not serve it.
+func TestStartDashboard_ServesWebUI(t *testing.T) {
+	base := startGraphTestDashboard(t, config.Default())
+
+	code, body := getBody(t, base+"/")
+	if code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", code)
+	}
+	if !strings.Contains(body, `id="root"`) {
+		t.Errorf("GET / is not the dashboard index: %.200s", body)
+	}
+}
+
+func TestOpensHostBrowser(t *testing.T) {
+	port, none := 8080, 0
+	yes, no := true, false
+	tests := []struct {
+		name   string
+		cfg    config.ServerConfig
+		launch launchMode
+		want   bool
+	}{
+		{"dashboard with open_browser", config.ServerConfig{Port: &port, OpenBrowser: &yes}, launchDashboard, true},
+		{"core never opens", config.ServerConfig{Port: &port, OpenBrowser: &yes}, launchCore, false},
+		{"open_browser off", config.ServerConfig{Port: &port, OpenBrowser: &no}, launchDashboard, false},
+		{"no API", config.ServerConfig{Port: &none, OpenBrowser: &yes}, launchDashboard, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := opensHostBrowser(config.Config{Server: tt.cfg}, tt.launch); got != tt.want {
+				t.Errorf("opensHostBrowser = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Core runs the same composition without a page: the API answers, the UI path does not, and nothing opens a tab.
+func TestExecuteFlow_CoreServesAPIWithoutUI(t *testing.T) {
+	fx := newExitOnFailFixture(t)
+	fx.write("flow.yaml", interactiveFlow)
+	f, err := flow.ParseFile(fx.flowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := pickFreeLoopbackPort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	openTab := true
+	cfg := config.Config{
+		Client: config.ClientConfig{Command: writePolicyAgent(t)},
+		Server: config.ServerConfig{Port: &port, OpenBrowser: &openTab},
+	}
+
+	var opened atomic.Int32
+	prevOpen := openBrowser
+	openBrowser = func(string) { opened.Add(1) }
+	t.Cleanup(func() { openBrowser = prevOpen })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stdout, _ := captureOutput(t, func() {
+		flowRun := startBackgroundFlow(ctx, f, cfg, runOptions{launch: launchCore, runName: f.Name})
+		defer flowRun.stop(t, cancel)
+		// An interactive stage waits for the user's answer: the policies come from the API, not from a page.
+		waitFor(t, "the plan to wait for approval", func() bool {
+			dirs := fx.runDirs()
+			return len(dirs) == 1 && slices.Contains(stageEventsSoFar(filepath.Join(fx.root, ".afm", "runs", dirs[0])), "plan_ready:awaiting_approval")
+		})
+		base := fmt.Sprintf("http://localhost:%d", port)
+
+		var rt struct {
+			Mode  string `json:"mode"`
+			Ready bool   `json:"ready"`
+		}
+		decodeDashboardJSON(t, base+"/api/runtime", &rt)
+		if rt.Mode != "core" || !rt.Ready {
+			t.Errorf("/api/runtime = %+v, want mode core and ready", rt)
+		}
+		if code, _ := getBody(t, base+"/"); code != http.StatusNotFound {
+			t.Errorf("GET / = %d, want 404 without a Web UI", code)
+		}
+	})
+
+	if !strings.Contains(stdout, "api: http://localhost:") {
+		t.Errorf("stdout lacks the api line: %q", stdout)
+	}
+	if strings.Contains(stdout, "dashboard:") {
+		t.Errorf("core output mentions the dashboard: %q", stdout)
+	}
+	if got := opened.Load(); got != 0 {
+		t.Errorf("browser tab opened %d times in core, want 0", got)
+	}
+}
+
+func TestStartServer_CoreStartFailureNamesTheAPI(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = busy.Close() })
+	port := busy.Addr().(*net.TCPAddr).Port
+	cfg := config.Config{Server: config.ServerConfig{Port: &port}}
+
+	_, _, err = startServer(cfg, server.Config{}, nil, launchCore, true)
+	if err == nil || !strings.HasPrefix(err.Error(), "start API server:") {
+		t.Fatalf("startServer error = %v, want a %q prefix", err, "start API server:")
+	}
+}
+
+// stageEventsSoFar — stageEvents для журнала, который ран ещё пишет: пустой или оборванный хвост не ошибка.
+func stageEventsSoFar(runDir string) []string {
+	var out []string
+	for _, tr := range eventsSoFar(runDir) {
+		if tr.StageID == "build" {
+			out = append(out, tr.Event+":"+string(tr.To))
+		}
+	}
+	return out
 }

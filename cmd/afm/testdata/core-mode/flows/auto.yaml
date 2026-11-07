@@ -1,0 +1,6 @@
+name: core-auto
+stages:
+  - id: build
+    agents: [planning, implementation]
+    command: __AGENT__
+    auto_approve: true

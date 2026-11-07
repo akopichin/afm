@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // errUnknownThreadForTest stands in for the bare error ReadThread returns for an unknown/foreign thread id
@@ -708,7 +708,8 @@ func TestMesh_SideFailureReadableAfterEventHistoryCap(t *testing.T) {
 	fake.threadPage = MeshMessagePage{Messages: messages, SideAgentFailedIDs: failures}
 	fake.stagePage = MeshStageMessagePage{Messages: messages, SideAgentFailedIDs: failures}
 	// New registers capability routes when the server is constructed.
-	srv = New(Config{RunDir: srv.runDir, Store: srv.store, UIBus: srv.uiBus, Actions: fakeStageActions{}, Mesh: fake})
+	srv = New(Config{RunDir: srv.runDir, Store: srv.store, UIBus: srv.uiBus, Mesh: fake})
+	srv.useFakes(fakeStageActions{}, nil)
 	eventsReq := httptest.NewRequest(http.MethodGet, "/api/events", nil)
 	events := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(events, eventsReq)

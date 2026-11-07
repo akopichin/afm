@@ -1,10 +1,15 @@
 package afmsdk
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -436,5 +441,145 @@ stages:
 	}
 	if err := run.Cleanup(); err != nil {
 		t.Fatalf("Cleanup: %v", err)
+	}
+}
+
+// lockedBuffer is a process output that can be read while the process still writes.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// askingAgentScript asks one question while planning, returns the plan after the answer and finishes the
+// implementation. %s is the afm binary.
+const askingAgentScript = `#!/bin/sh
+afm=%s
+if [ ! -e "$AFM_STAGE_DIR/plan.md" ]; then
+	echo "which database?" | "$afm" stage ask --option sqlite --option postgres > /dev/null
+	until "$afm" stage wait-answer --timeout 5 > /dev/null; do :; done
+	printf '%%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"## Tasks\n\n- [ ] step\n\n## Assumptions\n\nnone\n\n## Acceptance Criteria\n\n- done\n"}]}}'
+else
+	echo done > "$AFM_STAGE_DIR/.done"
+	echo summary > "$AFM_STAGE_DIR/execution_summary.md"
+fi
+echo '{"type":"result","subtype":"success"}'
+`
+
+// TestIntegration_ConnectToCoreMode drives `afm run --mode core` with the unchanged Connect client: status, plan,
+// answer and approval over HTTP, then SIGINT in the final hold ends the process with exit 0.
+func TestIntegration_ConnectToCoreMode(t *testing.T) {
+	bin := resolveAfmBinary(t)
+	workDir := t.TempDir()
+	agentPath := filepath.Join(workDir, "asking-agent.sh")
+	if err := os.WriteFile(agentPath, []byte(fmt.Sprintf(askingAgentScript, bin)), 0755); err != nil {
+		t.Fatalf("write asking agent: %v", err)
+	}
+	flowPath := writeFlow(t, workDir, fmt.Sprintf(`name: sdk-core
+stages:
+  - id: build
+    interactive: true
+    agents: [planning, implementation]
+    command: %s
+`, agentPath))
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick a port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+
+	// Only PATH and a throwaway HOME: nothing of the developer's afm, Docker or agent configuration leaks in.
+	cmd := exec.Command(bin, "run", flowPath, "--dir", workDir, "--mode", "core", "--port", fmt.Sprint(port)) //nolint:gosec // G204: the afm binary under test
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"AFM_WORKTREES=0", "AFM_USE_DOCKER=0", "AFM_BROWSER=0", "AFM_SIDEAGENT=0",
+	}
+	out := &lockedBuffer{}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start afm: %v", err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	stopped := false
+	t.Cleanup(func() {
+		if !stopped {
+			_ = cmd.Process.Kill()
+			<-exited
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	var run *Run
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if run, err = Connect(ctx, port); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Connect: %v\n%s", err, out.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	waitForStageStatus(ctx, t, run, "build", StageAwaitingUserInput, 30*time.Second)
+	entries, err := run.Dialog(ctx, "build")
+	if err != nil {
+		t.Fatalf("Dialog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Question != "which database?" {
+		t.Fatalf("Dialog = %+v, want the one open question", entries)
+	}
+	if err := run.Answer(ctx, "build", DialogAnswer{ID: entries[0].ID, Phase: entries[0].Phase, Answer: "sqlite", FromOptions: true}); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+
+	waitForStageStatus(ctx, t, run, "build", StageAwaitingApproval, 30*time.Second)
+	plan, err := run.Plan(ctx, "build")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !strings.Contains(string(plan), "## Tasks") {
+		t.Fatalf("Plan = %q, want the agent's plan", plan)
+	}
+	if err := run.Approve(ctx, "build"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	waitForStageStatus(ctx, t, run, "build", StageDone, 30*time.Second)
+	// The hold prints after the run result: SIGINT before it would interrupt a workflow, not end a finished one.
+	for !strings.Contains(out.String(), "holding the final state") {
+		if time.Now().After(deadline.Add(60 * time.Second)) {
+			t.Fatalf("core did not hold the final state:\n%s", out.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("SIGINT: %v", err)
+	}
+	select {
+	case err := <-exited:
+		stopped = true
+		if err != nil {
+			t.Fatalf("afm exited with %v after SIGINT in the final hold, want exit 0\n%s", err, out.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("afm did not exit after SIGINT\n%s", out.String())
 	}
 }

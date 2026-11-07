@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // TestCli_DisabledFeatureExplainsResumeBlock — T11.5: hitting `afm retry`/`afm revise`/`afm approve` against
@@ -15,21 +16,21 @@ func TestCli_DisabledFeatureExplainsResumeBlock(t *testing.T) {
 	chdirTemp(t)
 	runDir := makeRunState(t, "flow-20260101-120000", "impl", state.StatusAwaitingAssistants)
 
-	appendControlLine(t, runDir, 2, state.Control{
+	appendControlLine(t, runDir, 2, implstate.Control{
 		Kind:   "task_created",
 		Actor:  state.Actor{Kind: "user"},
-		Target: state.Target{TaskID: "sec-1", StageID: "impl"},
-		Payload: mustJSON(t, state.TaskCreatedPayload{
+		Target: implstate.Target{TaskID: "sec-1", StageID: "impl"},
+		Payload: mustJSON(t, implstate.TaskCreatedPayload{
 			ProfileID: "security-reviewer",
 			Title:     "Security pass on the new endpoint",
 			Mode:      "required",
 			CreatedBy: "user",
 		}),
 	})
-	appendControlLine(t, runDir, 3, state.Control{
+	appendControlLine(t, runDir, 3, implstate.Control{
 		Kind:    "task_status_changed",
-		Target:  state.Target{TaskID: "sec-1"},
-		Payload: mustJSON(t, state.TaskStatusChangedPayload{Status: "failed", Reason: "helper process crashed"}),
+		Target:  implstate.Target{TaskID: "sec-1"},
+		Payload: mustJSON(t, implstate.TaskStatusChangedPayload{Status: "failed", Reason: "helper process crashed"}),
 	})
 
 	assertExplains := func(t *testing.T, err error) {

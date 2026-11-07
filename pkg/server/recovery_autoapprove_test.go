@@ -1,6 +1,13 @@
 package server
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
+	"github.com/akopichin/afm/contracts/state"
+
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+
 	"context"
 	"encoding/json"
 	"net/http"
@@ -10,11 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/config"
+	bus "github.com/akopichin/afm/contracts/events"
+	"github.com/akopichin/afm/contracts/flow"
 )
 
 func TestRecovery_AutoApproveAutoAnswerQAndASurviveRestart(t *testing.T) {
@@ -50,16 +55,16 @@ func TestRecovery_AutoApproveAutoAnswerQAndASurviveRestart(t *testing.T) {
 	}}
 
 	// --- Phase 1: drive the run to completion. ---
-	store, err := state.Open(runDir, []string{stageID})
+	store, err := implstate.Open(runDir, []string{stageID})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	orch := orchestrator.New(orchestrator.Options{
+	orch := implorchestrator.New(implorchestrator.Options{
 		RunDir:          runDir,
 		Stages:          stages,
 		Store:           store,
 		Config:          config.Default(),
-		Prompts:         orchestrator.DefaultPrompts(),
+		Prompts:         implorchestrator.DefaultPrompts(),
 		RequireApproval: true, // proves the auto_approve branch, not a fast path
 	})
 
@@ -76,21 +81,21 @@ func TestRecovery_AutoApproveAutoAnswerQAndASurviveRestart(t *testing.T) {
 	}
 
 	// --- Phase 2: simulate an afm restart — reopen the SAME run dir fresh. ---
-	store2, err := state.Open(runDir, []string{stageID})
+	store2, err := implstate.Open(runDir, []string{stageID})
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { store2.Close() })
 	srv := New(Config{
-		Port:    0,
-		RunDir:  runDir,
-		Store:   store2,
-		UIBus:   bus.NewUIBus(),
-		Actions: fakeStageActions{},
+		Port:   0,
+		RunDir: runDir,
+		Store:  store2,
+		UIBus:  implbus.NewUIBus(),
 		Stages: StaticStageConfigs{
 			stageID: {Interactive: false, AutoApprove: true},
 		},
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 
 	// --- /api/status: done + auto_approve + show_dialog, recovered from the log. ---
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/status", nil)

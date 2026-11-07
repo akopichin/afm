@@ -1,6 +1,9 @@
 package server
 
 import (
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,9 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
-	"github.com/akopichin/afm/pkg/state"
+	stagefiles "github.com/akopichin/afm/contracts/activity"
+	"github.com/akopichin/afm/contracts/assistants"
 )
 
 // fakeAssistantActions/fakeAssistantsReader back the HTTP layer under test with an in-memory, idempotent
@@ -425,7 +427,7 @@ func TestList_NormalizedTreeNoDuplicateSubtrees(t *testing.T) {
 // A task_result event carries the on_message binding (request_id, turn) flat in data next to the result's own
 // fields, the way the dashboard reads it.
 func TestEvents_TaskResultKeepsRequestBindingFlat(t *testing.T) {
-	payload, err := json.Marshal(state.TaskResultPayload{
+	payload, err := json.Marshal(implstate.TaskResultPayload{
 		Result:    assistants.Result{Summary: "answered"},
 		RequestID: "mm-7", Turn: 2,
 	})

@@ -1,22 +1,16 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"maps"
-	"os"
-	"path/filepath"
 	"reflect"
-	"slices"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/browser"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/lifecyclehooks"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/browser"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/lifecyclehooks"
 )
 
 // interCycleDrainGrace — сколько dashboard держит финальное состояние рана между циклами repeat. Вкладку
@@ -41,6 +35,7 @@ type cycleLoop struct {
 	flowPath        string        // определяется один раз до первого цикла
 	cfg             config.Config // CLI > config; max_parallel флоу накладывается заново на каждом цикле
 	cliMaxParallel  bool          // --max-parallel задан и сильнее max_parallel флоу
+	launch          launchMode
 	worktreeName    string
 	worktreeDir     string
 	requireApproval bool
@@ -55,6 +50,7 @@ type cycleLoop struct {
 // один раз при завершении повторения после успешного цикла; при ошибке или отмене раны остаются как есть.
 func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks.RegisteredHook) (created []string, err error) {
 	opts := runOptions{
+		launch:          l.launch,
 		requireApproval: l.requireApproval,
 		exitOnFail:      l.exitOnFail,
 		worktreeDir:     l.worktreeDir,
@@ -91,15 +87,19 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 			return created, fmt.Errorf("cycle %d: run %s did not complete successfully; repeat stopped", opts.cycle, res.RunID)
 		}
 		completed++
+		early := next
 		if next.continues() {
 			// Ранняя оценка выбрала лишь длину паузы dashboard; за паузу flow.yaml мог измениться, поэтому
 			// создание следующего рана решает свежее чтение перед run dir.
 			next = l.decideNext(ctx, f, hooks, completed)
 		}
+		// Core держит последний результат до Ctrl+C: сигнал владельца при явно финальной ранней оценке — штатный
+		// конец, а не прерывание.
+		finalHold := l.launch == launchCore && (early.stopReason != "" || early.err != nil)
 		switch {
-		// next может быть ранней оценкой из opts.afterRun, посчитанной до паузы dashboard: Ctrl+C во время
-		// самой паузы должен приводить к прерыванию, даже если next уже нёс err/stopReason до отмены.
-		case ctx.Err() != nil:
+		// next может быть ранней оценкой из opts.afterRun, посчитанной до паузы: Ctrl+C во время самой паузы
+		// между циклами должен приводить к прерыванию, даже если next уже нёс err/stopReason до отмены.
+		case ctx.Err() != nil && !finalHold:
 			return created, runExitError(ctx, ctx.Err(), "")
 		case next.err != nil:
 			return created, next.err
@@ -190,32 +190,27 @@ func (l cycleLoop) reload(prev *flow.Flow, prevHooks []lifecyclehooks.Registered
 	return next, hooks, "", nil
 }
 
-// restartError — правка flow.yaml, которую нельзя применить внутри живого процесса.
-func restartError(format string, args ...any) error {
-	return fmt.Errorf("%s; restart `afm run` to apply it", fmt.Sprintf(format, args...))
-}
-
 // checkReloadCompatible отклоняет правки, меняющие worktree или Docker-монтирование: их создаёт
 // `afm run` один раз до первого цикла.
 func (l cycleLoop) checkReloadCompatible(prev, next *flow.Flow) error {
 	if prev.Name != next.Name {
-		return restartError("flow name changed from %q to %q", prev.Name, next.Name)
+		return engine.RestartError("flow name changed from %q to %q", prev.Name, next.Name)
 	}
 	prevWorktrees := worktreesEnabled(l.worktreeName, l.cfg, prev)
 	if nextWorktrees := worktreesEnabled(l.worktreeName, l.cfg, next); prevWorktrees != nextWorktrees {
-		return restartError("worktrees changed from %t to %t", prevWorktrees, nextWorktrees)
+		return engine.RestartError("worktrees changed from %t to %t", prevWorktrees, nextWorktrees)
 	}
 	if prevWorktrees {
-		prevBase, err := worktreeBase(absRootDir(), prev)
+		prevBase, err := engine.WorktreeBase(absRootDir(), prev)
 		if err != nil {
 			return err
 		}
-		nextBase, err := worktreeBase(absRootDir(), next)
+		nextBase, err := engine.WorktreeBase(absRootDir(), next)
 		if err != nil {
 			return err
 		}
 		if prevBase != nextBase {
-			return restartError("root_dir changed the worktree base from %q to %q", prevBase, nextBase)
+			return engine.RestartError("root_dir changed the worktree base from %q to %q", prevBase, nextBase)
 		}
 	}
 	if config.ReExecedIntoContainer() {
@@ -228,28 +223,28 @@ func (l cycleLoop) checkReloadCompatible(prev, next *flow.Flow) error {
 // другая Docker-проекция (команды, recipes, Codex-state) требуют нового контейнера.
 func (l cycleLoop) checkContainerReload(prev, next *flow.Flow) error {
 	project := absRootDir()
-	prevRoot, err := absoluteAgentRoot(project, prev)
+	prevRoot, err := engine.AbsoluteAgentRoot(project, prev)
 	if err != nil {
 		return err
 	}
-	nextRoot, err := absoluteAgentRoot(project, next)
+	nextRoot, err := engine.AbsoluteAgentRoot(project, next)
 	if err != nil {
 		return err
 	}
-	if nextRoot != prevRoot && !isSubPath(project, nextRoot) {
-		return restartError("root_dir %q is outside the Docker-mounted project %q and needs a new mount", nextRoot, project)
+	if nextRoot != prevRoot && !engine.IsSubPath(project, nextRoot) {
+		return engine.RestartError("root_dir %q is outside the Docker-mounted project %q and needs a new mount", nextRoot, project)
 	}
 	// The saved tasks of this run were prepared at start; only what the flows themselves need is compared.
-	prevProj, err := projectDocker(prev, l.cfg, nil)
+	prevProj, err := engine.ProjectDocker(prev, l.cfg, nil)
 	if err != nil {
 		return err
 	}
-	nextProj, err := projectDocker(next, l.cfg, nil)
+	nextProj, err := engine.ProjectDocker(next, l.cfg, nil)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(prevProj, nextProj) {
-		return restartError("agent commands, docker recipes or Codex state changed, but the container mounts are fixed")
+		return engine.RestartError("agent commands, docker recipes or Codex state changed, but the container mounts are fixed")
 	}
 	return l.checkSkillLibrariesChecked(next, project)
 }
@@ -258,100 +253,17 @@ func (l cycleLoop) checkContainerReload(prev, next *flow.Flow) error {
 // here as on the host can only be judged on the host, so a library the host did not check at re-exec needs a
 // restart, which runs that check again.
 func (l cycleLoop) checkSkillLibrariesChecked(next *flow.Flow, project string) error {
-	base, err := effectiveRoot(project, l.worktreeDir, next)
+	base, err := engine.EffectiveRoot(project, l.worktreeDir, next)
 	if err != nil {
 		return err
 	}
-	return checkedByHost(skillLibraryDirs(plannedSkillRun(next, l.cfg, base, nil)))
-}
-
-// checkedByHost: inside the container a library is read only if the host checked that very path at re-exec.
-func checkedByHost(libs []string) error {
-	checked := filepath.SplitList(os.Getenv(docker.SkillLibrariesEnvVar))
-	for _, lib := range libs {
-		if !slices.Contains(checked, lib) {
-			return restartError("skill library %s was not checked when this container started", lib)
-		}
-	}
-	return nil
-}
-
-// dockerProjection — то, что из flow и config попадает в mount/transport контейнера. Её строит reexecFlow на
-// хосте, prepareRunEnvironment в контейнере, и ею же перечитывание flow.yaml сравнивает новый flow со старым.
-type dockerProjection struct {
-	Recipes         map[string]config.AgentRecipe // только используемые рецепты
-	Generated       map[string]bool               // команды рецептов, для которых создаются wrapper'ы
-	Extra           []string                      // команды профилей и сохранённых задач помощников; отсортированы
-	Commands        []string                      // docker.CommandNames: команды, которые ищутся на хосте
-	MountCodexState bool
-}
-
-// projectDocker: resume — команды незавершённых задач сохранённого рана (resumeTaskCommands), nil у нового рана.
-func projectDocker(f *flow.Flow, cfg config.Config, resume []string) (dockerProjection, error) {
-	p := dockerProjection{Extra: helperCommands(cfg, f, resume)}
-	p.Commands = docker.CommandNames(f, cfg.Client.Command, p.Extra)
-	if cfg.Docker.IsAutoShim() {
-		if err := cfg.Docker.ValidateAgents(); err != nil {
-			return p, err
-		}
-		// Mount discovery and secret resolution use the same set of used recipes.
-		p.Recipes = docker.UsedRecipes(f, cfg.Client.Command, cfg.Docker.Agents, p.Extra...)
-		p.Generated = make(map[string]bool, len(p.Recipes))
-		for cmd := range p.Recipes {
-			p.Generated[cmd] = true
-		}
-	}
-	// A helper profile or saved task can run the codex adapter itself and needs its state like a stage does.
-	p.MountCodexState = docker.UsesCodex(f, cfg.Client.Command, p.Recipes) ||
-		slices.ContainsFunc(p.Extra, func(cmd string) bool { return docker.UsesCodex(nil, cmd, nil) })
-	return p, nil
-}
-
-// resumeTaskCommands returns the commands of the saved run's unfinished tasks that can still run a turn: a task keeps
-// the executor it was created with, which the current config may no longer name. nil for a new run.
-func resumeTaskCommands(saved *savedRun, f *flow.Flow, cfg config.Config) []string {
-	if saved == nil {
-		return nil
-	}
-	stageCommands := saved.stageCommands(f)
-	client := cmp.Or(cfg.Client.Command, config.ClaudeCommand)
-	tasks := saved.state.Assistants.Tasks
-	var cmds []string
-	for _, t := range tasks {
-		if t.Status.Terminal() {
-			continue
-		}
-		cmd := savedTaskCommand(tasks, t.Task, stageCommands, client)
-		// Admitted with another recipe, the task fails executor_changed before its first turn: it needs no wrapper,
-		// mount or secret, and must not block the restart on one.
-		if t.Execution != nil && t.Execution.RecipeIdentity != recipeIdentity(cfg, cmd) {
-			continue
-		}
-		cmds = append(cmds, cmd)
-	}
-	return cmds
-}
-
-// savedTaskCommand is the command a saved task runs, resolved as the orchestrator resolves it: the one it was admitted
-// with, or for a task of an older journal its parent's, its root stage's in the restored registry or the client's.
-func savedTaskCommand(tasks map[assistants.TaskID]*state.TaskState, t assistants.Task, stageCommands map[string]string, client string) string {
-	if t.Execution != nil {
-		return t.ProfileSnapshot.Command
-	}
-	in := assistants.ExecutionInputs{StageCommand: stageCommands[t.RootStageID], ClientCommand: client}
-	if t.ParentTaskID != nil {
-		if parent, ok := tasks[*t.ParentTaskID]; ok {
-			in.Parent = &assistants.Execution{Command: savedTaskCommand(tasks, parent.Task, stageCommands, client)}
-		}
-	}
-	exec, _ := assistants.ResolveExecution(t.ProfileSnapshot, in) // cannot fail: the client command is never empty
-	return exec.Command
+	return engine.CheckedByHost(engine.SkillLibraryDirs(engine.PlannedSkillRun(next, l.cfg, base, nil)))
 }
 
 // takeContainerTransport один раз читает одноразовый transport хоста — env-секреты хуков и дескриптор
 // browser — и удаляет его из окружения процесса. Дальше циклы пользуются сохранёнными значениями.
 func takeContainerTransport(hooks []lifecyclehooks.RegisteredHook) (*browser.Descriptor, error) {
-	if err := resolveLifecycleEnv(absRootDir(), hooks); err != nil {
+	if err := engine.ResolveLifecycleEnv(absRootDir(), hooks); err != nil {
 		return nil, err
 	}
 	desc := descriptorFromEnv(true)
@@ -367,12 +279,12 @@ func takeContainerTransport(hooks []lifecyclehooks.RegisteredHook) (*browser.Des
 func carryHookEnv(prev, next []lifecyclehooks.RegisteredHook) error {
 	prevIdx, nextIdx := envHookIndexes(prev), envHookIndexes(next)
 	if len(prevIdx) != len(nextIdx) {
-		return restartError("the set of lifecycle hooks with env changed (%d -> %d)", len(prevIdx), len(nextIdx))
+		return engine.RestartError("the set of lifecycle hooks with env changed (%d -> %d)", len(prevIdx), len(nextIdx))
 	}
 	for i, ni := range nextIdx {
 		p, n := prev[prevIdx[i]], next[ni]
 		if p.Hook.ID != n.Hook.ID || p.StageID != n.StageID || !maps.Equal(p.Hook.Env, n.Hook.Env) {
-			return restartError("lifecycle hook %q with env changed", n.Hook.ID)
+			return engine.RestartError("lifecycle hook %q with env changed", n.Hook.ID)
 		}
 	}
 	for i, ni := range nextIdx {

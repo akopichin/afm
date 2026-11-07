@@ -7,7 +7,8 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	implstagefiles "github.com/akopichin/afm-engine/engine/inspection/stagefiles"
+	stagefiles "github.com/akopichin/afm/contracts/activity"
 )
 
 const errCodeInvalidCursor = "invalid_cursor"
@@ -26,7 +27,7 @@ func (s *Server) handleAssistantActivity(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	page, err := s.assistantsReader.TaskActivity(taskID, query)
-	if errors.Is(err, stagefiles.ErrInvalidCursor) {
+	if errors.Is(err, implstagefiles.ErrInvalidCursor) {
 		writeAssistantErrCode(w, http.StatusBadRequest, errCodeInvalidCursor)
 		return
 	}

@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/agentjobs"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/agentjobs"
+	"github.com/akopichin/afm/contracts/config"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 func appendFinishedJob(t *testing.T, jobs *agentjobs.Store, meta agentjobs.JobMeta, start time.Time) {
@@ -36,25 +37,25 @@ func appendFinishedJob(t *testing.T, jobs *agentjobs.Store, meta agentjobs.JobMe
 // startAnalyticsDashboard serves a run with one stage job and one Assistant job, wired the way executeFlow wires them.
 func startAnalyticsDashboard(t *testing.T, cfg config.Config) string {
 	t.Helper()
-	return startTestDashboard(t, cfg, func(sc *server.Config, runDir string, store *state.Store, orch *orchestrator.Orchestrator) {
+	return startTestDashboard(t, cfg, func(sc *server.Config, runDir string, store *implstate.Store, orch *implorchestrator.Orchestrator) {
 		acct, err := accounting.Open(runDir, accounting.NewResolver(cfg.Pricing))
 		if err != nil {
 			t.Fatal(err)
 		}
-		jobs := openAgentJobs(runDir, store)
+		jobs := engine.OpenAgentJobs(runDir, store, io.Discard)
 		sideDir := t.TempDir()
 		sideAcct, err := accounting.Open(sideDir, accounting.NewResolver(cfg.Pricing))
 		if err != nil {
 			t.Fatal(err)
 		}
-		sideJobs := openAgentJobs(sideDir, store)
+		sideJobs := engine.OpenAgentJobs(sideDir, store, io.Discard)
 		t.Cleanup(func() { _ = acct.Close(); _ = jobs.Close(); _ = sideAcct.Close(); _ = sideJobs.Close() })
 
 		now := time.Now().Add(-time.Hour)
 		appendFinishedJob(t, jobs, agentjobs.JobMeta{JobID: "stage-job", AgentID: "stage:work", AgentKind: accounting.AgentKindStage, StageID: "work", RootStageID: "work", Title: "Work · Autonomous execution"}, now)
 		appendFinishedJob(t, sideJobs, agentjobs.JobMeta{JobID: "side-job", AgentID: "side:r1", AgentKind: accounting.AgentKindAssistant, Title: "Assistant · job 1"}, now)
 
-		side := &sideAgentRuntime{acct: sideAcct, jobs: sideJobs}
+		side := &accounting.AssistantSources{Usage: sideAcct, Jobs: sideJobs}
 		sc.UsageAnalytics = newUsageAnalytics(acct, nil, jobs, orch, side)
 	})
 }
@@ -184,7 +185,7 @@ func TestUsageAnalytics_UnopenableLedgerIsUnavailableNotDisabled(t *testing.T) {
 	t.Setenv("AFM_ACCOUNTING_SHOW_MONEY", "")
 	enabled := true
 	cfg := config.Config{Accounting: config.AccountingConfig{Enabled: &enabled}}
-	base := startTestDashboard(t, cfg, func(sc *server.Config, runDir string, store *state.Store, orch *orchestrator.Orchestrator) {
+	base := startTestDashboard(t, cfg, func(sc *server.Config, runDir string, store *implstate.Store, orch *implorchestrator.Orchestrator) {
 		// A directory in place of the ledger makes the initial open fail, as an unreadable file would.
 		if err := os.Mkdir(filepath.Join(runDir, "usage.jsonl"), 0o755); err != nil {
 			t.Fatal(err)
@@ -193,10 +194,10 @@ func TestUsageAnalytics_UnopenableLedgerIsUnavailableNotDisabled(t *testing.T) {
 		if acct != nil || acctErr == nil {
 			t.Fatalf("Open = %v, %v, want the failure this test is about", acct, acctErr)
 		}
-		jobs := openAgentJobs(runDir, store)
+		jobs := engine.OpenAgentJobs(runDir, store, io.Discard)
 		t.Cleanup(func() { _ = jobs.Close() })
 		appendFinishedJob(t, jobs, agentjobs.JobMeta{JobID: "stage-job", AgentID: "stage:work", AgentKind: accounting.AgentKindStage, StageID: "work", RootStageID: "work", Title: "Work"}, time.Now().Add(-time.Hour))
-		sc.UsageAnalytics = newUsageAnalytics(acct, acctErr, jobs, orch, &sideAgentRuntime{})
+		sc.UsageAnalytics = newUsageAnalytics(acct, acctErr, jobs, orch, nil)
 	})
 
 	code, body := getBody(t, base+"/api/usage/analytics?view=jobs")
@@ -210,4 +211,11 @@ func TestUsageAnalytics_UnopenableLedgerIsUnavailableNotDisabled(t *testing.T) {
 	if resp.Totals.AgentTime.DurationMS == nil {
 		t.Fatalf("the recorded time must stay reported: %s", body)
 	}
+}
+
+// newUsageAnalytics builds the read model the way engine.Run.UsageAnalytics does, over a bare orchestrator.
+func newUsageAnalytics(acct *accounting.Store, acctErr error, jobs *agentjobs.Store, orch *implorchestrator.Orchestrator, assistant *accounting.AssistantSources) *accounting.Analytics {
+	return accounting.NewAnalytics(accounting.AnalyticsSources{
+		Usage: acct, UsageOpenFailed: acct == nil && acctErr != nil, Jobs: jobs, Meta: orch.AnalyticsMeta, Assistant: assistant,
+	})
 }

@@ -1,6 +1,9 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,22 +12,22 @@ import (
 	"os"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/config"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // newMeshAdapterTestActions is the dashboard's mesh adapter over a real (not running) orchestrator with
 // collaboration on and one run-agent role, "reviewer".
-func newMeshAdapterTestActions(t *testing.T, stageIDs ...string) (meshActions, *state.Store) {
+func newMeshAdapterTestActions(t *testing.T, stageIDs ...string) (meshActions, *implstate.Store) {
 	t.Helper()
 	binDir := writeFakeCodexHelper(t, "pass", "ok")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, stageIDs)
+	store, err := implstate.Open(runDir, stageIDs)
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -41,10 +44,10 @@ func newMeshAdapterTestActions(t *testing.T, stageIDs ...string) (meshActions, *
 			"reviewer": {Title: "Reviewer", Command: "codex-as-claude", Instructions: "Review the work."},
 		},
 	}
-	collab := startCollaboration(store, cfg, &flow.Flow{Name: "mesh"})
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir: runDir, Stages: stages, Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(),
-		AssistantsEnabled: collab.policy.Enabled, AssistantsRegistry: collab.registry,
+	collab := engine.StartCollaboration(store, cfg, &flow.Flow{Name: "mesh"})
+	orch := implorchestrator.New(implorchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: cfg, Prompts: implorchestrator.DefaultPrompts(),
+		AssistantsEnabled: collab.Policy.Enabled, AssistantsRegistry: collab.Registry,
 	})
 	return meshActions{orch}, store
 }
@@ -159,7 +162,7 @@ func TestMeshActions_AttachAndSendReturnsTheParticipant(t *testing.T) {
 // dashboard orders the two readers by it, not by timestamps.
 func TestDiscussionAdapter_MessagesCarryTheJournalSeq(t *testing.T) {
 	a, _ := newMeshAdapterTestActions(t, "impl")
-	d := collaborationDiscussion(a)
+	d := collaborationDiscussion{a.orch.(engine.CollaborationAPI)}
 	id, err := d.PostMessage(context.Background(), "impl", server.DiscussionPost{RequestID: "req-post", Body: "status?"})
 	if err != nil {
 		t.Fatalf("PostMessage: %v", err)

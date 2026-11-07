@@ -9,21 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/executor"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
-	"github.com/akopichin/afm/pkg/state"
-	"github.com/akopichin/afm/pkg/timezone"
+	"github.com/akopichin/afm-engine/engine"
+	implexecutor "github.com/akopichin/afm-engine/engine/inspection/executor"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/mcp"
+	"github.com/akopichin/afm/contracts/state"
+	"github.com/akopichin/afm/contracts/timezone"
 )
 
 const (
@@ -31,18 +28,41 @@ const (
 	keyStatus  = "status"
 )
 
-// writeActionError renders an error from a stage-control action. Any other error keeps the caller's
-// plain-text fallback.
-func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fallbackStatus int) {
-	if errors.Is(err, orchestrator.ErrFlowPaused) {
-		writeFlowError(w, http.StatusConflict, "flow_paused")
+// writeCommandError renders a failed engine command: a machine-readable Code as the JSON error body,
+// anything else as the plain message, with the HTTP status of the error kind.
+func writeCommandError(w http.ResponseWriter, err error) {
+	var ce *engine.Error
+	if !errors.As(err, &ce) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if errors.Is(err, orchestrator.ErrNotApplied) {
-		http.Error(w, err.Error(), http.StatusConflict)
+	status := commandErrorStatus(ce.Kind)
+	if ce.Code != "" {
+		writeFlowError(w, status, ce.Code)
 		return
 	}
-	http.Error(w, fallbackMsg+": "+err.Error(), fallbackStatus)
+	http.Error(w, ce.Message, status)
+}
+
+func commandErrorStatus(kind engine.Kind) int {
+	switch kind {
+	case engine.KindInvalid:
+		return http.StatusBadRequest
+	case engine.KindNotFound:
+		return http.StatusNotFound
+	case engine.KindConflict:
+		return http.StatusConflict
+	case engine.KindClosed:
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// writeStageStatus answers a successful stage command with {"status": status, "stage_id": id}.
+func writeStageStatus(w http.ResponseWriter, status, stageID string) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: status, keyStageID: stageID})
 }
 
 // statusResponse is GET /api/status's wire shape: run-level fields plus one ordered []StageView (see
@@ -170,12 +190,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	if s.graphActions != nil {
 		resp.GraphRevision = s.graphActions.GraphRevision()
 	}
-	if s.runDir != "" {
-		resp.RunID = filepath.Base(s.runDir)
-	}
-	if s.sideAgent != nil {
-		resp.RunID = s.sideAgent.ConversationID()
-	}
+	resp.RunID = s.runID()
 	if s.reviewState != nil {
 		st, owners := s.reviewState()
 		resp.FlowPauseState = st
@@ -213,28 +228,27 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data) //nolint:gosec // G705: data read from server-side file, not user input
 }
 
-func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/approve")
+// stageCommandID extracts and validates the stage id of /api/stages/{id}/<action>; on failure it has already
+// written the response.
+func stageCommandID(w http.ResponseWriter, r *http.Request, suffix string) (string, bool) {
+	stageID := extractStageID(r.URL.Path, "/api/stages/", suffix)
 	if !isValidStageID(stageID) {
 		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
+		return "", false
 	}
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
+	return stageID, true
+}
+
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	stageID, ok := stageCommandID(w, r, "/approve")
 	if !ok {
-		http.Error(w, "stage not found", http.StatusNotFound)
-		return
-	}
-	if st.Status != state.StatusAwaitingApproval {
-		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval", st.Status), http.StatusBadRequest)
 		return
 	}
 	if err := s.actions.Approve(r.Context(), stageID); err != nil {
-		writeActionError(w, err, "approve failed", http.StatusInternalServerError)
+		writeCommandError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "approved", keyStageID: stageID})
+	writeStageStatus(w, "approved", stageID)
 }
 
 type reviseRequest struct {
@@ -242,28 +256,12 @@ type reviseRequest struct {
 }
 
 func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/revise")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
+	stageID, ok := stageCommandID(w, r, "/revise")
 	if !ok {
-		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	// The statuses Orchestrator.Revise acts on; awaiting_assistants — the author finished and waits for its
-	// helpers, a note reaches it only this way.
-	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning || st.Status == state.StatusAwaitingAssistants
-	if !allowed {
-		http.Error(w, fmt.Sprintf("stage is %s, not running, awaiting_approval or awaiting_assistants", st.Status), http.StatusBadRequest)
-		return
-	}
-	// A script stage has no live agent to revise; Revise would move it to `revising`, after which script
-	// completion is dropped and the stage would hang.
-	if s.stageConfig(stageID).IsScript {
-		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
+	if err := s.actions.CheckRevise(stageID); err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	var req reviseRequest
@@ -271,29 +269,11 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Feedback == "" {
-		http.Error(w, "feedback is required", http.StatusBadRequest)
+	if err := s.actions.Revise(r.Context(), stageID, req.Feedback); err != nil {
+		writeCommandError(w, err)
 		return
 	}
-	applied, seq, err := s.actions.Revise(r.Context(), stageID, req.Feedback)
-	if err != nil {
-		writeActionError(w, err, "revise failed", http.StatusInternalServerError)
-		return
-	}
-	// A no-op Revise delivered nothing — report a conflict so the caller keeps the typed text instead of
-	// clearing it as if the note had been sent.
-	if !applied {
-		http.Error(w, "stage no longer accepts a note", http.StatusConflict)
-		return
-	}
-	// Publish one identical note payload live and durably; transition seq identifies the note for replay
-	// deduplication.
-	payload := map[string]any{"id": seq, "text": mcp.DialogSnippet(req.Feedback)}
-	s.uiBus.Publish(bus.Event{Type: bus.EventAgentNote, StageID: stageID, Data: payload})
-	stagefiles.AppendNotice(s.runDir, stageID, string(bus.EventAgentNote), payload)
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "revised", keyStageID: stageID})
+	writeStageStatus(w, "revised", stageID)
 }
 
 type stageNoteRequest struct {
@@ -303,23 +283,12 @@ type stageNoteRequest struct {
 // handleStageNote прикрепляет pre-note к стадии, которая ещё не стартовала. Пустой текст = удалить
 // заметку.
 func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/note")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
+	stageID, ok := stageCommandID(w, r, "/note")
 	if !ok {
-		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	if st.Status != state.StatusPending {
-		http.Error(w, fmt.Sprintf("stage is %s, not pending", st.Status), http.StatusBadRequest)
-		return
-	}
-	if s.stageConfig(stageID).IsScript {
-		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
+	if err := s.actions.CheckPreNote(stageID); err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	var req stageNoteRequest
@@ -327,46 +296,25 @@ func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	stageDir := filepath.Join(s.runDir, stageID)
-	if err := state.SavePreNote(stageDir, req.Note); err != nil {
-		http.Error(w, "save note failed: "+err.Error(), http.StatusInternalServerError)
+	if err := s.actions.SetPreNote(stageID, req.Note); err != nil {
+		writeCommandError(w, err)
 		return
 	}
-	// Стадия могла стартовать между проверкой pending выше и записью prenote.md, прочитав ещё пустую заметку:
-	// тогда заметка на диске уже не попадёт в первый промпт агента.
-	if s.store.Snapshot().Stages[stageID].Status != state.StatusPending {
-		http.Error(w, "stage started before the note was saved; it may not reach the first prompt", http.StatusConflict)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "noted", keyStageID: stageID})
+	writeStageStatus(w, "noted", stageID)
 }
 
 type stageButtonRequest struct {
 	Name string `json:"name"`
 }
 
-// handleStageButton accepts a declared label and delegates to Button → Revise; prompts are resolved
-// server-side.
+// handleStageButton accepts a declared label; prompts are resolved by the engine.
 func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/button")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
+	stageID, ok := stageCommandID(w, r, "/button")
 	if !ok {
-		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning
-	if !allowed {
-		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
-		return
-	}
-	if s.stageConfig(stageID).IsScript {
-		http.Error(w, "script stage has no agent", http.StatusBadRequest)
+	if err := s.actions.CheckButton(stageID); err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	var req stageButtonRequest
@@ -374,110 +322,53 @@ func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Name == "" {
-		http.Error(w, "button name is required", http.StatusBadRequest)
-		return
-	}
-	if !slices.Contains(s.stageConfig(stageID).Buttons, req.Name) {
-		http.Error(w, "unknown button", http.StatusBadRequest)
-		return
-	}
 	if err := s.actions.Button(r.Context(), stageID, req.Name); err != nil {
-		writeActionError(w, err, "button failed", http.StatusInternalServerError)
+		writeCommandError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "button", keyStageID: stageID})
+	writeStageStatus(w, "button", stageID)
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/retry")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
+	stageID, ok := stageCommandID(w, r, "/retry")
 	if !ok {
-		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	if st.Status != state.StatusFailed {
-		http.Error(w, fmt.Sprintf("stage is %s, not failed", st.Status), http.StatusBadRequest)
-		return
-	}
-
 	if err := s.actions.Retry(r.Context(), stageID); err != nil {
-		writeActionError(w, err, "retry failed", http.StatusInternalServerError)
+		writeCommandError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "retried", keyStageID: stageID})
+	writeStageStatus(w, "retried", stageID)
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/pause")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
+	stageID, ok := stageCommandID(w, r, "/pause")
 	if !ok {
-		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	switch st.Status {
-	// awaiting_assistants/awaiting_peer/awaiting_quota: see Orchestrator.Pause's matching comments (control_api.go).
-	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer, state.StatusAwaitingQuota:
-	default:
-		http.Error(w, fmt.Sprintf("stage is %s, cannot be paused", st.Status), http.StatusBadRequest)
-		return
-	}
-	if s.stageConfig(stageID).IsScript && st.Status == state.StatusRunning {
-		http.Error(w, "pause is not supported mid-script execution", http.StatusConflict)
-		return
-	}
-
 	if err := s.actions.Pause(r.Context(), stageID); err != nil {
-		writeActionError(w, err, "pause failed", http.StatusInternalServerError)
+		writeCommandError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: reviewStatePaused, keyStageID: stageID})
+	writeStageStatus(w, reviewStatePaused, stageID)
 }
 
 func (s *Server) handleContinue(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/continue")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
-		return
-	}
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
+	stageID, ok := stageCommandID(w, r, "/continue")
 	if !ok {
-		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	if st.Status != state.StatusPaused {
-		http.Error(w, fmt.Sprintf("stage is %s, not paused", st.Status), http.StatusBadRequest)
-		return
-	}
-
 	if err := s.actions.Continue(r.Context(), stageID); err != nil {
-		writeActionError(w, err, "continue failed", http.StatusInternalServerError)
+		writeCommandError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "continued", keyStageID: stageID})
+	writeStageStatus(w, "continued", stageID)
 }
 
 // handleRetryHook re-runs the retry cycle of a before/after hook currently blocked on a user decision.
 func (s *Server) handleRetryHook(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/retry-hook")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
+	stageID, ok := stageCommandID(w, r, "/retry-hook")
+	if !ok {
 		return
 	}
 	if s.secondary == nil {
@@ -485,19 +376,17 @@ func (s *Server) handleRetryHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secondary.RetryHook(stageID); err != nil {
-		writeActionError(w, err, "retry-hook failed", http.StatusBadRequest)
+		writeCommandError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "retried", keyStageID: stageID})
+	writeStageStatus(w, "retried", stageID)
 }
 
 // handleSkipHook skips a before/after hook currently blocked on a user
 // decision. See handleRetryHook's comment on why there is no status check.
 func (s *Server) handleSkipHook(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/skip-hook")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
+	stageID, ok := stageCommandID(w, r, "/skip-hook")
+	if !ok {
 		return
 	}
 	if s.secondary == nil {
@@ -505,11 +394,10 @@ func (s *Server) handleSkipHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secondary.SkipHook(stageID); err != nil {
-		writeActionError(w, err, "skip-hook failed", http.StatusBadRequest)
+		writeCommandError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "skipped", keyStageID: stageID})
+	writeStageStatus(w, "skipped", stageID)
 }
 
 func (s *Server) handleDialogGet(w http.ResponseWriter, r *http.Request) {
@@ -559,7 +447,7 @@ func buildDialogEntries(stageDir string, serialize bool) []dialogUIEntry {
 		}
 		emitted := map[string]bool{}
 		for _, logName := range flow.PhaseStreamLogs(p) {
-			for _, it := range executor.DialogTranscript(filepath.Join(stageDir, logName)) {
+			for _, it := range implexecutor.DialogTranscript(filepath.Join(stageDir, logName)) {
 				if it.Text != "" {
 					out = append(out, dialogUIEntry{Type: typeAgentText, Phase: string(p), Text: it.Text})
 					continue
@@ -669,9 +557,8 @@ type dialogAnswerRequest struct {
 }
 
 func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/dialog/answer")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
+	stageID, ok := stageCommandID(w, r, "/dialog/answer")
+	if !ok {
 		return
 	}
 	var req dialogAnswerRequest
@@ -679,155 +566,22 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if req.ID == "" || req.Phase == "" || req.Answer == "" {
-		http.Error(w, "id, phase, answer required", http.StatusBadRequest)
+	if err := s.actions.Answer(stageID, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
+		writeCommandError(w, err)
 		return
 	}
-	if !flow.IsValidPhase(req.Phase) {
-		http.Error(w, "invalid phase", http.StatusBadRequest)
-		return
-	}
-	// req.ID is embedded in the question/answer filenames, so it must be a safe filename component — this
-	// guards against path traversal via a crafted id (e.g. "../../foo").
-	if !isValidDialogID(req.ID) {
-		http.Error(w, "invalid question id", http.StatusBadRequest)
-		return
-	}
-	// Flow-wide review-pause guard must run BEFORE any durable mutation. Reject up front with a
-	// machine-readable 409 instead.
-	if s.currentReviewState() != reviewStateNone {
-		writeFlowError(w, http.StatusConflict, "flow_paused")
-		return
-	}
-
-	stageDir := filepath.Join(s.runDir, stageID)
-
-	// Interactive answers must follow question order or the polling agent deadlocks; non-interactive
-	// auto-answers are exempt.
-	if s.stageConfig(stageID).Interactive {
-		cur, hasCur, err := mcp.CurrentQuestion(stageDir)
-		if err != nil {
-			writeFlowError(w, http.StatusInternalServerError, "current_question_lookup_failed")
-			return
-		}
-		if hasCur && (cur.Phase != req.Phase || cur.ID != req.ID) {
-			writeFlowError(w, http.StatusConflict, "answer_out_of_order")
-			return
-		}
-	}
-
-	questionPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".question.json")
-	answerPath := filepath.Join(stageDir, req.Phase+"."+req.ID+".answer.json")
-
-	// Question must exist as a file written by the agent. We'll re-check this
-	// after writing the answer to ensure the question didn't disappear (TOCTOU race).
-	if _, err := os.Stat(questionPath); err != nil {
-		http.Error(w, "question not found", http.StatusNotFound)
-		return
-	}
-
-	// Read question.json to validate answer against options if allow_custom is false.
-	var qf struct {
-		Options     []string `json:"options,omitempty"`
-		AllowCustom *bool    `json:"allow_custom"`
-	}
-	questionData, err := os.ReadFile(questionPath)
-	if err != nil {
-		http.Error(w, "read question: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := json.Unmarshal(questionData, &qf); err != nil {
-		http.Error(w, "parse question: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Validate answer against options if custom answers are not allowed.
-	// Default to allow_custom=true if not specified (protocol default).
-	allowCustom := true
-	if qf.AllowCustom != nil {
-		allowCustom = *qf.AllowCustom
-	}
-	if !allowCustom {
-		if len(qf.Options) == 0 {
-			http.Error(w, "question has no options but allow_custom=false", http.StatusBadRequest)
-			return
-		}
-		allowed := make(map[string]bool)
-		for _, opt := range qf.Options {
-			allowed[opt] = true
-		}
-		if !allowed[req.Answer] {
-			http.Error(w, "answer not in allowed options", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Atomically write ONLY answer.json first so the agent's bash loop can pick it up.
-	if err := mcp.WriteAnswerFile(stageDir, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
-		if os.IsExist(err) {
-			http.Error(w, "question already answered", http.StatusConflict)
-			return
-		}
-		http.Error(w, "write answer: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Re-check that the question file still exists to ensure we maintain the invariant that answer.json only
-	// exists when its question.json exists.
-	if _, err := os.Stat(questionPath); err != nil {
-		_ = os.Remove(answerPath)
-		http.Error(w, "question disappeared during write", http.StatusBadRequest)
-		return
-	}
-
-	if s.secondary != nil {
-		if err := s.secondary.NotifyAnswer(stageID, req.Phase, req.ID, req.Answer, req.FromOptions); err != nil {
-			// Review-pause won the race: roll back answer.json before writing dialog history and return the same
-			// 409 as the initial guard.
-			if errors.Is(err, orchestrator.ErrFlowPaused) {
-				_ = os.Remove(answerPath)
-				writeFlowError(w, http.StatusConflict, "flow_paused")
-				return
-			}
-			http.Error(w, "notify: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// The answer is authorized and durable on disk — now record it in the
-	// human-facing dialog history (best-effort, same as mcp.WriteAnswer does).
-	dialogPath := mcp.DialogPath(stageDir, req.Phase)
-	if err := mcp.AppendAnswer(dialogPath, mcp.Answer{ID: req.ID, Answer: req.Answer, FromOptions: req.FromOptions}); err != nil {
-		log.Printf("WARN: persist dialog answer for %s/%s.%s: %v (answer.json already written)", stageDir, req.Phase, req.ID, err) //nolint:gosec // G706: phase/id validated safe (flow.IsValidPhase/isValidDialogID) above
-	}
-
-	// The human answer took effect — mirror dialog_question on the answer side: one payload map, published
-	// live on the ui bus and duplicated into notices.jsonl.
-	payload := mcp.DialogFeedNotice(req.Phase, req.ID, mcp.DialogSnippet(req.Answer))
-	s.uiBus.Publish(bus.Event{Type: bus.EventDialogAnswer, StageID: stageID, Data: payload})
-	stagefiles.AppendNotice(s.runDir, stageID, string(bus.EventDialogAnswer), payload)
-
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"})
 }
 
 func (s *Server) handleDialogCancel(w http.ResponseWriter, r *http.Request) {
-	stageID := extractStageID(r.URL.Path, "/api/stages/", "/dialog/cancel")
-	if !isValidStageID(stageID) {
-		http.Error(w, "invalid stage id", http.StatusBadRequest)
+	stageID, ok := stageCommandID(w, r, "/dialog/cancel")
+	if !ok {
 		return
 	}
-	rs := s.store.Snapshot()
-	st, ok := rs.Stages[stageID]
-	if !ok || st.Status != state.StatusAwaitingUserInput {
-		http.Error(w, "stage is not awaiting user input", http.StatusBadRequest)
+	if err := s.actions.CancelDialog(stageID); err != nil {
+		writeCommandError(w, err)
 		return
-	}
-	if s.secondary != nil {
-		if err := s.secondary.CancelDialog(stageID); err != nil {
-			writeActionError(w, err, "cancel", http.StatusInternalServerError)
-			return
-		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{keyStatus: "cancelled"})
@@ -839,16 +593,8 @@ func extractStageID(path, prefix, suffix string) string {
 	return path
 }
 
-// safeStageIDRe restricts stage IDs to alphanumeric, dash, underscore, dot.
-var safeStageIDRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
-
 // isValidStageID rejects path traversal and special characters in stage IDs.
-func isValidStageID(id string) bool {
-	if !safeStageIDRe.MatchString(id) || strings.Contains(id, "..") {
-		return false
-	}
-	return true
-}
+func isValidStageID(id string) bool { return engine.ValidStageID(id) }
 
 // safeArtifactNameRe restricts artifact filenames to a safe single component:
 // alphanumerics, dash, underscore, dot. Mirrors safeStageIDRe.
@@ -863,8 +609,13 @@ func isValidArtifactName(name string) bool {
 	return safeArtifactNameRe.MatchString(name)
 }
 
-// isValidDialogID validates a question id that is embedded in question/answer filenames. Same rules as a
-// stage id: safe filename component, no path traversal.
-func isValidDialogID(id string) bool {
-	return isValidStageID(id)
+// runID — id рана: имя run directory, а при боковом агенте — id его разговора (они совпадают).
+func (s *Server) runID() string {
+	if s.sideAgent != nil {
+		return s.sideAgent.ConversationID()
+	}
+	if s.runDir != "" {
+		return filepath.Base(s.runDir)
+	}
+	return ""
 }

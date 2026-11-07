@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func TestReportRendersCostForRunWithUsage(t *testing.T) {

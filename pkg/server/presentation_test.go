@@ -1,6 +1,15 @@
 package server
 
 import (
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+	bus "github.com/akopichin/afm/contracts/events"
+
+	orchestrator "github.com/akopichin/afm/contracts/control"
+
+	"github.com/akopichin/afm/contracts/graph"
+
+	"github.com/akopichin/afm/contracts/state"
+
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -12,16 +21,12 @@ import (
 	"testing"
 	"time"
 
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
 	"github.com/gorilla/websocket"
-
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // resolveBuiltinNames is the resolver without configured names: a built-in name, then the file name.
@@ -32,19 +37,18 @@ var reviewerNames = map[string]string{"codex-as-claude": "Codex Reviewer"}
 // newRunServer serves runDir whose store holds stageIDs, with cfg's names and services.
 func newRunServer(t *testing.T, runDir string, stageIDs []string, cfg Config) *Server {
 	t.Helper()
-	store, err := state.Open(runDir, stageIDs)
+	store, err := implstate.Open(runDir, stageIDs)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	cfg.RunDir, cfg.Store = runDir, store
 	if cfg.UIBus == nil {
-		cfg.UIBus = bus.NewUIBus()
+		cfg.UIBus = implbus.NewUIBus()
 	}
-	if cfg.Actions == nil {
-		cfg.Actions = fakeStageActions{}
-	}
-	return New(cfg)
+	srv := New(cfg)
+	srv.useFakes(fakeStageActions{}, nil)
+	return srv
 }
 
 func getJSON(t *testing.T, srv *Server, path string) map[string]any {
@@ -322,7 +326,7 @@ func liveVerifyData(t *testing.T, srv *Server, ev bus.Event) map[string]any {
 	}()
 	deadline := time.After(5 * time.Second)
 	for {
-		srv.uiBus.Publish(ev)
+		writableBus(srv).Publish(ev)
 		select {
 		case msg := <-frames:
 			var got struct {

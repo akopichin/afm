@@ -1,6 +1,9 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,19 +14,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // TestAssistants_EndToEnd_AttachRunCompleteReadBack is the integration test the Stage 3 wiring gap asked
 // for: collaboration enabled with a profile pointing at a scripted command, a task attached through the REAL
 // HTTP layer (not a direct orchestrator.Attach call, and not an injected test seam), driven to "completed" by
 // a real subprocess, and read back through the REAL HTTP read-side — proving the whole chain
-// (cmd/afm's startCollaboration -> orchestrator.Options.AssistantsEnabled/Registry ->
+// (cmd/afm's engine.StartCollaboration -> orchestrator.Options.AssistantsEnabled/Registry ->
 // collaborationActions/collaborationReader -> server.Config.AssistantActions/AssistantsReader -> the mux
 // routes in pkg/server/assistants.go) is actually wired together, not just unit-tested in isolation per
 // package.
@@ -42,7 +45,7 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 	const stageID = "work"
 	stages := []flow.Stage{{ID: stageID, Name: "Work", Agents: []flow.AgentType{flow.AgentAuto}}}
 
-	store, err := state.Open(runDir, []string{stageID})
+	store, err := implstate.Open(runDir, []string{stageID})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -60,37 +63,38 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 
 	// This is the exact production entry point (cmd/afm/run.go calls it the same way) — not a hand-rolled
 	// substitute for it.
-	collab := startCollaboration(store, cfg, f)
-	if !collab.policy.Enabled || collab.registry == nil {
-		t.Fatalf("collaboration runtime did not come up enabled with a registry: %+v", collab.policy)
+	collab := engine.StartCollaboration(store, cfg, f)
+	if !collab.Policy.Enabled || collab.Registry == nil {
+		t.Fatalf("collaboration runtime did not come up enabled with a registry: %+v", collab.Policy)
 	}
 
 	runner := &fakeAutoRunner{acquired: make(chan string, 1), release: make(chan struct{})}
-	orch := orchestrator.New(orchestrator.Options{
+	orch := implorchestrator.New(implorchestrator.Options{
 		RunDir:             runDir,
 		Stages:             stages,
 		Store:              store,
 		Config:             cfg,
-		Prompts:            orchestrator.DefaultPrompts(),
+		Prompts:            implorchestrator.DefaultPrompts(),
 		Runner:             runner,
-		AssistantsEnabled:  collab.policy.Enabled,
-		AssistantsRegistry: collab.registry,
+		AssistantsEnabled:  collab.Policy.Enabled,
+		AssistantsRegistry: collab.Registry,
 	})
 
 	// Same composition cmd/afm/run_dashboard.go's startDashboard uses — reproduced here (rather than calling
 	// startDashboard itself) only because that helper gates on a configured positive port and always binds
 	// the configured port; the test needs an ephemeral one.
+	control := engine.StageControlFor(orch, runDir, store)
 	srv := server.New(server.Config{
 		Port:             0,
 		RunDir:           runDir,
 		Store:            store,
 		UIBus:            orch.UIBus(),
-		Actions:          orch,
-		Secondary:        orch,
+		Actions:          control,
+		Secondary:        control,
 		FlowActions:      orch,
-		Stages:           registryStageProvider{orch: orch},
-		AssistantActions: collab.actions(orch),
-		AssistantsReader: collab.reader(orch),
+		Stages:           registryStageProvider{reader: orchStages{orch}},
+		AssistantActions: assistantActions(collab, orch),
+		AssistantsReader: assistantsReader(collab, orch),
 	})
 	addr, err := srv.Start()
 	if err != nil {
@@ -147,7 +151,7 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 	// availability check reported for "codex-as-claude" at admission time — frozen into ProfileSnapshot by
 	// orchestrator.Attach (pkg/orchestrator/assistants.go), surfaced here by collaborationReader.TaskTree
 	// (cmd/afm/run_collaboration.go). Computed from the SAME config.HelperReadonlyEnforcement the production
-	// `available` closure in startCollaboration calls, rather than hardcoding "os"/"none", so this assertion
+	// `available` closure in engine.StartCollaboration calls, rather than hardcoding "os"/"none", so this assertion
 	// stays correct whether the test happens to run on a bare host or inside a container (config.InContainer()
 	// changes the answer — see pkg/config/verify_resolve.go).
 	wantEnforcement := config.HelperReadonlyEnforcement("codex-as-claude", cfg)

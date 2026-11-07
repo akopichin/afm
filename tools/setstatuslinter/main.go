@@ -10,17 +10,21 @@ import (
 
 var Analyzer = &analysis.Analyzer{
 	Name: "noStoreApplyOutsideFSM",
-	Doc:  "Prohibits direct (*state.Store).Apply calls outside pkg/orchestrator/bus/fsm.go.",
+	Doc:  "Prohibits direct (*state.Store).Apply calls outside pkg/orchestrator/bus/fsm.go and pkg/engine/offline.go.",
 	Run:  run,
 }
 
-// fsmFile — единственный файл, которому разрешён прямой.Apply.
+// fsmFile — файл, которому разрешён прямой Apply.
 const fsmFile = "pkg/orchestrator/bus/fsm.go"
+
+// offlineFile — офлайн-контроль без оркестратора; сохраняет прежние события cli_*,
+// которые FSM-путь переименовал бы и изменил байты журнала.
+const offlineFile = "pkg/engine/offline.go"
 
 func run(pass *analysis.Pass) (any, error) {
 	for _, file := range pass.Files {
 		fname := pass.Fset.Position(file.Pos()).Filename
-		if strings.HasSuffix(fname, fsmFile) || strings.HasSuffix(fname, "_test.go") {
+		if strings.HasSuffix(fname, fsmFile) || strings.HasSuffix(fname, offlineFile) || strings.HasSuffix(fname, "_test.go") {
 			continue
 		}
 		ast.Inspect(file, func(n ast.Node) bool {

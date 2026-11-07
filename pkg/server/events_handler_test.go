@@ -1,6 +1,13 @@
 package server
 
 import (
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+	"github.com/akopichin/afm/contracts/state"
+
+	bus "github.com/akopichin/afm/contracts/events"
+
+	implstagefiles "github.com/akopichin/afm-engine/testkit/orchestrator/stagefiles"
+
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -9,10 +16,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/mcp"
 )
 
 func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
@@ -20,7 +25,7 @@ func TestHandleEvents_ReplaysTransitionsAndNotices(t *testing.T) {
 
 	// events.jsonl уже содержит одну transition из setupTestServerWithWS — плюс добавим ask_user, чтобы
 	// проверить, что она реплеится как отдельный тип.
-	if err := srv.store.Apply(&state.Transition{
+	if err := writableStore(srv).Apply(&state.Transition{
 		StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusAwaitingUserInput,
 		Event: "ask_user",
 	}); err != nil {
@@ -131,7 +136,7 @@ func TestHandleEvents_TransitionsNeverExceedGlobalCap(t *testing.T) {
 		if i == 249 {
 			to = state.StatusDone
 		}
-		if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: from, To: to, Event: "noop"}); err != nil {
+		if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: from, To: to, Event: "noop"}); err != nil {
 			// CAS может не совпасть при таком синтетическом чередовании — тесту важно только итоговое количество
 			// записей в логе, не валидность каждого перехода, поэтому игнорируем ошибку CAS.
 			continue
@@ -250,9 +255,9 @@ func TestHandleEvents_EarlyStageQAndASurviveGlobalLimit(t *testing.T) {
 	runDir := t.TempDir()
 
 	// early: the question and its navigable auto-answer, written FIRST (oldest).
-	stagefiles.AppendNotice(runDir, "early", string(bus.EventDialogQuestion),
+	implstagefiles.AppendNotice(runDir, "early", string(bus.EventDialogQuestion),
 		mcp.DialogFeedNotice("planning", "q1", "Which approach?"))
-	stagefiles.AppendNotice(runDir, "early", string(bus.EventAutoAnswered),
+	implstagefiles.AppendNotice(runDir, "early", string(bus.EventAutoAnswered),
 		mcp.AutoAnsweredNotice("planning", "q1", "Option B", true, "Which approach?"))
 
 	// >10000 later notices spread across 35 OTHER stages (35*300 = 10500).
@@ -302,11 +307,11 @@ func TestHandleEvents_ScriptFailedAndStderrScriptOutputReplay(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "build"
 
-	stagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptFailed), map[string]string{
+	implstagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptFailed), map[string]string{
 		"error":       "exit status 1",
 		"stderr_tail": "line1\nline2\n",
 	})
-	stagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptOutput), map[string]string{
+	implstagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptOutput), map[string]string{
 		"hook":   "",
 		"line":   "boom",
 		"stream": "stderr",
@@ -425,25 +430,26 @@ func writeNotices(t *testing.T, runDir, stageID string, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
 		data := map[string]string{"hook": "", "line": "line " + strconv.Itoa(i)}
-		stagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptOutput), data)
+		implstagefiles.AppendNotice(runDir, stageID, string(bus.EventScriptOutput), data)
 	}
 }
 
 // newTestServerForRunDir opens a Server around an already-prepared run dir for the given stage IDs.
 func newTestServerForRunDir(t *testing.T, runDir string, stageIDs []string) *Server {
 	t.Helper()
-	store, err := state.Open(runDir, stageIDs)
+	store, err := implstate.Open(runDir, stageIDs)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	return New(Config{
-		Port:    0,
-		RunDir:  runDir,
-		Store:   store,
-		UIBus:   bus.NewUIBus(),
-		Actions: fakeStageActions{},
+	srv := New(Config{
+		Port:   0,
+		RunDir: runDir,
+		Store:  store,
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{}, nil)
+	return srv
 }
 
 // newTestServerWithStages builds a Server backed by a fresh temp run dir, seeding each stage in counts
@@ -538,17 +544,17 @@ func TestReconstructEventHistory_QAOnCompletedStageVisibleWithinCap(t *testing.T
 	}
 
 	// Q&A written FIRST, then 1500 later same-stage filler notices (< 2000).
-	stagefiles.AppendNotice(runDir, stageID, string(bus.EventDialogQuestion), map[string]any{
+	implstagefiles.AppendNotice(runDir, stageID, string(bus.EventDialogQuestion), map[string]any{
 		"phase": "planning", "id": "q1", "title": "Which approach?",
 	})
-	stagefiles.AppendNotice(runDir, stageID, string(bus.EventDialogAnswer), map[string]any{
+	implstagefiles.AppendNotice(runDir, stageID, string(bus.EventDialogAnswer), map[string]any{
 		"phase": "planning", "id": "q1", "title": "Option B",
 	})
 	writeNotices(t, runDir, stageID, 1500)
 
 	srv := newTestServerForRunDir(t, runDir, []string{stageID})
 	// Mark the stage done — the scenario is Q&A on an already-completed stage.
-	if err := srv.store.Apply(&state.Transition{
+	if err := writableStore(srv).Apply(&state.Transition{
 		StageID: stageID, From: state.StatusPending, To: state.StatusDone, Event: "done",
 	}); err != nil {
 		t.Fatal(err)
@@ -594,15 +600,15 @@ func TestHandleEvents_StageFilterSurvivesFlowWideNoticeNoise(t *testing.T) {
 // quota_warning of the stage and of its helper tasks (filed under the root stage) replay with their RFC3339 data.
 func TestHandleEvents_QuotaNoticesReplayFromNoticesLog(t *testing.T) {
 	srv, runDir := setupTestServer(t)
-	stagefiles.AppendNotice(runDir, testStageID, "quota_warning", map[string]string{
+	implstagefiles.AppendNotice(runDir, testStageID, "quota_warning", map[string]string{
 		"stage_id": testStageID, "provider": "claude", "window": "five_hour", "reset_at": "2026-10-23T23:50:00Z", "message": "Usage limit (claude, five_hour): the limit is close",
 	})
-	stagefiles.AppendNotice(runDir, testStageID, "quota_wait", map[string]string{
+	implstagefiles.AppendNotice(runDir, testStageID, "quota_wait", map[string]string{
 		"stage_id": testStageID, "provider": "claude", "source": "structured", "until": "2026-10-23T23:51:00Z", "message": "Usage limit (claude): waiting until 2026-10-23 23:51:00 UTC",
 	})
-	stagefiles.AppendNotice(runDir, testStageID, "quota_wait", map[string]string{"task_id": "t-1", "provider": "codex", "until": "2026-10-23T23:52:00Z"})
-	stagefiles.AppendNotice(runDir, testStageID, "quota_reset", map[string]string{"stage_id": testStageID, "provider": "claude"})
-	stagefiles.AppendNotice(runDir, "other-stage", "quota_wait", map[string]string{"stage_id": "other-stage", "provider": "claude"})
+	implstagefiles.AppendNotice(runDir, testStageID, "quota_wait", map[string]string{"task_id": "t-1", "provider": "codex", "until": "2026-10-23T23:52:00Z"})
+	implstagefiles.AppendNotice(runDir, testStageID, "quota_reset", map[string]string{"stage_id": testStageID, "provider": "claude"})
+	implstagefiles.AppendNotice(runDir, "other-stage", "quota_wait", map[string]string{"stage_id": "other-stage", "provider": "claude"})
 
 	for _, query := range []string{"/api/events", "/api/events?stage=" + testStageID} {
 		w := httptest.NewRecorder()

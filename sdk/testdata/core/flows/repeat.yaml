@@ -1,0 +1,9 @@
+name: core-repeat
+repeat:
+  max_cycles: 2
+  keep_runs: 0
+stages:
+  - id: build
+    agents: [planning, implementation]
+    command: __AGENT__
+    auto_approve: true

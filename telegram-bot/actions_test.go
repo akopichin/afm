@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	afmsdk "github.com/akopichin/afm/sdk"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	afmsdk "github.com/akopichin/afm/sdk"
 )
 
 type afmFixture struct {

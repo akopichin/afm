@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/accounting"
 )
 
 // stubCostProvider возвращает заданный CostBundle без реального Store.
@@ -30,7 +30,7 @@ func newTestServerWithAccounting(t *testing.T, provider accounting.CostProvider)
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -39,10 +39,10 @@ func newTestServerWithAccounting(t *testing.T, provider accounting.CostProvider)
 	srv := New(Config{
 		RunDir:     runDir,
 		Store:      store,
-		UIBus:      bus.NewUIBus(),
-		Actions:    fakeStageActions{},
+		UIBus:      implbus.NewUIBus(),
 		Accounting: provider,
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 	return srv
 }
 
@@ -124,7 +124,7 @@ func TestHandleStatus_ShowMoney(t *testing.T) {
 
 	t.Run("explicit true", func(t *testing.T) {
 		runDir := t.TempDir()
-		store, err := state.Open(runDir, []string{testStageID})
+		store, err := implstate.Open(runDir, []string{testStageID})
 		if err != nil {
 			t.Fatalf("open store: %v", err)
 		}
@@ -132,11 +132,11 @@ func TestHandleStatus_ShowMoney(t *testing.T) {
 		srv := New(Config{
 			RunDir:     runDir,
 			Store:      store,
-			UIBus:      bus.NewUIBus(),
-			Actions:    fakeStageActions{},
+			UIBus:      implbus.NewUIBus(),
 			Accounting: stubCostProvider{bundle: bundle},
 			ShowMoney:  true,
 		})
+		srv.useFakes(fakeStageActions{}, nil)
 		req := httptest.NewRequest("GET", "/api/status", nil)
 		w := httptest.NewRecorder()
 		srv.handleStatus(w, req)

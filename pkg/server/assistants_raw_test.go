@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
 )
 
 func getAssistantRaw(t *testing.T, srv *Server, taskID string) *httptest.ResponseRecorder {
@@ -22,7 +22,7 @@ func getAssistantRaw(t *testing.T, srv *Server, taskID string) *httptest.Respons
 
 func writeAssistantRaw(t *testing.T, runDir, taskID, content string) {
 	t.Helper()
-	path := filepath.Join(runDir, orchestrator.TaskRawResultRelPath(taskID))
+	path := filepath.Join(runDir, implorchestrator.TaskRawResultRelPath(taskID))
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

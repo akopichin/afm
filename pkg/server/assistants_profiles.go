@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/contracts/assistants"
 )
 
 // AssistantProfilesService — узкий интерфейс реестра помощников, потребляемый сервером вместо конкретного

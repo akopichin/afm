@@ -1,29 +1,34 @@
 package afmsdk
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"time"
 )
 
 // Config controls how a Client launches and manages afm runs.
 type Config struct {
-	// Binary is the path to the afm executable. Empty resolves "afm" from PATH.
+	// Binary is the path to the afm executable. A name without a path separator, and the empty default "afm",
+	// is resolved from PATH in New.
 	Binary string
 	// MaxConcurrent caps the number of afm run subprocesses this Client will
 	// have active at once. Zero means unlimited.
 	MaxConcurrent int
+	// Mode selects the afm launch mode. The zero value and ModeDashboard start the dashboard as before;
+	// ModeCore starts the API-only core.
+	Mode Mode
 }
 
 // Client launches and manages afm flow runs as subprocesses.
 type Client struct {
 	binary     string
+	mode       Mode
 	httpClient *http.Client
 	sem        chan struct{}
 }
@@ -31,11 +36,18 @@ type Client struct {
 // New builds a Client from cfg, resolving the afm binary from PATH if
 // cfg.Binary is empty.
 func New(cfg Config) (*Client, error) {
+	if err := cfg.Mode.validate(); err != nil {
+		return nil, err
+	}
 	binary := cfg.Binary
 	if binary == "" {
-		resolved, err := exec.LookPath("afm")
+		binary = "afm"
+	}
+	// Resolving here keeps Start free of the blocking PATH scan exec.Command would do after the last ctx check.
+	if filepath.Base(binary) == binary {
+		resolved, err := exec.LookPath(binary)
 		if err != nil {
-			return nil, fmt.Errorf("afmsdk: afm binary not found on PATH: %w", err)
+			return nil, fmt.Errorf("afmsdk: afm binary %q not found on PATH: %w", binary, err)
 		}
 		binary = resolved
 	}
@@ -47,6 +59,7 @@ func New(cfg Config) (*Client, error) {
 
 	return &Client{
 		binary:     binary,
+		mode:       cfg.Mode,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		sem:        sem,
 	}, nil
@@ -77,10 +90,25 @@ func (c *Client) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-// Start launches afm with workDir as cwd and --dir, then waits for the API. Failures leave workDir intact.
+// runArgs passes --mode only for core so binaries without the flag still start in dashboard mode.
+func (c *Client) runArgs(workDir, flowPath string, port int) []string {
+	args := []string{"run", "--dir", workDir, "--port", strconv.Itoa(port)}
+	if c.mode == ModeCore {
+		args = append(args, "--mode", string(ModeCore))
+	}
+	return append(args, flowPath)
+}
+
+// Start launches afm and waits until the API is usable; ModeCore needs a ready core, never a silent dashboard.
+// On failure the process is reaped and the slot freed before return, and workDir is kept.
 func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, error) {
 	release, err := c.acquire(ctx)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := ctx.Err(); err != nil {
+		release()
 		return nil, err
 	}
 
@@ -95,11 +123,18 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 		return nil, err
 	}
 
-	cmd := exec.Command(c.binary, "run", "--dir", workDir, "--port", strconv.Itoa(port), flowPath)
+	cmd := exec.Command(c.binary, c.runArgs(workDir, flowPath, port)...)
 	cmd.Dir = workDir
-	out := &bytes.Buffer{}
+	out := &tailBuffer{max: maxErrorBytes}
 	cmd.Stdout = out
 	cmd.Stderr = out
+	cmd.WaitDelay = processWaitDelay
+
+	// Nothing that can block runs between this check and the spawn; a later cancel is handled by waitReady.
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
 
 	if err := cmd.Start(); err != nil {
 		release()
@@ -115,12 +150,12 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 		exited:     make(chan struct{}),
 		port:       port,
 		pid:        cmd.Process.Pid,
+		mode:       ModeDashboard,
 	}
-	go func() {
-		run.waitErr = cmd.Wait()
-		release()
-		close(run.exited)
-	}()
+	if c.mode == ModeCore {
+		run.mode = ModeCore
+	}
+	go run.watchProcess(release)
 
 	if err := run.waitReady(ctx); err != nil {
 		return nil, err

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	orchestrator "github.com/akopichin/afm/contracts/control"
 	"github.com/akopichin/afm/pkg/server/workspace"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // fakeWorkspace is a minimal workspace.FS stub for testing workspaceResolveFile/workspaceCurrentFileSHA in
@@ -74,7 +74,7 @@ func TestWorkspaceResolveFile_FileNote(t *testing.T) {
 	if want := `[AFM file: "/workspace/main.go"]`; rf.Reference != want {
 		t.Errorf("Reference: got %q, want %q", rf.Reference, want)
 	}
-	wantSHA := state.FileContentSHA([]byte("package main\n\nfunc main() {}\n"))
+	wantSHA := implstate.FileContentSHA([]byte("package main\n\nfunc main() {}\n"))
 	if rf.ContentSHA != wantSHA {
 		t.Errorf("ContentSHA: got %q, want %q", rf.ContentSHA, wantSHA)
 	}
@@ -187,7 +187,7 @@ func TestWorkspaceCurrentFileSHA(t *testing.T) {
 	if !ok {
 		t.Fatal("currentSHA: got ok=false, want true")
 	}
-	if want := state.FileContentSHA([]byte("hello\n")); sha != want {
+	if want := implstate.FileContentSHA([]byte("hello\n")); sha != want {
 		t.Errorf("sha: got %q, want %q", sha, want)
 	}
 

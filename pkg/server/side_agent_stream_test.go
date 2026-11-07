@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/sideagent"
+	sideagent "github.com/akopichin/afm/contracts/assistant"
 )
 
 // streamIDs runs the stream handler against a recorder and returns the ordered

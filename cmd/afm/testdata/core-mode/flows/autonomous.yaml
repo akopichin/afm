@@ -1,0 +1,5 @@
+name: core-autonomous
+stages:
+  - id: build
+    agents: [auto]
+    command: __AUTO_AGENT__

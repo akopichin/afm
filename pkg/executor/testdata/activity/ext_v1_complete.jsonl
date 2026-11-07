@@ -1,8 +1,0 @@
-{"type":"system","subtype":"afm_stream","version":1}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Looking"}]},"afm":{"item_id":"m1","partial":true}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at the code."}]},"afm":{"item_id":"m1","partial":false}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"go test ./..."}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call_1","is_error":false}]},"afm":{"exit_code":0}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"{\"verdict\":\"pass\"}"}]},"afm":{"item_id":"m2","partial":false}}
-{"type":"afm_final","version":1,"text":"{\"verdict\":\"pass\"}","item_id":"m2"}
-{"type":"result","subtype":"success","is_error":false}

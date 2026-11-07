@@ -12,10 +12,10 @@ GOLANGCI_TAG=v2.11.4
 
 .PHONY: build test lint clean install bindeps vendor
 
-# Go 1.14+ automatically uses the checked-in vendor/ tree for builds and tests.
-# Regenerate it after changing go.mod or go.sum.
+# The public repository must never contain vendored private engine sources.
 vendor:
-	$(GOENV) go mod vendor
+	@echo "Full vendoring belongs in the private build environment; use module downloads here." >&2
+	@exit 1
 
 $(LOCAL_BIN):
 	mkdir -p $(LOCAL_BIN)
@@ -40,13 +40,16 @@ build: web
 # TESTFLAGS передаёт флаги go test; CI использует -p 1, чтобы race-пакеты не конкурировали за два CPU и не
 # давали ложных таймаутов.
 test:
-	$(GOENV) go test ./... -v -race $(TESTFLAGS)
+	$(GOENV) go test ./... -race -timeout 30m $(TESTFLAGS)
+	cd contracts && GOWORK=off go test -race -timeout 15m ./...
 
 # schema-check — compiles the hand-written JSON Schemas, checks exact field paths and parser edge cases,
 # and validates repository examples.
 .PHONY: schema-check
 schema-check:
+	python3 scripts/sync-schemas.py --check
 	$(GOENV) go test ./pkg/schemacheck/
+	cd contracts && GOWORK=off go test ./schema
 
 # web-test/web-typecheck запускают Vitest и tsc; vite build этих проверок не выполняет.
 .PHONY: web-test web-typecheck
@@ -61,11 +64,12 @@ web-typecheck:
 .PHONY: generate
 generate:
 	$(GOENV) go run ./tools/genstagestatus
+	python3 scripts/sync-schemas.py
 
 # generate-check требует актуальный TS-файл статусов после изменений state.AllStatuses.
 .PHONY: generate-check
 generate-check: generate
-	git diff --exit-code -- pkg/web/dashboard/src/types/stage-status.generated.ts
+	git diff --exit-code -- pkg/web/dashboard/src/types/stage-status.generated.ts schema/
 
 SETSTATUSLINTER_BIN=$(LOCAL_BIN)/setstatuslinter
 
@@ -110,12 +114,12 @@ DOCKER_TAG   := latest
 
 .PHONY: docker-build docker-push docker-run
 
-# Dockerfile.runtime собирает дашборд сам; docker-build не требует host web-сборки.
+# Docker packaging consumes prebuilt Linux binaries from the trusted build.
 docker-build:
-	docker build --build-arg AFM_VERSION=$(VERSION) -f Dockerfile.runtime -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	./scripts/build-docker-image.sh "$(VERSION)" "$(CURDIR)/binaries"
 
-docker-push: docker-build
-	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)
+docker-push:
+	./scripts/build-docker-image.sh "$(VERSION)" "$(CURDIR)/binaries" --push
 
 docker-run:
 	docker run --rm -it \
@@ -131,13 +135,13 @@ RELEASE_TARGETS := $(addprefix release-,patch minor major \
 	patch-alpha minor-alpha major-alpha patch-beta minor-beta major-beta)
 
 # Проверяем все цели до выполнения рецептов, чтобы опечатка ветки не выпустила HEAD.
-RELEASE_BRANCH := $(filter main v1.x,$(MAKECMDGOALS))
+RELEASE_BRANCH := $(filter main v1.x v2.x,$(MAKECMDGOALS))
 ifneq ($(filter $(RELEASE_TARGETS),$(MAKECMDGOALS)),)
 ifneq ($(words $(filter $(RELEASE_TARGETS),$(MAKECMDGOALS))),1)
 $(error Specify exactly one release target)
 endif
-ifneq ($(filter-out $(RELEASE_TARGETS) main v1.x,$(MAKECMDGOALS)),)
-$(error Release targets accept only an optional main or v1.x branch)
+ifneq ($(filter-out $(RELEASE_TARGETS) main v1.x v2.x,$(MAKECMDGOALS)),)
+$(error Release targets accept only an optional main, v1.x or v2.x branch)
 endif
 endif
 ifneq ($(RELEASE_BRANCH),)
@@ -159,22 +163,20 @@ $(RELEASE_TARGETS):
 .PHONY: sdk-test sdk-test-integration sdk-lint
 
 sdk-test:
-	cd sdk && go test ./... -v -race
+	cd sdk && GOWORK=off go test ./... -v -race
 
 # sdk-test-integration builds afm with dashboard assets before spawning it in integration tests.
 sdk-test-integration: build
-	cd sdk && AFM_SDK_TEST_BINARY=$(LOCAL_BIN)/$(PROJECT_NAME) go test ./... -v -race -run Integration
+	cd sdk && GOWORK=off AFM_SDK_TEST_BINARY=$(LOCAL_BIN)/$(PROJECT_NAME) go test ./... -v -race -run Integration
 
 sdk-lint: $(GOLANGCI_BIN)
-	cd sdk && $(GOLANGCI_BIN) run ./...
+	cd sdk && GOWORK=off $(GOLANGCI_BIN) run ./...
 
 .PHONY: mesh-smoke
 
-# mesh-smoke runs Agent Mesh T9.1's gated real-adapter smoke test (pkg/orchestrator/agentcomm_adapter_smoke_test.go)
-# against a real, credentialed executor adapter named by AFM_MESH_SMOKE_COMMAND (e.g. claude, codex, or a
-# configured recipe wrapper, with its own credentials already in this shell's environment). Builds afm first
-# (mirrors sdk-test-integration's own AFM_SDK_TEST_BINARY wiring) so the adapter's own `afm agent` CLI calls
-# resolve to the binary this target just built, not a stale one elsewhere on PATH. Skips cleanly when
-# AFM_MESH_SMOKE_COMMAND is unset.
+ENGINE_DIR ?=
+
+# The real-provider scenario lives with engine integration tests and needs an explicit trusted workspace.
 mesh-smoke: build
-	AFM_MESH_SMOKE_AFM_BIN=$(LOCAL_BIN)/$(PROJECT_NAME) go test -run TestAdapterSmoke_SendReadReplyYieldResume ./pkg/orchestrator/... -v
+	@test -n "$(ENGINE_DIR)" && test -f go.work || (echo "Set ENGINE_DIR and create go.work with scripts/dev-workspace.sh" >&2; exit 1)
+	cd "$(ENGINE_DIR)/integration/afm" && GOWORK="$(CURDIR)/go.work" AFM_MESH_SMOKE_AFM_BIN="$(LOCAL_BIN)/$(PROJECT_NAME)" go test -tags afmintegration -run TestAdapterSmoke_SendReadReplyYieldResume ./... -v

@@ -1,3 +1,0 @@
-{"type":"assistant","message":{"id":"msg_A","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo hi"}}]}}
-{"type":"assistant","message":{"id":"msg_B","content":[{"type":"text","text":"Done."}]}}
-{"type":"result","subtype":"success","is_error":false}

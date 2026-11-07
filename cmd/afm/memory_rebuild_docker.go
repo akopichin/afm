@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/docker"
 )
 
 // rebuildDockerReExec перезапускает rebuild в Docker до захвата run/memory-локов; возвращает код выхода

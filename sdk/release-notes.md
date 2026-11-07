@@ -2,6 +2,15 @@
 
 Newest first. See the module's [README](./README.md) for usage; see the main project's [release-notes.md](../CHANGELOG.md) for afm itself.
 
+## 2026-11-07
+
+### Improvement: core mode in the SDK
+
+- `Config.Mode` (`ModeDashboard`, `ModeCore`) selects what `Client.Start` launches; `ModeCore` runs `afm run --mode core` and `Start` waits for `/api/runtime` to report `ready`. The default passes no `--mode`, so existing clients and older `afm` binaries are unaffected. `Run.Mode()` reports the mode, also for `Connect` and `Attach`.
+- `Run.WaitResult` returns the workflow's final status (new `RunState*` constants), `*RunChangedError` when another run takes over, and `ErrResultUnavailable` when `afm` disappears first.
+- `Run.Shutdown` stops the process this `Client` started (SIGINT, then kill with `ErrKilled`); `Wait` and `Cleanup` on handles you do not own now match `ErrNotOwned`. A core keeps its `MaxConcurrent` slot until it exits.
+- afm output kept for errors is bounded to 4 KiB and `cmd.WaitDelay` prevents a stuck pipe from blocking `Shutdown`. See the [README](./README.md#core-mode).
+
 ## 2026-10-20
 
 ### Improvement: Current SDK contract and live dashboard coverage

@@ -1,0 +1,4 @@
+name: core-script-failed
+stages:
+  - id: glue
+    script: echo boom >&2; exit 1

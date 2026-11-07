@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // pruneRuns удаляет из base самые старые успешные раны сверх keep. created — ID ранов, созданных этим
@@ -42,7 +43,7 @@ func isSuccessfulRun(base, id string) (bool, error) {
 	if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
 		return false, errors.New("not a run directory name")
 	}
-	rs, err := state.LoadRunState(filepath.Join(base, id))
+	rs, err := implstate.LoadRunState(filepath.Join(base, id))
 	if err != nil {
 		return false, fmt.Errorf("read journal: %w", err)
 	}

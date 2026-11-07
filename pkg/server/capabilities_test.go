@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
 	"github.com/akopichin/afm/pkg/server/workspace"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // fakeFS is a workspace.FS test double: Roots returns a configurable number of entries.
@@ -73,7 +73,7 @@ func (f fakeFS) Close() error {
 func newTestServer(t *testing.T, cfg Config) *Server {
 	t.Helper()
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -82,12 +82,11 @@ func newTestServer(t *testing.T, cfg Config) *Server {
 	cfg.RunDir = runDir
 	cfg.Store = store
 	if cfg.UIBus == nil {
-		cfg.UIBus = bus.NewUIBus()
+		cfg.UIBus = implbus.NewUIBus()
 	}
-	if cfg.Actions == nil {
-		cfg.Actions = fakeStageActions{}
-	}
-	return New(cfg)
+	srv := New(cfg)
+	srv.useFakes(fakeStageActions{}, nil)
+	return srv
 }
 
 func decodeStatus(t *testing.T, srv *Server) statusResponse {
@@ -117,3 +116,8 @@ func TestStatus_CapabilityReflectsWorkspace(t *testing.T) {
 		t.Error("expected file_browser=false")
 	}
 }
+
+// writableStore and writableBus give tests the concrete store and bus behind the server's read-only views.
+func writableStore(s *Server) *implstate.Store { return s.store.(*implstate.Store) }
+
+func writableBus(s *Server) *implbus.UIBus { return s.uiBus.(*implbus.UIBus) }

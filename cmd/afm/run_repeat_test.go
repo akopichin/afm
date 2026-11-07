@@ -1,9 +1,5 @@
 package main
 
-// Цикл repeat (S3.T1): проход флоу повторяется только после успешного рана, flow.yaml перечитывается перед
-// каждым новым циклом, а несовместимые правки останавливают процесс до создания run dir. Тесты гоняют настоящий
-// executeFlow на script-стадиях — без агентов и без Docker.
-
 import (
 	"context"
 	"encoding/json"
@@ -12,21 +8,22 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/browser"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/lifecyclehooks"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/browser"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/lifecyclehooks"
+	"github.com/akopichin/afm/contracts/state"
 )
+
+// Цикл repeat (S3.T1): проход флоу повторяется только после успешного рана, flow.yaml перечитывается перед
+// каждым новым циклом, а несовместимые правки останавливают процесс до создания run dir. Тесты гоняют настоящий
+// executeFlow на script-стадиях — без агентов и без Docker.
 
 const loopTestTimeout = 60 * time.Second
 
@@ -193,7 +190,7 @@ func (fx *cycleFixture) runDirs() []string {
 
 func (fx *cycleFixture) runState(runID string) state.RunState {
 	fx.t.Helper()
-	rs, err := state.LoadRunState(filepath.Join(fx.root, ".afm", "runs", runID))
+	rs, err := implstate.LoadRunState(filepath.Join(fx.root, ".afm", "runs", runID))
 	if err != nil {
 		fx.t.Fatal(err)
 	}
@@ -1144,286 +1141,6 @@ func TestRepeatLoop_ContainerGivesEveryCycleTheSameBrowserDescriptor(t *testing.
 }
 
 // --- Docker-проекция детерминирована ---
-
-func TestProjectDocker_StableAcrossMapIterationOrder(t *testing.T) {
-	cfg := config.Config{Collaboration: config.CollaborationConfig{Profiles: map[string]config.ProfileConfig{
-		"a": {Command: "cmd-e"}, "b": {Command: "cmd-b"}, "c": {Command: "cmd-d"},
-		"d": {Command: "cmd-a"}, "e": {Command: "cmd-c"}, "f": {Command: "cmd-f"},
-	}}}
-	f := &flow.Flow{Name: "a", Stages: []flow.Stage{stageWithCommand("s", "mytool")}}
-	first, err := projectDocker(f, cfg, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range 100 {
-		got, err := projectDocker(f, cfg, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, first) {
-			t.Fatalf("projection #%d = %+v differs from the first %+v for the same flow", i, got, first)
-		}
-	}
-}
-
-func savedHelperTask(command string, status assistants.TaskStatus, parent assistants.TaskID) *state.TaskState {
-	t := &state.TaskState{Task: assistants.Task{Status: status, ProfileSnapshot: assistants.Profile{Command: command}}}
-	if parent != "" {
-		t.ParentTaskID = &parent
-	}
-	return t
-}
-
-// A resumed run keeps the executor of every unfinished task, which the current config may no longer name. A task
-// of an older journal without a command is resolved as the orchestrator resolves it: its parent's, else its root
-// stage's in the registry the run restores — frozen or added during the run, not the edited flow — else the client's.
-func TestResumeTaskCommands(t *testing.T) {
-	legacy := func(stage string, status assistants.TaskStatus, parent assistants.TaskID) *state.TaskState {
-		tk := savedHelperTask("", status, parent)
-		tk.RootStageID = stage
-		return tk
-	}
-	bound := savedHelperTask("bound-cli", assistants.StatusQueued, "")
-	bound.Execution = &assistants.ExecutionBinding{Source: assistants.CommandSourceProfile}
-	saved := &savedRun{
-		stages: []flow.Stage{{ID: "frozen", Command: "frozen-cli"}, {ID: "plain"}},
-		state: state.RunState{
-			DynamicStages: []state.DynamicStageAdded{{Stage: flow.Stage{ID: "added", Command: "added-cli"}}},
-			Assistants: state.AssistantsState{Tasks: map[assistants.TaskID]*state.TaskState{
-				"t-running":    savedHelperTask("saved-reviewer", assistants.StatusRunning, ""),
-				"t-paused":     savedHelperTask("saved-reviewer", assistants.StatusPaused, ""),
-				"t-finished":   savedHelperTask("finished-cli", assistants.StatusCompleted, ""),
-				"t-bound":      bound,
-				"t-lead":       savedHelperTask("lead-cli", assistants.StatusCompleted, ""),
-				"t-child":      savedHelperTask("", assistants.StatusQueued, "t-lead"),
-				"t-frozen":     legacy("frozen", assistants.StatusWatching, ""),
-				"t-added":      legacy("added", assistants.StatusQueued, ""),
-				"t-root":       legacy("frozen", assistants.StatusCompleted, ""),
-				"t-descendant": legacy("frozen", assistants.StatusQueued, "t-root"),
-				"t-plain":      legacy("plain", assistants.StatusQueued, ""),
-				"t-run-agent":  legacy("", assistants.StatusQueued, ""),
-			}},
-		},
-	}
-	edited := &flow.Flow{Stages: []flow.Stage{{ID: "frozen"}, {ID: "plain", Command: "edited-cli"}}}
-	cfg := config.Config{Client: config.ClientConfig{Command: "my-client"}}
-
-	got := resumeTaskCommands(saved, edited, cfg)
-	slices.Sort(got)
-	want := []string{"added-cli", "bound-cli", "frozen-cli", "frozen-cli", "lead-cli", "my-client", "my-client", "saved-reviewer", "saved-reviewer"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("resumeTaskCommands = %v, want %v", got, want)
-	}
-
-	// A run that froze no registry yet restores the declaration; without client.command the client is claude.
-	fresh := &savedRun{state: state.RunState{Assistants: state.AssistantsState{Tasks: map[assistants.TaskID]*state.TaskState{
-		"t-plain": legacy("plain", assistants.StatusQueued, ""), "t-frozen": legacy("frozen", assistants.StatusQueued, ""),
-	}}}}
-	got = resumeTaskCommands(fresh, edited, config.Config{})
-	slices.Sort(got)
-	if want := []string{config.ClaudeCommand, "edited-cli"}; !slices.Equal(got, want) {
-		t.Fatalf("without a frozen registry: resumeTaskCommands = %v, want %v", got, want)
-	}
-	if got := resumeTaskCommands(nil, edited, cfg); got != nil {
-		t.Fatalf("a new run: resumeTaskCommands = %v, want nil", got)
-	}
-}
-
-// A saved task admitted with another recipe than its command would get now fails executor_changed before its first
-// turn, so the restart prepares nothing for it. The comparison is the orchestrator's, with the identity a re-exec'd
-// autoShim container computes; a task of an older journal has nothing to compare and is always prepared.
-func TestResumeTaskCommands_SkipsATaskAdmittedWithAnotherRecipe(t *testing.T) {
-	admitted := config.AgentRecipe{Type: config.ClaudeCommand, Model: "m1", Auth: config.RecipeAuth{To: "env:ANTHROPIC_API_KEY"}}
-	changed := admitted
-	changed.Model = "m2"
-	agents := map[string]config.AgentRecipe{
-		"changed": changed, "same": admitted, "became-recipe": admitted, config.ClaudeCommand: changed, "legacy-recipe": changed,
-	}
-	child := func(command, identity string) *state.TaskState {
-		tk := boundHelperTask(command, identity)
-		tk.Execution.Source = assistants.CommandSourceParent
-		tk.ParentTaskID = new(assistants.TaskID("t-lead"))
-		return tk
-	}
-	for _, tc := range []struct {
-		name     string
-		task     *state.TaskState
-		autoShim bool
-		kept     bool
-	}{
-		{"recipe changed", boundHelperTask("changed", admitted.Identity()), true, false},
-		{"recipe removed", boundHelperTask("removed", admitted.Identity()), true, false},
-		{"same recipe", boundHelperTask("same", admitted.Identity()), true, true},
-		{"no recipe then or now", boundHelperTask("host-cli", ""), true, true},
-		{"a recipe now, none then", boundHelperTask("became-recipe", ""), true, false},
-		{"claude never gets a wrapper", boundHelperTask(config.ClaudeCommand, ""), true, true},
-		{"older journal", savedHelperTask("legacy-recipe", assistants.StatusQueued, ""), true, true},
-		{"child of a parent on a changed recipe", child("changed", admitted.Identity()), true, false},
-		{"child of a parent on the same recipe", child("same", admitted.Identity()), true, true},
-		{"without autoShim: admitted with a recipe", boundHelperTask("same", admitted.Identity()), false, false},
-		{"without autoShim: admitted without one", boundHelperTask("same", ""), false, true},
-	} {
-		cfg := config.Config{Docker: config.DockerConfig{AutoShim: &tc.autoShim, Agents: agents}}
-		saved := &savedRun{state: state.RunState{Assistants: state.AssistantsState{Tasks: map[assistants.TaskID]*state.TaskState{
-			"t-lead": boundHelperTask("lead-cli", ""), "t": tc.task,
-		}}}}
-		saved.state.Assistants.Tasks["t-lead"].Status = assistants.StatusCompleted
-		var want []string
-		if tc.kept {
-			want = []string{tc.task.ProfileSnapshot.Command}
-		}
-		if got := resumeTaskCommands(saved, &flow.Flow{}, cfg); !slices.Equal(got, want) {
-			t.Errorf("%s: resumeTaskCommands = %v, want %v", tc.name, got, want)
-		}
-	}
-}
-
-// Two saved tasks share a command, one admitted with the current recipe and one with an older one: the command and
-// its secret are prepared once, for the task that will run.
-func TestProjectDocker_CommandSharedByAStaleAndAMatchingTask(t *testing.T) {
-	t.Setenv("AFM_COLLABORATION", "1")
-	recipe := config.AgentRecipe{Type: config.ClaudeCommand, Model: "m2", Auth: config.RecipeAuth{To: "env:ANTHROPIC_API_KEY"}}
-	older := recipe
-	older.Model = "m1"
-	cfg := recipeTestConfig(map[string]config.AgentRecipe{"shared": recipe})
-	saved := &savedRun{state: state.RunState{Assistants: state.AssistantsState{Tasks: map[assistants.TaskID]*state.TaskState{
-		"t-matching": boundHelperTask("shared", recipe.Identity()),
-		"t-stale":    boundHelperTask("shared", older.Identity()),
-	}}}}
-	f := &flow.Flow{Stages: []flow.Stage{{ID: "s"}}}
-	if got := resumeTaskCommands(saved, f, cfg); !slices.Equal(got, []string{"shared"}) {
-		t.Fatalf("resumeTaskCommands = %v, want the matching task's command only", got)
-	}
-	p, err := projectDocker(f, cfg, resumeTaskCommands(saved, f, cfg))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := p.Recipes["shared"]; !ok || !slices.Equal(p.Extra, []string{"shared"}) || !p.Generated["shared"] {
-		t.Fatalf("projection = %+v, want the shared recipe prepared once", p)
-	}
-}
-
-// The codex adapter run only by a helper — a configured profile or a saved task — still gets the codex state mounted.
-func TestProjectDocker_CodexStateForAHelperOnlyAdapter(t *testing.T) {
-	t.Setenv("AFM_COLLABORATION", "1")
-	f := &flow.Flow{Stages: []flow.Stage{{ID: "s"}}}
-	savedCodexTask := &savedRun{state: state.RunState{Assistants: state.AssistantsState{Tasks: map[assistants.TaskID]*state.TaskState{
-		"t": savedHelperTask("codex-as-claude", assistants.StatusQueued, ""),
-	}}}}
-	codexProfile := config.Config{Collaboration: config.CollaborationConfig{Profiles: map[string]config.ProfileConfig{"r": {Command: "codex-as-claude"}}}}
-	for name, tc := range map[string]struct {
-		cfg   config.Config
-		saved *savedRun
-		want  bool
-	}{
-		"saved task": {config.Config{}, savedCodexTask, true},
-		"profile":    {codexProfile, nil, true},
-		"no adapter": {config.Config{}, nil, false},
-	} {
-		p, err := projectDocker(f, tc.cfg, resumeTaskCommands(tc.saved, f, tc.cfg))
-		if err != nil {
-			t.Fatalf("%s: projectDocker: %v", name, err)
-		}
-		if p.MountCodexState != tc.want {
-			t.Errorf("%s: MountCodexState = %t, want %t (commands %v)", name, p.MountCodexState, tc.want, p.Commands)
-		}
-	}
-}
-
-// The host prepares the container from the saved journal before re-exec, the container from the run it opened:
-// both must see the saved task's recipe, or its wrapper and secret would be missing after the restart, and both must
-// leave out a task admitted with a recipe that has changed since.
-func TestDockerProjection_SavedTaskSameOnHostAndInContainer(t *testing.T) {
-	t.Setenv("AFM_IN_DOCKER", "1") // the helper is admitted in the container
-	runs := t.TempDir()
-	runDir := filepath.Join(runs, "flow-20260101-000000-abcd")
-	f := &flow.Flow{Name: "flow", Stages: []flow.Stage{{ID: "s"}}}
-	store, err := state.Open(runDir, []string{"s"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BeginRun(); err != nil {
-		t.Fatal(err)
-	}
-	autoShim := true
-	recipe := config.AgentRecipe{Type: config.ClaudeCommand, Model: "m", Auth: config.RecipeAuth{To: "env:ANTHROPIC_API_KEY"}}
-	changed := recipe
-	changed.Model = "m2"
-	now := config.Config{Docker: config.DockerConfig{AutoShim: &autoShim, Agents: map[string]config.AgentRecipe{
-		"old-recipe": recipe, "frozen-recipe": recipe, "stale-recipe": changed,
-	}}}
-	created := config.Config{
-		Collaboration: config.CollaborationConfig{Profiles: map[string]config.ProfileConfig{
-			"old": {Command: "old-recipe"}, "stale": {Command: "stale-recipe"},
-		}},
-		Docker: config.DockerConfig{AutoShim: &autoShim, Agents: map[string]config.AgentRecipe{"old-recipe": recipe, "stale-recipe": recipe}},
-	}
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir: runDir, Stages: f.Stages, Store: store, Config: created, Prompts: orchestrator.DefaultPrompts(),
-		AssistantsEnabled: true, AssistantsRegistry: startCollaboration(store, created, f).registry,
-		RecipeIdentity: func(cmd string) string { return recipeIdentity(created, cmd) },
-	})
-	// "stale" is admitted with a recipe the config below has since changed: it fails executor_changed on resume.
-	for _, profile := range []assistants.ProfileID{"old", "stale"} {
-		if _, err := orch.AddRunAgent(context.Background(), orchestrator.AddRunAgentRequest{
-			OperationID: "team/" + string(profile), ProfileID: profile, Title: string(profile), Actor: state.Actor{Kind: "system", ID: "flow"},
-		}); err != nil {
-			t.Fatalf("AddRunAgent %s: %v", profile, err)
-		}
-	}
-	// A task of an older journal has no command of its own: it runs the command of its stage, which the run froze
-	// and the edited flow below no longer declares.
-	if err := graph.SaveRegistry(runDir, []flow.Stage{{ID: "s"}, {ID: "frozen", Command: "frozen-recipe"}}); err != nil {
-		t.Fatal(err)
-	}
-	legacyTask, err := json.Marshal(map[string]any{
-		"profile_id": "role", "profile_snapshot": map[string]any{"ID": "role"}, "title": "Legacy", "instruction": "x",
-		"mode": "advisory", "trigger": "one_shot", "policy_rev": "rev-1", "max_depth_at_create": 3, "created_by": "user",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.AppendControl(&state.Control{Kind: "task_created", SchemaVersion: state.ControlSchemaVersion, OperationID: "legacy",
-		Actor: state.Actor{Kind: "user"}, Target: state.Target{TaskID: "t-legacy", StageID: "frozen"}, Payload: legacyTask}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	saved, err := loadSavedRun(runs, "flow", f)
-	if err != nil || saved == nil {
-		t.Fatalf("loadSavedRun = %v, %v; want the unfinished run", saved, err)
-	}
-	host, err := projectDocker(f, now, resumeTaskCommands(saved, f, now))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := state.Open(runDir, []string{"s"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { reopened.Close() })
-	openedRun, err := readSavedRun(runDir, reopened.Snapshot()) // what executeFlow hands prepareRunEnvironment
-	if err != nil {
-		t.Fatal(err)
-	}
-	inContainer, err := projectDocker(f, now, resumeTaskCommands(openedRun, f, now))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !reflect.DeepEqual(host, inContainer) {
-		t.Fatalf("host projection %+v differs from the container's %+v", host, inContainer)
-	}
-	if !slices.Equal(host.Extra, []string{"frozen-recipe", "old-recipe"}) || !host.Generated["old-recipe"] || !host.Generated["frozen-recipe"] {
-		t.Fatalf("projection = %+v, want the saved tasks' recipes prepared", host)
-	}
-	if _, ok := host.Recipes["stale-recipe"]; ok || host.Generated["stale-recipe"] || slices.Contains(host.Commands, "stale-recipe") {
-		t.Fatalf("projection = %+v, want nothing prepared for the task admitted with another recipe", host)
-	}
-}
 
 func TestCheckReloadCompatible_ContainerUnchangedFlowWithManyHelperProfiles(t *testing.T) {
 	t.Setenv("AFM_IN_DOCKER", "1")

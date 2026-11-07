@@ -7,6 +7,7 @@ opening a pull request.
 
 - Go (the version pinned in [`go.mod`](go.mod) — do not bump it without discussion)
 - Node.js (for building the web dashboard)
+- Python 3 (for schema compatibility and release checks)
 - Docker (optional — only needed for Docker-mode features and their tests)
 
 ## Build and test
@@ -17,10 +18,17 @@ make test         # run the full test suite with -race
 make lint         # golangci-lint (must be clean)
 ```
 
-Go dependencies are checked into `vendor/`, so Go builds and tests can run
-without downloading modules. After changing `go.mod` or `go.sum`, run
-`make vendor` and commit the resulting `vendor/` changes with the manifests.
-Building the dashboard still requires npm dependencies from its lockfile.
+Full AFM 3.x builds require read access to the private `github.com/akopichin/afm-engine`
+module. Configure Git authentication and `GOPRIVATE=github.com/akopichin/afm-engine`
+before downloading dependencies. Private sources must never be committed under
+`vendor/`, uploaded as public caches, or copied into release archives. Run `go mod
+tidy` after dependency changes and commit the module manifests and checksums.
+The public CI tests `contracts`, `sdk`, and the dashboard without private access.
+Full product builds and integration tests run in the private engine repository.
+
+For changes spanning both repositories, create an ignored workspace using
+`./scripts/dev-workspace.sh /path/to/afm-engine`. Consumer versions in `go.mod`
+remain pinned; validate the final revision with `GOWORK=off` as well.
 
 Before committing, run `make lint build test`.
 
@@ -145,8 +153,8 @@ the public site).
 ## Pull requests
 
 - Keep changes focused; one logical change per PR.
-- Add or update tests for behavior changes — see the many `*_test.go` files and the
-  integration tests in `pkg/orchestrator/` for patterns.
+- Add or update tests for behavior changes. Execution regressions belong in
+  `afm-engine/internal`; product and HTTP integration tests remain in AFM.
 - Make sure `make lint` and `make test` pass.
 - Note which agents/models you tested against (Claude, GLM, DeepSeek, Cursor, …) when
   relevant — behavior can differ between agent CLIs.
@@ -156,3 +164,12 @@ the public site).
 Include the afm version (`afm --version`), the `flow.yaml` (redacted as needed), and
 the relevant `.afm/runs/<run>/` logs — the event log and per-stage `<phase>.log` are
 usually enough to reproduce.
+
+## Maintaining the 2.x release line
+
+`v2.x` starts at stable `v2.2.6` and retains its self-contained public build,
+vendored dependencies, and CI. Base fixes on that branch and validate them there.
+Use `make release-patch v2.x` or `make release-minor v2.x` only when publication
+is intended; major bumps on maintenance branches are rejected. Maintenance
+releases update `afm@2` / `afm-2` and Docker `:2`, leaving 3.x channels unchanged.
+See [the release guide](docs/releases.md) for dry runs and channel routing.

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // A typed rejection reaches the client as a 4xx with its reason, so an agent (or the dashboard) can tell

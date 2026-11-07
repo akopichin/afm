@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/state"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // fakeFlowActions returns configured results/errors without a real orchestrator.
@@ -91,7 +91,7 @@ func TestFlowPause_Success(t *testing.T) {
 }
 
 func TestFlowInject_ErrorCodes(t *testing.T) {
-	fa := &fakeFlowActions{injectErr: orchestrator.ErrNoNotes}
+	fa := &fakeFlowActions{injectErr: implorchestrator.ErrNoNotes}
 	srv := newTestServer(t, Config{FlowActions: fa})
 	rr := httptest.NewRecorder()
 	body := strings.NewReader(`{"stage_id":"s1"}`)
@@ -194,7 +194,7 @@ func TestFlowNotes_AddSuccess(t *testing.T) {
 // TestFlowNotes_AddRevConflict checks the ErrRevConflict -> 409 rev_conflict
 // mapping (added by this task alongside stale_content/stale_line/empty_text).
 func TestFlowNotes_AddRevConflict(t *testing.T) {
-	fa := &fakeFlowActions{reviewState: "paused", addNoteErr: orchestrator.ErrRevConflict}
+	fa := &fakeFlowActions{reviewState: "paused", addNoteErr: implorchestrator.ErrRevConflict}
 	srv := newTestServer(t, Config{FlowActions: fa, ReviewState: fa.review})
 	rr := httptest.NewRecorder()
 	body := strings.NewReader(`{"root":"project","path":"a.go","text":"fix","content_sha":"sha256:x","expected_rev":5}`)

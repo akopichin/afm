@@ -1,44 +1,23 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	bus "github.com/akopichin/afm/contracts/events"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/pkg/server/workspace"
-	"github.com/akopichin/afm/pkg/state"
-	"github.com/akopichin/afm/pkg/web"
 )
-
-// themeCustom — активный skin_dir (не значение EffectiveTheme, поэтому не в
-// pkg/config; goga/novacorps/graphite берутся из config.Theme*).
-const themeCustom = "custom"
-
-// Имена файлов внутри директории скина (встроенной или skin_dir).
-const skinIndexFile = "index.css"
-
-// skinFaviconCandidates — имена favicon-файлов скина в порядке поиска;
-// расширение первого найденного определяет <link type="..."> (svg/png).
-var skinFaviconCandidates = []string{"favicon.svg", "favicon.png"}
-
-const skinTitleFile = "title.txt"
-
-// mimeSVG — MIME-тип favicon по умолчанию (favicon.svg и общий дефолт).
-const mimeSVG = "image/svg+xml"
 
 // MIME-типы растровых картинок, используемые в нескольких местах пакета — вынесены в константы, чтобы
 // литералы не дублировались.
@@ -49,35 +28,17 @@ const (
 	mimeWebP = "image/webp"
 )
 
-// faviconMIME возвращает MIME-тип favicon по имени файла (расширению).
-func faviconMIME(name string) string {
-	if strings.HasSuffix(name, ".png") {
-		return mimePNG
-	}
-	return mimeSVG
+// RunStateReader is the read-only view of the run's state the dashboard needs; the server has no writable store.
+type RunStateReader interface {
+	Snapshot() state.RunState
+	History() ([]state.Transition, error)
 }
 
-// defaultFaviconHref — общий дефолтный favicon, используется, когда у активного
-// скина нет своего favicon.svg/favicon.png.
-const defaultFaviconHref = "./favicon.svg"
-
-// customSkinRoute — префикс маршрута, отдающего skin_dir с диска.
-const customSkinRoute = "/skins/custom/"
-
-// skinHrefFor возвращает относительный href на стиль встроенного скина по имени.
-func skinHrefFor(name string) string {
-	return "./skins/" + name + "/" + skinIndexFile
-}
-
-// findSkinFavicon ищет favicon скина через statFn (embed или диск) по skinFaviconCandidates. Возвращает
-// относительный href, MIME и true, если нашёл; иначе false — вызывающий использует дефолт.
-func findSkinFavicon(base string, statFn func(name string) bool) (href, mime string, found bool) {
-	for _, name := range skinFaviconCandidates {
-		if statFn(name) {
-			return base + "/" + name, faviconMIME(name), true
-		}
-	}
-	return "", "", false
+// EventStream is a subscription to the dashboard event bus, without the right to publish.
+type EventStream interface {
+	Subscribe(bufSize int) (id uint64, events <-chan bus.Event)
+	Unsubscribe(id uint64)
+	SubscriberDroppedCount(id uint64) uint64
 }
 
 // Server is the HTTP server for the dashboard and API.
@@ -85,8 +46,8 @@ type Server struct {
 	runDir             string
 	Description        string // корневой description флоу (для хедера дашборда)
 	stages             RuntimeStageProvider
-	store              *state.Store
-	uiBus              *bus.UIBus
+	store              RunStateReader
+	uiBus              EventStream
 	accounting         accounting.CostProvider      // nil = accounting unsupported (server built without it); see handleStatus
 	showMoney          bool                         // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
 	usageAnalytics     UsageAnalyticsSource         // nil = capability off (GET /api/usage/analytics не регистрируется)
@@ -113,11 +74,9 @@ type Server struct {
 	redact             func(string) string          // removes the run's secret values from logged text; nil = environment secrets only
 	commandNames       map[string]string            // config command_names; read by commandName
 	unknownCommandName string                       // dashboard fallback label prefix, never empty (New defaults it)
-	theme              string                       // "goga" или "" (default graphite)
+	runtime            RuntimeInfo                  // режим и готовность для /api/runtime
 	version            string                       // версия afm-бинарника, отдаётся в /api/status для футера дашборда
-	indexBytes         []byte                       // предподготовленный index.html (с заменами скина/favicon)
-	fileServer         http.Handler                 // отдаёт встроенную статику (skins/, assets, ...)
-	customSkinServer   http.Handler                 // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	ui                 http.Handler                 // Web UI на "/"; nil = API-only, "/" отвечает 404
 	httpSrv            *http.Server
 	// Keepalive-таймауты вебсокета.
 	wsPongWait   time.Duration
@@ -195,7 +154,7 @@ type Config struct {
 	// wiring passes an orchestrator-registry-backed provider (cmd/afm/run_dashboard.go); tests can use a plain
 	// StaticStageConfigs map.
 	Stages RuntimeStageProvider
-	Store  *state.Store
+	Store  RunStateReader
 	// Accounting — источник данных о стоимости/токенах run'а для /api/status.
 	Accounting accounting.CostProvider
 	// ShowMoney включает показ денежных ($) величин в дашборде
@@ -206,7 +165,7 @@ type Config struct {
 	UsageAnalytics UsageAnalyticsSource
 	// UsageMode — режим показа аналитики (см. UsageModeFor); пустое значение читается как time_only.
 	UsageMode   UsageAnalyticsMode
-	UIBus       *bus.UIBus
+	UIBus       EventStream
 	Actions     StageActions
 	Secondary   SecondaryActions
 	FlowActions FlowActions
@@ -244,10 +203,12 @@ type Config struct {
 	CommandNames map[string]string
 	// UnknownCommandName is the dashboard's fallback label prefix; empty means config.DefaultUnknownCommandName.
 	UnknownCommandName string
-	Theme              string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
-	SkinDir string
+	// UI — обработчик Web UI на "/"; nil = только API, "/" отвечает 404.
+	UI http.Handler
+	// Runtime — режим процесса и признак готовности для /api/runtime.
+	Runtime RuntimeInfo
 	// Keepalive-таймауты вебсокета. Нулевые значения → дефолты из websocket.go.
 	WSPongWait   time.Duration
 	WSPingPeriod time.Duration
@@ -309,12 +270,12 @@ func New(cfg Config) *Server {
 		redact:             cfg.RedactSecrets,
 		commandNames:       cfg.CommandNames,
 		unknownCommandName: unknownCommandName,
-		theme:              cfg.Theme,
 		version:            cfg.Version,
+		runtime:            cfg.Runtime,
 		wsPongWait:         pongWait,
 		wsPingPeriod:       pingPeriod,
 		wsWriteWait:        writeWait,
-		fileServer:         http.FileServer(http.FS(web.FS)),
+		ui:                 cfg.UI,
 		done:               make(chan struct{}),
 	}
 
@@ -323,62 +284,9 @@ func New(cfg Config) *Server {
 		s.ownerTokenDigest = &digest
 	}
 
-	skinName := s.builtinSkinName()
-	skinHref := skinHrefFor(skinName)
-	faviconHref, faviconMimeType, faviconFound := s.embeddedFavicon(skinName)
-	if !faviconFound {
-		faviconHref, faviconMimeType = defaultFaviconHref, mimeSVG
-	}
-	titleText := ""
-	if data, err := fs.ReadFile(web.FS, "skins/"+skinName+"/"+skinTitleFile); err == nil {
-		titleText = strings.TrimSpace(string(data))
-	}
-
-	// skin_dir полностью подменяет активный скин: нужен index.css внутри директории, иначе — предупреждение и
-	// fallback на встроенный скин.
-	if cfg.SkinDir != "" {
-		if _, err := os.Stat(filepath.Join(cfg.SkinDir, skinIndexFile)); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skin_dir %q has no %s, using skin %q\n", cfg.SkinDir, skinIndexFile, skinName)
-		} else {
-			s.customSkinServer = http.FileServer(http.FS(os.DirFS(cfg.SkinDir)))
-			skinName = themeCustom
-			skinHref = skinHrefFor(themeCustom)
-			faviconHref, faviconMimeType = defaultFaviconHref, mimeSVG
-			if href, mime, ok := findSkinFavicon("./skins/custom", func(name string) bool {
-				_, err := os.Stat(filepath.Join(cfg.SkinDir, name))
-				return err == nil
-			}); ok {
-				faviconHref, faviconMimeType = href, mime
-			}
-			titleText = ""
-			if data, err := os.ReadFile(filepath.Join(cfg.SkinDir, skinTitleFile)); err == nil {
-				titleText = strings.TrimSpace(string(data))
-			}
-		}
-	}
-
-	// Предподготовка index.html: подменяем ссылку на CSS, класс body, favicon и, если у скина есть title.txt,
-	// <title>. Замены строковые — сами файлы скина отдаст fileServer/customSkinServer позже.
-	indexBytes, err := fs.ReadFile(web.FS, "index.html")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: read embedded index.html: %v\n", err)
-	} else {
-		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`href="`+skinHrefFor(config.ThemeGraphite)+`"`), []byte(`href="`+skinHref+`"`))
-		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`class="theme-`+config.ThemeGraphite+`"`), []byte(`class="theme-`+skinName+`"`))
-		indexBytes = bytes.ReplaceAll(indexBytes,
-			[]byte(`type="`+mimeSVG+`" href="`+defaultFaviconHref+`"`),
-			[]byte(`type="`+faviconMimeType+`" href="`+faviconHref+`"`))
-		if titleText != "" {
-			indexBytes = bytes.ReplaceAll(indexBytes,
-				[]byte(`<title>afm Dashboard</title>`), []byte(`<title>`+titleText+`</title>`))
-		}
-		s.indexBytes = indexBytes
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/runtime", s.handleRuntime)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	if s.usageAnalytics != nil {
 		mux.HandleFunc("/api/usage/analytics", s.handleUsageAnalytics)
@@ -422,11 +330,11 @@ func New(cfg Config) *Server {
 		mux.HandleFunc("/api/mesh/", s.routeMesh)
 	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
-	if s.customSkinServer != nil {
-		// custom skin CSS — тоже фиксированное имя, не кэшируем (см. serveStatic).
-		mux.Handle(customSkinRoute, http.StripPrefix(customSkinRoute, noStore(s.customSkinServer)))
+	if s.ui != nil {
+		mux.Handle("/", s.ui)
+	} else {
+		mux.HandleFunc("/", http.NotFound)
 	}
-	mux.HandleFunc("/", s.serveStatic)
 
 	s.httpSrv = &http.Server{
 		Addr:              dashboardListenAddr(cfg.Port, config.ReExecedIntoContainer()),
@@ -442,73 +350,6 @@ func dashboardListenAddr(port int, inContainer bool) string {
 		return fmt.Sprintf(":%d", port)
 	}
 	return fmt.Sprintf("127.0.0.1:%d", port)
-}
-
-// builtinSkinName нормализует Theme до имени встроенного скина: "goga", "novacorps" или дефолт "graphite"
-// (сюда же попадает устаревший алиас "coffee", пустое и неизвестные значения).
-func (s *Server) builtinSkinName() string {
-	switch s.theme {
-	case config.ThemeGoga:
-		return config.ThemeGoga
-	case config.ThemeNovacorps:
-		return config.ThemeNovacorps
-	default:
-		return config.ThemeGraphite
-	}
-}
-
-// embeddedFavicon ищет favicon встроенного скина среди skinFaviconCandidates
-// (skins/<name>/favicon.svg или favicon.png в embed).
-func (s *Server) embeddedFavicon(skinName string) (href, mime string, found bool) {
-	return findSkinFavicon("./skins/"+skinName, func(name string) bool {
-		_, err := fs.Stat(web.FS, "skins/"+skinName+"/"+name)
-		return err == nil
-	})
-}
-
-// serveStatic отдаёт index.html для "/" и "/index.html", остальную статику делегирует на FileServer.
-func noStore(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, must-revalidate")
-		h.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" || r.URL.Path == "/index.html" {
-		s.serveIndex(w, r)
-		return
-	}
-	// Скины отдаются с ФИКСИРОВАННЫМИ именами, в отличие от контент-хэшированного JS-бандла. no-store
-	// заставляет браузер всегда брать свежий CSS; для локального дашборда это дёшево.
-	if strings.HasPrefix(r.URL.Path, "/skins/") {
-		w.Header().Set("Cache-Control", "no-store, must-revalidate")
-	}
-	s.fileServer.ServeHTTP(w, r)
-}
-
-// dashboardCSP — Content-Security-Policy для документа дашборда.
-const dashboardCSP = "default-src 'self'; " +
-	"img-src 'self' data: blob:; " +
-	"style-src 'self' 'unsafe-inline'; " +
-	"script-src 'self' 'sha256-lZhgtiuhrcX+JCIbk+3Pi4xUGHjw107eJYKPorMPpdQ='; " +
-	"connect-src 'self' ws: wss:; " +
-	"font-src 'self' data:; " +
-	"base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
-
-// serveIndex отдаёт предподготовленный index.html. Если embed-чтение не удалось
-// (indexBytes пуст), fallback на FileServer — защита от регрессии embed.
-func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
-	// index.html тоже с фиксированным именем и подменяется на лету (скин/ favicon) — не должен кэшироваться,
-	// иначе браузер отдаст старую ссылку на assets/skins после пересборки.
-	w.Header().Set("Cache-Control", "no-store, must-revalidate")
-	w.Header().Set("Content-Security-Policy", dashboardCSP)
-	if len(s.indexBytes) == 0 {
-		s.fileServer.ServeHTTP(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(s.indexBytes)
 }
 
 func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {

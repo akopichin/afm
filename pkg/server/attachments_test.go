@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/akopichin/afm-engine/testkit/engine"
 )
 
 func TestHandleUploadAttachment_Success(t *testing.T) {
@@ -64,7 +66,7 @@ func TestHandleUploadAttachment_RejectsUnsupportedType(t *testing.T) {
 func TestHandleUploadAttachment_RejectsOversizedBody(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	body := bytes.Repeat([]byte{0x00}, maxAttachmentBytes+1)
+	body := bytes.Repeat([]byte{0x00}, engine.MaxAttachmentBytes+1)
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/attachments", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "image/png")
 	w := httptest.NewRecorder()

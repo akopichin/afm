@@ -60,6 +60,8 @@ nav:
       - Agent memory: agent-memory.md
       - Cost accounting: accounting.md
       - Dashboard: dashboard.md
+      - Core mode (API only): core-mode.md
+      - Engine and 3.x builds: engine.md
       - Telegram bot: telegram-bot.md
       - Helpers and collaboration: collaboration.md
       - Migrating helper waits: agent-wait-migration.md

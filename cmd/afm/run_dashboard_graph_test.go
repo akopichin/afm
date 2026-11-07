@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
-// startGraphTestDashboard поднимает настоящий dashboard через startDashboard и возвращает его базовый URL.
+// startGraphTestDashboard поднимает настоящий dashboard через startServer и возвращает его базовый URL.
 // Оркестратор не запускается (Run не вызывается): для проверки capability и маршрутов графа агенты не нужны.
 func startGraphTestDashboard(t *testing.T, cfg config.Config) string {
 	t.Helper()
@@ -25,17 +25,17 @@ func startGraphTestDashboard(t *testing.T, cfg config.Config) string {
 }
 
 // startTestDashboard is startGraphTestDashboard with a hook that completes the server config before the start.
-func startTestDashboard(t *testing.T, cfg config.Config, extend func(sc *server.Config, runDir string, store *state.Store, orch *orchestrator.Orchestrator)) string {
+func startTestDashboard(t *testing.T, cfg config.Config, extend func(sc *server.Config, runDir string, store *implstate.Store, orch *implorchestrator.Orchestrator)) string {
 	t.Helper()
 	runDir := t.TempDir()
 	stages := []flow.Stage{{ID: "work", Name: "Work", Agents: []flow.AgentType{flow.AgentAuto}}}
-	store, err := state.Open(runDir, []string{"work"})
+	store, err := implstate.Open(runDir, []string{"work"})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir: runDir, Stages: stages, Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(),
+	orch := implorchestrator.New(implorchestrator.Options{
+		RunDir: runDir, Stages: stages, Store: store, Config: cfg, Prompts: implorchestrator.DefaultPrompts(),
 		AddStageDisabled: !cfg.AddStage.IsEnabled(),
 	})
 
@@ -49,13 +49,13 @@ func startTestDashboard(t *testing.T, cfg config.Config, extend func(sc *server.
 	}
 	cfg.Server.Port = &port
 
-	sc := server.Config{RunDir: runDir, Store: store, Stages: registryStageProvider{orch: orch}}
+	sc := server.Config{RunDir: runDir, Store: store, Stages: registryStageProvider{reader: orchStages{orch}}}
 	if extend != nil {
 		extend(&sc, runDir, store, orch)
 	}
-	srv, err := startDashboard(cfg, sc, orch, false)
+	srv, _, err := startServer(cfg, sc, orch, launchDashboard, false)
 	if err != nil {
-		t.Fatalf("startDashboard: %v", err)
+		t.Fatalf("startServer: %v", err)
 	}
 	// Cleanup идут в обратном порядке: сервер останавливается раньше, чем закроется Store.
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })

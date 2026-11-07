@@ -1,6 +1,13 @@
 package server
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	bus "github.com/akopichin/afm/contracts/events"
+
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
+	"github.com/akopichin/afm/contracts/state"
+
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -10,10 +17,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+	"github.com/akopichin/afm/contracts/mcp"
 )
 
 // dialogAnswerNotice — поле "data" одной строки notices.jsonl для
@@ -80,7 +85,7 @@ func TestHandleDialogAnswer_EmitsDialogAnswerOnSuccess(t *testing.T) {
 	if err := os.WriteFile(questionPath, []byte(`{"id":"q1","question":"?","allow_custom":true}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,15 +94,14 @@ func TestHandleDialogAnswer_EmitsDialogAnswerOnSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	uiBus := bus.NewUIBus()
+	uiBus := implbus.NewUIBus()
 	srv := New(Config{
 		Port: 0, RunDir: runDir, Store: store, UIBus: uiBus,
-		Actions: fakeStageActions{},
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			return nil
-		}},
 		ReviewState: func() (string, []string) { return "none", nil },
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		return nil
+	}})
 
 	subID, events := uiBus.Subscribe(64)
 	defer uiBus.Unsubscribe(subID)
@@ -148,7 +152,7 @@ func TestHandleDialogAnswer_RejectedAnswerDoesNotEmitDialogAnswer(t *testing.T) 
 	if err := os.WriteFile(questionPath, []byte(`{"id":"q1","question":"?","allow_custom":true}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,19 +161,18 @@ func TestHandleDialogAnswer_RejectedAnswerDoesNotEmitDialogAnswer(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	uiBus := bus.NewUIBus()
+	uiBus := implbus.NewUIBus()
 	notifyCalled := false
 	srv := New(Config{
 		Port: 0, RunDir: runDir, Store: store, UIBus: uiBus,
-		Actions: fakeStageActions{},
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			notifyCalled = true
-			return nil
-		}},
 		// Flow is held for review — the up-front guard rejects before any durable mutation, exactly as
 		// TestHandleDialogAnswer_RejectedWhileFlowPaused verifies.
 		ReviewState: func() (string, []string) { return "paused", []string{"other"} },
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		notifyCalled = true
+		return nil
+	}})
 
 	subID, events := uiBus.Subscribe(64)
 	defer uiBus.Unsubscribe(subID)
@@ -203,7 +206,7 @@ func TestHandleDialogAnswer_TOCTOURollbackDoesNotEmitDialogAnswer(t *testing.T) 
 	if err := os.WriteFile(questionPath, []byte(`{"id":"q1","question":"?","allow_custom":true}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,15 +215,14 @@ func TestHandleDialogAnswer_TOCTOURollbackDoesNotEmitDialogAnswer(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	uiBus := bus.NewUIBus()
+	uiBus := implbus.NewUIBus()
 	srv := New(Config{
 		Port: 0, RunDir: runDir, Store: store, UIBus: uiBus,
-		Actions: fakeStageActions{},
-		Secondary: fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
-			return orchestrator.ErrFlowPaused
-		}},
 		ReviewState: func() (string, []string) { return "none", nil },
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(string, string, string, string, bool) error {
+		return implorchestrator.ErrFlowPaused
+	}})
 
 	subID, events := uiBus.Subscribe(64)
 	defer uiBus.Unsubscribe(subID)

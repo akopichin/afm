@@ -3,6 +3,34 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-07
+
+### Improvement:
+
+- Embed the private, independently versioned AFM Engine module while retaining one AFM executable and the dashboard/core SDK contracts.
+- Preserve the 2.x maintenance line with independent build, CI, Homebrew, and Docker channels.
+- Separate public contracts/UI/SDK checks from trusted full-product builds and record exact dependency revisions in release manifests.
+
+### Improvement: SDK core mode
+
+The Go SDK can start the API-only core: set `Config.Mode` to `ModeCore`, then use
+`Run.WaitResult` for the workflow's final status and `Run.Shutdown` to stop the
+process the client started. Without `Mode` the SDK behaves as before. See the
+[SDK guide](docs/sdk.md#core-mode) and the [SDK release notes](sdk/release-notes.md).
+
+### Fix: `ready` of a resumed run
+
+`GET /api/runtime` reports `ready: true` only after the workflow of the current
+process has started. Before, a resumed run could answer `ready: true` while the
+status still showed the result of the previous process.
+
+### Improvement: `afm run --mode core`
+
+`afm run --mode core --port <port>` runs the engine and the HTTP API without the
+Web UI and without opening a browser tab. `GET /api/runtime` reports the mode and
+readiness. Core keeps the API up after the result until interrupted (Ctrl+C, exit
+code 0). The default `--mode dashboard` is unchanged. See [Core mode](docs/core-mode.md).
+
 ## 2026-11-05
 
 ### Improvement: message queue in the Assistant

@@ -1,0 +1,5 @@
+name: core-manual
+stages:
+  - id: build
+    agents: [planning, implementation]
+    command: __AGENT__

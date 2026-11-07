@@ -123,7 +123,8 @@ afm run --port=0 --require-approval --exit-on-fail path/to/flow.yaml
 plan approval without one. `--exit-on-fail` returns exit code 1 when a stage
 reaches `failed`, so CI can detect the failure. Use a flow whose stages can run
 unattended, such as [`script:` stages](script-stages.md) or the
-[autonomous track](autonomous-track.md). See
+[autonomous track](autonomous-track.md). To serve only the HTTP API for another program, use
+`afm run --mode core --port <port>`: see [Core mode](core-mode.md). See
 [exit-on-fail configuration](config-reference.md#exit-on-stage-failure) and
 [failure and resume behavior](stage-lifecycle.md#exit-on-stage-failure).
 

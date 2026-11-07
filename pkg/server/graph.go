@@ -1,15 +1,18 @@
 package server
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/engine/inspection/orchestrator"
+	"github.com/akopichin/afm/contracts/agentapi"
+	"github.com/akopichin/afm/contracts/state"
+
+	orchestrator "github.com/akopichin/afm/contracts/control"
+
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/graph"
 )
 
 // GraphActions is the write/read service for Этап 9's dynamic-stage API — a SEPARATE, narrow interface, same
@@ -155,15 +158,15 @@ func (s *Server) handleGraphCommit(w http.ResponseWriter, r *http.Request) {
 // invalid_status/flow_paused, 503 for run_finalizing, 400 for every other draft-validation rejection, 500
 // otherwise.
 func writeGraphError(w http.ResponseWriter, err error) {
-	if errors.Is(err, orchestrator.ErrFlowPaused) {
+	if errors.Is(err, implorchestrator.ErrFlowPaused) {
 		writeGraphErrCode(w, http.StatusConflict, "flow_paused")
 		return
 	}
-	if errors.Is(err, orchestrator.ErrRequestIDRequired) {
+	if errors.Is(err, implorchestrator.ErrRequestIDRequired) {
 		writeGraphErrCode(w, http.StatusBadRequest, "request_id_required")
 		return
 	}
-	if errors.Is(err, orchestrator.ErrUnknownInsertionKind) {
+	if errors.Is(err, implorchestrator.ErrUnknownInsertionKind) {
 		writeGraphErrCode(w, http.StatusBadRequest, "invalid_kind")
 		return
 	}
@@ -180,18 +183,7 @@ func writeGraphError(w http.ResponseWriter, err error) {
 	writeGraphErrCode(w, http.StatusInternalServerError, errCodeInternal)
 }
 
-func graphRejectedStatus(code string) int {
-	switch code {
-	case string(assistants.CodeStaleRevision), string(assistants.CodeInvalidStatus):
-		return http.StatusConflict
-	case string(assistants.CodeRunFinalizing):
-		return http.StatusServiceUnavailable
-	default:
-		// invalid_stage_id/duplicate_stage_id/unknown_dependency/command_not_prepared/target_not_found
-		// (graph.ValidationError's codes) and anything unrecognized all land here.
-		return http.StatusBadRequest
-	}
-}
+func graphRejectedStatus(code string) int { return agentapi.GraphErrorStatus(code) }
 
 func writeGraphErrCode(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")

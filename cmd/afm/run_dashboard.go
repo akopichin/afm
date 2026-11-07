@@ -16,18 +16,18 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/agentjobs"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/pkg/server"
+	"github.com/akopichin/afm/pkg/web"
 )
 
 var (
-	_ server.StageActions     = (*orchestrator.Orchestrator)(nil)
-	_ server.SecondaryActions = (*orchestrator.Orchestrator)(nil)
-	_ server.GraphActions     = (*orchestrator.Orchestrator)(nil)
+	_ server.StageActions     = (*engine.StageControl)(nil)
+	_ server.SecondaryActions = (*engine.StageControl)(nil)
+	_ server.GraphActions     = engine.Graph(nil)
+	_ server.FlowActions      = engine.FlowReview(nil)
 )
 
 func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
@@ -46,25 +46,29 @@ func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 }
 
 // registryStageProvider implements server.RuntimeStageProvider by re-deriving the dashboard-facing config
-// from the orchestrator's runtime registry (orchestrator.Orchestrator.Stages) on EVERY call, instead of a
-// map frozen at startup (T8.3). Today (Этап 8, no dynamic stage edits wired in yet) orch.Stages() always
-// returns the same set the run started with; this adapter is what lets a future registry revision (Этап 9)
-// become visible to the dashboard without restarting it.
+// from the run's runtime registry on EVERY call, so stages added during the run reach the dashboard without
+// a restart.
 type registryStageProvider struct {
-	orch *orchestrator.Orchestrator
+	reader interface{ StageConfigs() []flow.Stage }
 }
 
 // StageConfigs implements server.RuntimeStageProvider.
 func (p registryStageProvider) StageConfigs() map[string]server.StageConfig {
-	return dashboardStageConfig(p.orch.Stages())
+	return dashboardStageConfig(p.reader.StageConfigs())
 }
 
-// newUsageAnalytics is the read model behind the "Models & agents" view. The Assistant's ledger and journal live in
-// their own namespace and join it as outside the run total.
-func newUsageAnalytics(acct *accounting.Store, acctErr error, jobs *agentjobs.Store, orch *orchestrator.Orchestrator, side *sideAgentRuntime) *accounting.Analytics {
-	return accounting.NewAnalytics(accounting.AnalyticsSources{
-		Usage: acct, UsageOpenFailed: acct == nil && acctErr != nil, Jobs: jobs, Meta: orch.AnalyticsMeta, Assistant: side.analyticsSources(),
-	})
+// dashboardSurface is the part of the run the dashboard commands and the agent API reach through.
+type dashboardSurface interface {
+	engine.Mesh
+	engine.Graph
+	engine.FlowReview
+}
+
+// runSurface composes the engine groups into a dashboardSurface.
+type runSurface struct {
+	engine.Mesh
+	engine.Graph
+	engine.FlowReview
 }
 
 // ownerTokenFDEnv names an output descriptor (the write end of a private pipe whose reader is the operator) that
@@ -160,9 +164,13 @@ func writeOnce(f *os.File, text string) error {
 // openBrowser — seam для тестов: вкладку открывает только первый цикл процесса.
 var openBrowser = openBrowserTab
 
-// startDashboard transfers workspace ownership to the server, including on failure. announce — вкладку открывают
-// и подсказку об URL печатают один раз за процесс (первый цикл); следующий цикл поднимает dashboard тихо.
-func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orchestrator, announce bool) (*server.Server, error) {
+// hostBrowserOpener — seam для тестов: вкладку контейнерного dashboard открывает хост.
+var hostBrowserOpener = launchHostBrowserOpener
+
+// startServer transfers workspace ownership to the server, including on failure. It returns the server URL,
+// which the caller hands to the run as its agent API address. Core mounts no Web UI and opens no tab. announce —
+// вкладку открывают и URL печатают один раз за процесс (первый цикл); следующий цикл поднимает сервер тихо.
+func startServer(cfg config.Config, sc server.Config, run dashboardSurface, launch launchMode, announce bool) (*server.Server, string, error) {
 	// One delivery per process: a later dashboard of a repeated run reaches the operator through the terminal.
 	tokenPipe := ownerTokenPipe
 	ownerTokenPipe = nil
@@ -170,46 +178,52 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 		if tokenPipe != nil {
 			_ = tokenPipe.Close() // nobody will write it; do not hold the operator's pipe open
 		}
-		return nil, nil
+		return nil, "", nil
 	}
 	sc.Port = cfg.Server.GetPort()
-	sc.Theme = cfg.EffectiveTheme()
+	if launch == launchDashboard {
+		sc.UI = web.NewHandler(web.HandlerConfig{Theme: cfg.EffectiveTheme(), SkinDir: cfg.SkinDir})
+	}
 	sc.Version = version
-	sc.SkinDir = cfg.SkinDir
 	sc.CommandNames = cfg.CommandNames
 	sc.UnknownCommandName = cfg.EffectiveUnknownCommandName()
 	sc.ShowMoney = cfg.Accounting.ShowMoneyEnabled()
 	sc.HideAttachHelpers = cfg.Collaboration.ShouldHideAttachHelpers()
 	// The analytics provider does not depend on the cost display gate: with accounting hidden it still serves time.
 	sc.UsageMode = server.UsageModeFor(cfg.Accounting.IsEnabled(), cfg.Accounting.ShowMoneyEnabled())
-	sc.UIBus = orch.UIBus()
-	sc.Actions, sc.Secondary, sc.FlowActions = orch, orch, orch
+	sc.FlowActions = run
 	// Выключенный add_stage: GraphActions остаётся nil-интерфейсом (capability=false, маршруты графа 404).
 	if cfg.AddStage.IsEnabled() {
-		sc.GraphActions = orch
+		sc.GraphActions = run
 	}
-	sc.AgentMesh = agentMeshServerActions(orch)
-	sc.Mesh = meshServerActions(orch)
+	sc.AgentMesh = agentMeshServerActions(run)
+	sc.Mesh = meshServerActions(run)
 	if sc.OwnerToken = provisionOwnerToken(tokenPipe, os.Stdout); sc.OwnerToken != "" {
-		sc.OwnerWaits = ownerWaitActions{orch}
+		sc.OwnerWaits = ownerWaitActions{run}
 	}
-	sc.RedactSecrets = orch.RedactSecrets
-	sc.ReviewState = orch.ReviewState
 	srv := server.New(sc)
 	addr, err := srv.Start()
 	if err != nil {
 		_ = srv.Shutdown(context.Background())
-		return nil, fmt.Errorf("start dashboard: %w", err)
+		if launch == launchCore {
+			return nil, "", fmt.Errorf("start API server: %w", err)
+		}
+		return nil, "", fmt.Errorf("start dashboard: %w", err)
 	}
 	// Listener addresses such as [::]:port are replaced with a client-facing URL.
 	_, port, _ := net.SplitHostPort(addr)
-	dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local dashboard is http
-	orch.SetDashboardURL(dashURL)
+	dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local server is http
+	if launch == launchCore {
+		if announce {
+			_, _ = fmt.Fprintf(os.Stdout, "\n  api: %s\n\n", dashURL)
+		}
+		return srv, dashURL, nil
+	}
 	printDashboardURL(os.Stdout, dashURL, announce && !cfg.Server.IsOpenBrowser(), dashboardColorEnabled())
 	if announce && cfg.Server.IsOpenBrowser() {
 		openBrowser(dashURL)
 	}
-	return srv, nil
+	return srv, dashURL, nil
 }
 
 // dashboardColorEnabled colours the URL block only for a terminal and when NO_COLOR (no-color.org) is unset,
@@ -323,21 +337,5 @@ func waitForDashboardDrainWithTiming(ctx context.Context, connectedClients func(
 		case <-ctx.Done():
 			return
 		}
-	}
-}
-
-// serverAccountingProvider возвращает live Store или StaticUnavailable при ошибке; nil скрывает cost API,
-// сохраняя сбор usage.
-func serverAccountingProvider(display bool, acct *accounting.Store, acctErr error) accounting.CostProvider {
-	if !display {
-		return nil
-	}
-	switch {
-	case acct != nil:
-		return acct
-	case acctErr != nil:
-		return accounting.StaticUnavailable()
-	default:
-		return nil
 	}
 }

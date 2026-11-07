@@ -8,8 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
 )
 
 // validateFlowFile parses and validates a flow.yaml without running any agents. Returns a human-readable
@@ -37,23 +38,23 @@ func validateHelperProfiles(f *flow.Flow) error {
 		return nil
 	}
 	home, _ := os.UserHomeDir()
-	cfg, err := config.LoadFrom(filepath.Join(home, config.AfmDir), fmDir())
+	cfg, err := loadProductConfig(filepath.Join(home, config.AfmDir), fmDir())
 	if err != nil {
 		return err
 	}
 	if !cfg.Collaboration.IsEnabled() {
-		warnAssistantsWithoutCollaboration(f.Stages)
-		warnTeamWithoutCollaboration(f.Team)
+		engine.WarnAssistantsWithoutCollaboration(f.Stages)
+		engine.WarnTeamWithoutCollaboration(f.Team)
 		return nil
 	}
-	reg, err := buildProfileRegistry(cfg)
+	reg, err := engine.BuildProfileRegistry(cfg)
 	if err != nil {
 		return fmt.Errorf("collaboration.profiles: %w (afm run would turn collaboration off)", err)
 	}
-	if err := checkStageAssistants(f.Stages, reg); err != nil {
+	if err := engine.CheckStageAssistants(f.Stages, reg); err != nil {
 		return err
 	}
-	return checkTeamProfiles(f.Team, reg)
+	return engine.CheckTeamProfiles(f.Team, reg)
 }
 
 func newValidateCmd() *cobra.Command {

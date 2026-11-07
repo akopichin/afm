@@ -1,6 +1,12 @@
 package server
 
 import (
+	stagefiles "github.com/akopichin/afm/contracts/activity"
+	"github.com/akopichin/afm/contracts/agentapi"
+	"github.com/akopichin/afm/contracts/state"
+
+	"github.com/akopichin/afm/contracts/graph"
+
 	"encoding/json"
 	"errors"
 	"log"
@@ -8,13 +14,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/executor"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
-	"github.com/akopichin/afm/pkg/redact"
-	"github.com/akopichin/afm/pkg/state"
+	implexecutor "github.com/akopichin/afm-engine/engine/inspection/executor"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/redact"
 )
 
 // ErrAssistantsUnavailable is returned by an AssistantActions/AssistantsReader implementation when the
@@ -366,27 +368,10 @@ func (s *Server) redactSecrets(text string) string {
 	if s.redact != nil {
 		return s.redact(text)
 	}
-	return redact.String(text, executor.SecretValuesForRedaction())
+	return redact.String(text, implexecutor.SecretValuesForRedaction())
 }
 
-func assistantErrStatus(code assistants.ErrorCode) int {
-	switch code {
-	case assistants.CodeStaleRevision, assistants.CodeInvalidStatus, assistants.CodeFlowPaused, assistants.CodeBudgetExceeded, agentcomm.CodeWaitCycle:
-		return http.StatusConflict
-	case assistants.CodeFeatureDisabled, assistants.CodeNotFound:
-		return http.StatusNotFound
-	case assistants.CodeRunFinalizing:
-		return http.StatusServiceUnavailable
-	case assistants.CodeCapabilityUnavailable, assistants.CodeDelegationDepthExceeded, assistants.CodeInvalidParent, assistants.CodeAncestorInactive, assistants.CodeExecutorNotPermitted:
-		return http.StatusUnprocessableEntity
-	case assistants.CodeActorNotAllowed:
-		return http.StatusForbidden
-	case assistants.CodeInvalidRequest:
-		return http.StatusBadRequest
-	default:
-		return http.StatusInternalServerError
-	}
-}
+func assistantErrStatus(code assistants.ErrorCode) int { return agentapi.OperationErrorStatus(code) }
 
 func writeAssistantErrCode(w http.ResponseWriter, status int, code string) {
 	writeAssistantErrMessage(w, status, code, "")

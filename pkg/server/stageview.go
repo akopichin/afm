@@ -1,6 +1,11 @@
 package server
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/engine/inspection/orchestrator"
+	bus "github.com/akopichin/afm/contracts/events"
+
+	"github.com/akopichin/afm/contracts/state"
+
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -8,12 +13,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/mcp"
 )
 
 // StageView joins event-log state, StageConfig and on-disk artifacts for
@@ -200,12 +203,12 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 			PausedFrom:                pausedFrom,
 			ShowPlan:                  showPlan,
 			ShowDialog:                showDialog,
-			PreNote:                   state.LoadPreNote(filepath.Join(runDir, id)),
+			PreNote:                   implstate.LoadPreNote(filepath.Join(runDir, id)),
 			Buttons:                   cfg.Buttons,
 			Cost:                      stageCosts[id],
 			Verify:                    verifyByStage[id],
 			AwaitingAssistantsBlocked: awaitingAssistantsBlocked,
-			Quota:                     NewQuotaView(orchestrator.StageQuota(st)),
+			Quota:                     NewQuotaView(implorchestrator.StageQuota(st)),
 			Timing:                    newStageTimingView(st.Timing),
 		})
 	}

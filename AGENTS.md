@@ -7,8 +7,9 @@
 ## Рабочий процесс
 
 - Сборка и требования к PR: [CONTRIBUTING.md](CONTRIBUTING.md).
-- Go-версию из `go.mod` не повышай без обсуждения. После изменения Go-зависимостей
-  выполни `make vendor` и включи изменения `vendor/` в тот же коммит.
+- Go-версию из `go.mod` не повышай без обсуждения. Полная сборка 3.x получает приватный engine как Go-модуль. Не помещай его
+  исходники в публичный `vendor/`; после изменения зависимостей обнови go.sum
+  и проверь сборку без локального workspace.
 - Коммиты — на русском. `CHANGELOG.md` и пользовательская документация — на
   английском. Changelog: новые даты `## YYYY-MM-DD` сверху, записи под
   `### Improvement:` / `### Fix:`; без ссылок на keepachangelog.com.
@@ -41,9 +42,15 @@ Linux-only код и тесты (например, `pkg/server/workspace`) тр�
 
 ## Composition and shared policies
 
-- Точка сборки рана — `cmd/afm/run.go`. Подготовка окружения, lifecycle-хуки,
-  dashboard и workspace выделены в соседние `run_*.go`; сохраняй владение
-  ресурсами и cleanup через defer у вызывающего кода.
+- Ресурсами рана (Store, оркестратор, окружение, Assistant, lifecycle-хуки, browser)
+  владеет `afm-engine/engine`: `Open` → `Start` → `Wait` → `Shutdown` → `Close`. Композиция
+  транспортов — `cmd/afm/run.go` (workspace, dashboard, Start, hold, Shutdown, Close);
+  соседние `run_*.go` — адаптеры. Закрывай `Run` через defer у вызывающего кода,
+  Store не закрывай сам. Границы и порядок — [engine](docs/engine.md).
+- `run.go` собирает HTTP API-сервер и необязательный Web UI по режиму запуска
+  (`--mode`): `core` отдаёт только API и после результата держит его до
+  прерывания, `dashboard` добавляет UI. Режим не выводи из порта или наличия UI;
+  `core` без API (порт 0) отвергается при валидации. Границы — [server](pkg/server/AGENTS.md).
 - Нормализуй конфигурацию стадий до создания оркестратора; например,
   `normalizeInteractiveStages` копирует slice до изменения `Interactive`.
 - Runtime-граф читай через registry оркестратора: исходный `flow.Stages` не
@@ -100,16 +107,17 @@ Linux-only код и тесты (например, `pkg/server/workspace`) тр�
 
 | Задача | Правила разработки | Поведение и формат |
 |---|---|---|
-| Журнал, replay, таймеры | [state](pkg/state/AGENTS.md) | [Event log](docs/internals/event-log.md), [Collaboration journal](docs/collaboration-journal.md) |
-| Тестируемое время (`clock.Clock` seam) | [clock](pkg/clock/AGENTS.md) | — |
-| Scheduling, Pause/Continue, диалог, verify, helpers | [orchestrator](pkg/orchestrator/AGENTS.md) | [Lifecycle](docs/stage-lifecycle.md), [Interactive](docs/interactive-stages.md), [Verify](docs/verify.md), [Collaboration](docs/collaboration.md) |
-| Процессы и изоляция агентов | [executor](pkg/executor/AGENTS.md) | [Prompts](docs/internals/prompts.md) |
+| Ресурсы рана, Shutdown/Close, команды стадий | [engine](docs/engine.md) | [Lifecycle](docs/stage-lifecycle.md) |
+| Журнал, replay, таймеры | [state](docs/engine.md) | [Event log](docs/internals/event-log.md), [Collaboration journal](docs/collaboration-journal.md) |
+| Тестируемое время (`clock.Clock` seam) | [clock](contracts/clock/AGENTS.md) | — |
+| Scheduling, Pause/Continue, диалог, verify, helpers | [orchestrator](docs/engine.md) | [Lifecycle](docs/stage-lifecycle.md), [Interactive](docs/interactive-stages.md), [Verify](docs/verify.md), [Collaboration](docs/collaboration.md) |
+| Процессы и изоляция агентов | [executor](docs/engine.md) | [Prompts](docs/internals/prompts.md) |
 | HTTP и файловый браузер | [server](pkg/server/AGENTS.md) | [Dashboard](docs/dashboard.md), [Docker](docs/docker.md) |
 | React dashboard | [dashboard](pkg/web/dashboard/AGENTS.md) | [Dashboard](docs/dashboard.md) |
-| Docker re-exec и wrappers | [docker](pkg/docker/AGENTS.md) | [Docker](docs/docker.md), [Configuration](docs/config-reference.md) |
-| Lifecycle-хуки | [lifecyclehooks](pkg/lifecyclehooks/AGENTS.md) | [Lifecycle hooks](docs/lifecycle-hooks.md) |
-| Memory: live и rebuild | [memorypipeline](pkg/memorypipeline/AGENTS.md) | [Agent memory](docs/agent-memory.md) |
-| Managed Chrome | [browser](pkg/browser/AGENTS.md) | [Browser](docs/browser.md) |
+| Docker re-exec и wrappers | [docker](contracts/docker/AGENTS.md) | [Docker](docs/docker.md), [Configuration](docs/config-reference.md) |
+| Lifecycle-хуки | [lifecyclehooks](contracts/lifecyclehooks/AGENTS.md) | [Lifecycle hooks](docs/lifecycle-hooks.md) |
+| Memory: live и rebuild | [memorypipeline](docs/engine.md) | [Agent memory](docs/agent-memory.md) |
+| Managed Chrome | [browser](contracts/browser/AGENTS.md) | [Browser](docs/browser.md) |
 
 Формат флоу — [flow-reference](docs/flow-reference.md), автономный трек —
 [autonomous-track](docs/autonomous-track.md), script-стадии —

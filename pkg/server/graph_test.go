@@ -1,9 +1,11 @@
 package server
 
-// Этап 9 — pkg/server/graph.go shipped with zero tests. Mirrors proposals_test.go/assistants_test.go's
-// conventions: a fake GraphActions, newTestServer(t, Config{...}), table-driven status-code checks.
-
 import (
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/graph"
+
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,12 +13,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 )
+
+// Этап 9 — pkg/server/graph.go shipped with zero tests. Mirrors proposals_test.go/assistants_test.go's
+// conventions: a fake GraphActions, newTestServer(t, Config{...}), table-driven status-code checks.
 
 // fakeGraphActions backs the dynamic-stage HTTP layer for tests.
 type fakeGraphActions struct {
@@ -218,9 +221,9 @@ func TestGraph_ErrorCodeMapping(t *testing.T) {
 		wantStatus int
 		wantCode   string
 	}{
-		{"flow_paused", orchestrator.ErrFlowPaused, http.StatusConflict, "flow_paused"},
-		{"request_id_required", orchestrator.ErrRequestIDRequired, http.StatusBadRequest, "request_id_required"},
-		{"invalid_kind", orchestrator.ErrUnknownInsertionKind, http.StatusBadRequest, "invalid_kind"},
+		{"flow_paused", implorchestrator.ErrFlowPaused, http.StatusConflict, "flow_paused"},
+		{"request_id_required", implorchestrator.ErrRequestIDRequired, http.StatusBadRequest, "request_id_required"},
+		{"invalid_kind", implorchestrator.ErrUnknownInsertionKind, http.StatusBadRequest, "invalid_kind"},
 		{"stale_revision", &state.OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: "x"}, http.StatusConflict, "stale_revision"},
 		{"invalid_status_rejected", &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: "x"}, http.StatusConflict, "invalid_status"},
 		{"run_finalizing", &state.OperationRejectedError{Code: assistants.CodeRunFinalizing, Reason: "x"}, http.StatusServiceUnavailable, "run_finalizing"},

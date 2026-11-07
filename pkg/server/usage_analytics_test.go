@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/agentjobs"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/agentjobs"
 )
 
 var usageT0 = time.Date(2026, 10, 31, 11, 0, 0, 0, time.UTC)

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
+	implgraph "github.com/akopichin/afm-engine/engine/inspection/graph"
+	"github.com/akopichin/afm/contracts/flow"
 )
 
 // findStageDefinition looks up a stage's STATIC definition (name, buttons, is-script, depends_on, ...) for an
@@ -13,13 +13,13 @@ import (
 // found is false when runDir has no persisted registry yet (e.g. a run directory from before Stage 8, or one
 // `afm run` never actually started in) or when stageID is not part of the stored graph.
 func findStageDefinition(runDir, stageID string) (flow.Stage, bool, error) {
-	stages, found, err := graph.LoadRegistry(runDir)
+	stages, found, err := implgraph.LoadRegistry(runDir)
 	if err != nil {
 		return flow.Stage{}, false, err
 	}
 	if !found {
 		return flow.Stage{}, false, nil
 	}
-	s, ok := graph.NewRegistry(stages).StageByID(stageID)
+	s, ok := implgraph.NewRegistry(stages).StageByID(stageID)
 	return s, ok, nil
 }

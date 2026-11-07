@@ -3,6 +3,16 @@
 Пользовательское поведение: [dashboard](../../docs/dashboard.md),
 [Docker file browser](../../docs/docker.md#project-file-browser).
 
+## API и необязательный UI
+
+- API-сервер не импортирует `pkg/web`: UI — необязательный `http.Handler`, который
+  передаёт launcher (`cmd/afm`). Без него `/` отвечает 404, а `/api/*` работает.
+  Новый код API не должен требовать UI; регресс импорта ломает режим core.
+- `/api/runtime` — GET-only, `no-store`, без путей, токенов и PID: протокол, режим,
+  `run_id` и `ready`. Нулевой `RuntimeInfo` читается как «dashboard, не готов».
+- `ready` берётся из `engine.Run.Ready` (транспорты привязаны, `Start` прошёл), а не
+  из факта открытого порта: сервер слушает раньше, чем ран готов принимать работу.
+
 ## Stage views and actions
 
 - `StageConfig` хранит настройки, `StageView` — runtime-состояние. Button API

@@ -1,8 +1,5 @@
 package main
 
-// Очистка ранов repeat (S3.T2): удаляются только успешные раны, созданные этим процессом, сверх keep_runs.
-// Решение принимается по журналу events.jsonl, а не по памяти процесса.
-
 import (
 	"errors"
 	"fmt"
@@ -12,13 +9,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
 )
+
+// Очистка ранов repeat (S3.T2): удаляются только успешные раны, созданные этим процессом, сверх keep_runs.
+// Решение принимается по журналу events.jsonl, а не по памяти процесса.
 
 // seedRun пишет в base run dir id: стадия s в статусе stage и, если end != "", терминальная запись рана.
 func seedRun(t *testing.T, base, id string, stage state.StageStatus, end state.RunStatus) {
 	t.Helper()
-	store, err := state.Open(filepath.Join(base, id), []string{"s"})
+	store, err := implstate.Open(filepath.Join(base, id), []string{"s"})
 	if err != nil {
 		t.Fatal(err)
 	}

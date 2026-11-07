@@ -1,17 +1,18 @@
 package server
 
 import (
+	sideagent "github.com/akopichin/afm/contracts/assistant"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/jsonstrict"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/graph"
-	"github.com/akopichin/afm/pkg/sideagent"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/graph"
+	"github.com/akopichin/afm/contracts/jsonstrict"
 )
 
 // maxDraftConfirmBodyBytes bounds the confirm request body — it carries only an id and a small int, never

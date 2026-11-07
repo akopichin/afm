@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func TestApproveErrRunLockedMessage(t *testing.T) {
@@ -12,7 +13,7 @@ func TestApproveErrRunLockedMessage(t *testing.T) {
 
 	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusAwaitingApproval)
 
-	store, err := state.Open(runDir, []string{cmdInit})
+	store, err := implstate.Open(runDir, []string{cmdInit})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -39,7 +40,7 @@ func TestRetryErrRunLockedMessage(t *testing.T) {
 
 	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusFailed)
 
-	store, err := state.Open(runDir, []string{cmdInit})
+	store, err := implstate.Open(runDir, []string{cmdInit})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestReviseErrRunLockedMessage(t *testing.T) {
 
 	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusAwaitingApproval)
 
-	store, err := state.Open(runDir, []string{cmdInit})
+	store, err := implstate.Open(runDir, []string{cmdInit})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}

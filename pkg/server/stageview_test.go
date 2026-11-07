@@ -1,6 +1,10 @@
 package server
 
 import (
+	implstagefiles "github.com/akopichin/afm-engine/testkit/orchestrator/stagefiles"
+	bus "github.com/akopichin/afm/contracts/events"
+	"github.com/akopichin/afm/contracts/state"
+
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,10 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/accounting"
 )
 
 func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
@@ -439,7 +441,7 @@ func equalSlices(a, b []string) bool {
 // production call, so the test fixture matches the real on-disk shape byte-for-byte.
 func appendVerifyNotice(t *testing.T, runDir, stageID, eventType string, data map[string]any) {
 	t.Helper()
-	stagefiles.AppendNotice(runDir, stageID, eventType, data)
+	implstagefiles.AppendNotice(runDir, stageID, eventType, data)
 }
 
 func findStage(views []StageView, id string) *StageView {
@@ -670,7 +672,7 @@ func TestStageView_QuotaJSONShape(t *testing.T) {
 // After a restart the view comes from the journal, not from memory.
 func TestBuildStageViews_QuotaSurvivesReplayFromJournal(t *testing.T) {
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{"s1"})
+	store, err := implstate.Open(runDir, []string{"s1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +688,7 @@ func TestBuildStageViews_QuotaSurvivesReplayFromJournal(t *testing.T) {
 	}
 	store.Close()
 
-	reopened, err := state.Open(runDir, []string{"s1"}) // the restart: nothing but events.jsonl carries over
+	reopened, err := implstate.Open(runDir, []string{"s1"}) // the restart: nothing but events.jsonl carries over
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,3 +1,0 @@
-{"type":"assistant","message":{"id":"msg_same","role":"assistant","content":[{"type":"text","text":"First block."}]}}
-{"type":"assistant","message":{"id":"msg_same","role":"assistant","content":[{"type":"text","text":"Second block."}]}}
-{"type":"result","subtype":"success","is_error":false}

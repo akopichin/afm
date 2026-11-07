@@ -1,6 +1,11 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
+	orchestrator "github.com/akopichin/afm/contracts/control"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,12 +18,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // captureStderr redirects os.Stderr for the duration of fn and returns everything written to it — shares
@@ -47,7 +52,7 @@ func TestResolveCollaboration_EnvOffBeatsFlowDepth(t *testing.T) {
 	five := 5
 	cfg := config.Config{} // config says nothing; env wins
 	f := &flow.Flow{Collaboration: &flow.FlowCollaboration{MaxDepth: &five}}
-	got := resolveCollaboration(cfg, f)
+	got := engine.ResolveCollaboration(cfg, f)
 	if got.Enabled {
 		t.Error("Enabled = true, want false: AFM_COLLABORATION=0 must beat flow.collaboration.max_depth")
 	}
@@ -59,7 +64,7 @@ func TestResolveCollaboration_DepthSourceReported(t *testing.T) {
 	three, five, two := 3, 5, 2
 
 	t.Run("default when nothing set", func(t *testing.T) {
-		got := resolveCollaboration(config.Config{}, nil)
+		got := engine.ResolveCollaboration(config.Config{}, nil)
 		if got.Depth.Source != assistants.DepthSourceDefault {
 			t.Errorf("Source = %q, want %q", got.Depth.Source, assistants.DepthSourceDefault)
 		}
@@ -72,7 +77,7 @@ func TestResolveCollaboration_DepthSourceReported(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := resolveCollaboration(cfg, nil)
+		got := engine.ResolveCollaboration(cfg, nil)
 		if got.Depth.Source != assistants.DepthSourceGlobal || got.Depth.MaxDepth != three {
 			t.Errorf("got %+v, want source=global, depth=3", got.Depth)
 		}
@@ -85,7 +90,7 @@ func TestResolveCollaboration_DepthSourceReported(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := resolveCollaboration(cfg, nil)
+		got := engine.ResolveCollaboration(cfg, nil)
 		if got.Depth.Source != assistants.DepthSourceProject || got.Depth.MaxDepth != five {
 			t.Errorf("got %+v, want source=project, depth=5", got.Depth)
 		}
@@ -100,7 +105,7 @@ func TestResolveCollaboration_DepthSourceReported(t *testing.T) {
 			t.Fatal(err)
 		}
 		f := &flow.Flow{Collaboration: &flow.FlowCollaboration{MaxDepth: &two}}
-		got := resolveCollaboration(cfg, f)
+		got := engine.ResolveCollaboration(cfg, f)
 		if got.Depth.Source != assistants.DepthSourceFlow || got.Depth.MaxDepth != two {
 			t.Errorf("got %+v, want source=flow, depth=2", got.Depth)
 		}
@@ -143,7 +148,7 @@ func TestResolveCollaborationMode(t *testing.T) {
 			if tc.envOff {
 				t.Setenv("AFM_COLLABORATION", "0")
 			}
-			if got := resolveCollaborationMode(tc.cfg, tc.flow); got != tc.want {
+			if got := engine.ResolveCollaborationMode(tc.cfg, tc.flow); got != tc.want {
 				t.Errorf("resolveCollaborationMode = %q, want %q", got, tc.want)
 			}
 		})
@@ -172,10 +177,10 @@ func TestResolveCollaboration_IndependentFromSideAgent(t *testing.T) {
 				Collaboration: config.CollaborationConfig{Enabled: tc.collaboration},
 				SideAgent:     config.SideAgentConfig{Enabled: tc.sideAgent},
 			}
-			if got := resolveCollaboration(cfg, nil).Enabled; got != tc.wantCollab {
-				t.Errorf("resolveCollaboration.Enabled = %v, want %v", got, tc.wantCollab)
+			if got := engine.ResolveCollaboration(cfg, nil).Enabled; got != tc.wantCollab {
+				t.Errorf("engine.ResolveCollaboration.Enabled = %v, want %v", got, tc.wantCollab)
 			}
-			if got := sideAgentEnabled(cfg, nil); got != tc.wantSide {
+			if got := engine.SideAgentEnabled(cfg, nil); got != tc.wantSide {
 				t.Errorf("sideAgentEnabled = %v, want %v", got, tc.wantSide)
 			}
 		})
@@ -185,46 +190,46 @@ func TestResolveCollaboration_IndependentFromSideAgent(t *testing.T) {
 // TestRecovery_TreeRestoredBeforeOrchestratorNew is the cmd/afm half of T2.7: proves startCollaboration's
 // policy resolution+durable recording (the one piece of "restore collaboration state" that exists at this
 // stage — task tree/quotas/continuations are already restored earlier, by state.Open's replay, which
-// executeFlow calls before startCollaboration too) completes and is DURABLE before the point in executeFlow
+// executeFlow calls before engine.StartCollaboration too) completes and is DURABLE before the point in executeFlow
 // where orchestrator.New is constructed.
 //
 // This cannot call the real orchestrator.New (constructing one needs a full Options fixture disproportionate
 // to this test's purpose) — instead it uses the SAME state.SetAppendControlHook seam the pkg/state T2.2/T2.4
 // crash-simulation tests use to observe the exact moment the policy record becomes durable, and records a
 // stand-in marker for "orchestrator.New runs here" at the point executeFlow's real source calls it (right
-// after startCollaboration returns — see run.go). The ordering assertion is real; the "orchestrator.New"
+// after engine.StartCollaboration returns — see run.go). The ordering assertion is real; the "orchestrator.New"
 // step itself is a documented stand-in, not a live call into pkg/orchestrator.
 func TestRecovery_TreeRestoredBeforeOrchestratorNew(t *testing.T) {
 	dir := t.TempDir()
-	store, err := state.Open(dir, []string{"a"})
+	store, err := implstate.Open(dir, []string{"a"})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
 	defer store.Close()
 
 	var order []string
-	state.SetAppendControlHook(func(c state.Control) {
+	implstate.SetAppendControlHook(func(c implstate.Control) {
 		if c.Kind == "policy_set" {
 			order = append(order, "policy_recorded")
 		}
 	})
-	defer state.SetAppendControlHook(nil)
+	defer implstate.SetAppendControlHook(nil)
 
 	five := 5
 	f := &flow.Flow{Collaboration: &flow.FlowCollaboration{MaxDepth: &five}}
-	collab := startCollaboration(store, config.Config{}, f)
+	collab := engine.StartCollaboration(store, config.Config{}, f)
 	// Mirrors run.go: `orch = orchestrator.New(orchOpts)` is the very next meaningful step in executeFlow
-	// after `collab := startCollaboration(store, cfg, f)`.
+	// after `collab := engine.StartCollaboration(store, cfg, f)`.
 	order = append(order, "orchestrator_new")
 
-	if !collab.policy.Enabled {
-		t.Fatal("collab.policy.Enabled = false, want true (default ON)")
+	if !collab.Policy.Enabled {
+		t.Fatal("collab.Policy.Enabled = false, want true (default ON)")
 	}
 	if len(order) != 2 || order[0] != "policy_recorded" || order[1] != "orchestrator_new" {
 		t.Fatalf("order = %v, want [policy_recorded, orchestrator_new]", order)
 	}
 	if rev := store.Snapshot().Assistants.Policy.Revision; rev == "" {
-		t.Fatal("policy was not durably recorded by the time startCollaboration returned")
+		t.Fatal("policy was not durably recorded by the time engine.StartCollaboration returned")
 	}
 }
 
@@ -236,28 +241,8 @@ func TestHelperCommands_EmptyWhenDisabled(t *testing.T) {
 		Enabled:  &off,
 		Profiles: map[string]config.ProfileConfig{"reviewer": {Command: "frontend-reviewer"}},
 	}}
-	if got := helperCommands(cfg, nil, []string{"saved-reviewer"}); got != nil {
-		t.Fatalf("helperCommands(disabled) = %v, want nil", got)
-	}
-}
-
-// TestProfilesFromConfig_DelegateCapability — the config `delegate: true` flag must reach the built
-// registry's Profile.Capabilities.Delegate, otherwise admitChildren rejects every delegate turn ("this
-// profile is not permitted to delegate") and recursive delegation is unreachable in production.
-func TestProfilesFromConfig_DelegateCapability(t *testing.T) {
-	profiles := profilesFromConfig(map[string]config.ProfileConfig{
-		"lead":   {Command: "codex-as-claude", Delegate: true},
-		"helper": {Command: "codex-as-claude"},
-	})
-	got := map[assistants.ProfileID]bool{}
-	for _, p := range profiles {
-		got[p.ID] = p.Capabilities.Delegate
-	}
-	if !got["lead"] {
-		t.Error("profile with delegate:true must have Capabilities.Delegate == true")
-	}
-	if got["helper"] {
-		t.Error("profile without delegate must default Capabilities.Delegate == false")
+	if got := engine.HelperCommands(cfg, nil, []string{"saved-reviewer"}); got != nil {
+		t.Fatalf("engine.HelperCommands(disabled) = %v, want nil", got)
 	}
 }
 
@@ -271,7 +256,7 @@ func TestHelperCommands_ProfilesAndSavedTasks(t *testing.T) {
 			"inherits":  {Command: ""},
 		},
 	}}
-	got := helperCommands(cfg, nil, []string{"saved-reviewer", "frontend-reviewer"})
+	got := engine.HelperCommands(cfg, nil, []string{"saved-reviewer", "frontend-reviewer"})
 	if want := []string{"frontend-reviewer", "saved-reviewer"}; !slices.Equal(got, want) {
 		t.Fatalf("helperCommands = %v, want %v", got, want)
 	}
@@ -280,7 +265,7 @@ func TestHelperCommands_ProfilesAndSavedTasks(t *testing.T) {
 // run and validate build one registry: the builtin default is there without any config, and a configured
 // profile with its id replaces it as a whole.
 func TestBuildProfileRegistry_BuiltinDefault(t *testing.T) {
-	reg, err := buildProfileRegistry(config.Config{})
+	reg, err := engine.BuildProfileRegistry(config.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +273,7 @@ func TestBuildProfileRegistry_BuiltinDefault(t *testing.T) {
 		t.Fatalf("builtin default = %+v, %v; want a role without a command", p, ok)
 	}
 
-	reg, err = buildProfileRegistry(config.Config{Collaboration: config.CollaborationConfig{
+	reg, err = engine.BuildProfileRegistry(config.Config{Collaboration: config.CollaborationConfig{
 		Profiles: map[string]config.ProfileConfig{"default": {Command: "my-cli"}},
 	}})
 	if err != nil {
@@ -313,7 +298,7 @@ type profileOnTheWire struct {
 func TestAssistantProfilesAPI_ResolvesWhereAttached(t *testing.T) {
 	t.Setenv("AFM_IN_DOCKER", "1") // container trust: every command may run as a helper
 	stages := []flow.Stage{{ID: "a"}, stageWithCommand("b", "fake-recipe"), {ID: "s", Script: "true"}}
-	store, err := state.Open(t.TempDir(), []string{"a", "b", "s"})
+	store, err := implstate.Open(t.TempDir(), []string{"a", "b", "s"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,12 +310,12 @@ func TestAssistantProfilesAPI_ResolvesWhereAttached(t *testing.T) {
 		"external": {Command: "/opt/ext-as-claude.sh", RuntimeContext: &wrapper},
 	}
 	f := &flow.Flow{Name: "api", Stages: stages}
-	collab := startCollaboration(store, cfg, f)
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir: t.TempDir(), Stages: stages, Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(),
-		AssistantsEnabled: collab.policy.Enabled, AssistantsRegistry: collab.registry,
+	collab := engine.StartCollaboration(store, cfg, f)
+	orch := implorchestrator.New(implorchestrator.Options{
+		RunDir: t.TempDir(), Stages: stages, Store: store, Config: cfg, Prompts: implorchestrator.DefaultPrompts(),
+		AssistantsEnabled: collab.Policy.Enabled, AssistantsRegistry: collab.Registry,
 	})
-	handler := server.New(server.Config{Store: store, AssistantProfiles: collab.service(orch)}).Handler()
+	handler := server.New(server.Config{Store: store, AssistantProfiles: profilesService(collab, orch)}).Handler()
 	get := func(query string) (int, map[string]string) {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -365,10 +350,10 @@ func TestAssistantProfilesAPI_ResolvesWhereAttached(t *testing.T) {
 
 // ---- T4: preflight of declared assistant profile names + disabled-collaboration warning ----
 
-func newCollabTestStore(t *testing.T) *state.Store {
+func newCollabTestStore(t *testing.T) *implstate.Store {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := state.Open(dir, []string{"s1"})
+	store, err := implstate.Open(dir, []string{"s1"})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -383,12 +368,12 @@ func TestCheckDeclaredAssistants_UnknownProfileErrors(t *testing.T) {
 	f := &flow.Flow{Stages: []flow.Stage{
 		{ID: "s1", Assistants: flow.StageAssistants{{Profile: "reviewer"}, {Profile: "ghost"}}},
 	}}
-	collab := startCollaboration(newCollabTestStore(t), cfg, f)
-	if !collab.policy.Enabled {
+	collab := engine.StartCollaboration(newCollabTestStore(t), cfg, f)
+	if !collab.Policy.Enabled {
 		t.Fatal("setup: collaboration must be enabled by default")
 	}
 
-	err := checkDeclaredAssistants(f, collab)
+	err := engine.CheckDeclaredAssistants(f, collab)
 	if err == nil {
 		t.Fatal("checkDeclaredAssistants: want error for unknown profile, got nil")
 	}
@@ -407,9 +392,9 @@ func TestCheckDeclaredAssistants_KnownProfilesPass(t *testing.T) {
 	f := &flow.Flow{Stages: []flow.Stage{
 		{ID: "s1", Assistants: flow.StageAssistants{{Profile: "reviewer"}, {Profile: "qa"}}},
 	}}
-	collab := startCollaboration(newCollabTestStore(t), cfg, f)
+	collab := engine.StartCollaboration(newCollabTestStore(t), cfg, f)
 
-	if err := checkDeclaredAssistants(f, collab); err != nil {
+	if err := engine.CheckDeclaredAssistants(f, collab); err != nil {
 		t.Fatalf("checkDeclaredAssistants: %v", err)
 	}
 }
@@ -422,15 +407,15 @@ func TestPreflight_BuiltinDefaultProfile(t *testing.T) {
 		Team:   flow.Team{{ID: "helper", Profile: "default", Title: "Helper"}},
 	}
 	store := newCollabTestStore(t)
-	collab := startCollaboration(store, config.Config{}, f)
-	if !collab.policy.Enabled || collab.registry == nil {
+	collab := engine.StartCollaboration(store, config.Config{}, f)
+	if !collab.Policy.Enabled || collab.Registry == nil {
 		t.Fatal("setup: collaboration must be enabled with a registry")
 	}
 
-	if err := checkDeclaredAssistants(f, collab); err != nil {
+	if err := engine.CheckDeclaredAssistants(f, collab); err != nil {
 		t.Fatalf("checkDeclaredAssistants: %v", err)
 	}
-	if err := checkFlowTeam(store, f.Team, collab); err != nil {
+	if err := engine.CheckFlowTeam(store, f.Team, collab); err != nil {
 		t.Fatalf("checkFlowTeam: %v", err)
 	}
 }
@@ -441,13 +426,13 @@ func TestCheckDeclaredAssistants_DisabledCollaborationWarnsNotErrors(t *testing.
 	f := &flow.Flow{Stages: []flow.Stage{
 		{ID: "s1", Assistants: flow.StageAssistants{{Profile: "reviewer"}}},
 	}}
-	collab := startCollaboration(newCollabTestStore(t), cfg, f)
-	if collab.policy.Enabled {
+	collab := engine.StartCollaboration(newCollabTestStore(t), cfg, f)
+	if collab.Policy.Enabled {
 		t.Fatal("setup: collaboration must be disabled")
 	}
 
 	var err error
-	stderr := captureStderr(t, func() { err = checkDeclaredAssistants(f, collab) })
+	stderr := captureStderr(t, func() { err = engine.CheckDeclaredAssistants(f, collab) })
 	if err != nil {
 		t.Fatalf("checkDeclaredAssistants: %v, want nil (disabled collaboration must not block the run)", err)
 	}
@@ -468,10 +453,10 @@ func TestCheckDeclaredAssistants_NoStageDeclaresAssistants(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{Collaboration: config.CollaborationConfig{Enabled: tc.enabled}}
 			f := &flow.Flow{Stages: []flow.Stage{{ID: "s1"}}}
-			collab := startCollaboration(newCollabTestStore(t), cfg, f)
+			collab := engine.StartCollaboration(newCollabTestStore(t), cfg, f)
 
 			var err error
-			stderr := captureStderr(t, func() { err = checkDeclaredAssistants(f, collab) })
+			stderr := captureStderr(t, func() { err = engine.CheckDeclaredAssistants(f, collab) })
 			if err != nil {
 				t.Fatalf("checkDeclaredAssistants: %v, want nil", err)
 			}
@@ -493,9 +478,9 @@ func TestCheckFlowTeam_UnknownProfileErrors(t *testing.T) {
 		Stages: []flow.Stage{{ID: "s1"}},
 	}
 	store := newCollabTestStore(t)
-	collab := startCollaboration(store, cfg, f)
+	collab := engine.StartCollaboration(store, cfg, f)
 
-	err := checkFlowTeam(store, f.Team, collab)
+	err := engine.CheckFlowTeam(store, f.Team, collab)
 	if err == nil || !strings.Contains(err.Error(), `team member "qa"`) || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("checkFlowTeam = %v, want an error naming team member qa and profile ghost", err)
 	}
@@ -509,10 +494,10 @@ func TestCheckFlowTeam_SavedMemberSkipsProfileCheck(t *testing.T) {
 	}}
 	f := &flow.Flow{Team: flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}}, Stages: []flow.Stage{{ID: "s1"}}}
 	store := newCollabTestStore(t)
-	collab := startCollaboration(store, cfg, f)
-	orch := orchestrator.New(orchestrator.Options{
-		RunDir: t.TempDir(), Stages: f.Stages, Store: store, Config: config.Default(), Prompts: orchestrator.DefaultPrompts(),
-		AssistantsEnabled: true, AssistantsRegistry: collab.registry,
+	collab := engine.StartCollaboration(store, cfg, f)
+	orch := implorchestrator.New(implorchestrator.Options{
+		RunDir: t.TempDir(), Stages: f.Stages, Store: store, Config: config.Default(), Prompts: implorchestrator.DefaultPrompts(),
+		AssistantsEnabled: true, AssistantsRegistry: collab.Registry,
 	})
 	if _, err := orch.AddRunAgent(context.Background(), orchestrator.AddRunAgentRequest{
 		OperationID: "team/qa", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "system", ID: "flow"},
@@ -523,11 +508,11 @@ func TestCheckFlowTeam_SavedMemberSkipsProfileCheck(t *testing.T) {
 	removed := config.Config{Collaboration: config.CollaborationConfig{
 		Profiles: map[string]config.ProfileConfig{"other": {Command: "codex-as-claude"}},
 	}}
-	if err := checkFlowTeam(store, f.Team, startCollaboration(store, removed, f)); err != nil {
-		t.Fatalf("checkFlowTeam on resume: %v, want nil (the saved agent keeps its snapshot)", err)
+	if err := engine.CheckFlowTeam(store, f.Team, engine.StartCollaboration(store, removed, f)); err != nil {
+		t.Fatalf("engine.CheckFlowTeam on resume: %v, want nil (the saved agent keeps its snapshot)", err)
 	}
 	f.Team = append(f.Team, flow.TeamMember{ID: "ops", Profile: "qa", Title: "Ops"})
-	if err := checkFlowTeam(store, f.Team, startCollaboration(store, removed, f)); err == nil {
+	if err := engine.CheckFlowTeam(store, f.Team, engine.StartCollaboration(store, removed, f)); err == nil {
 		t.Fatal("checkFlowTeam: a new member with a missing profile must still fail")
 	}
 }
@@ -537,10 +522,10 @@ func TestCheckFlowTeam_DisabledCollaborationWarns(t *testing.T) {
 	cfg := config.Config{Collaboration: config.CollaborationConfig{Enabled: &off}}
 	f := &flow.Flow{Team: flow.Team{{ID: "qa", Profile: "ghost", Title: "QA"}}, Stages: []flow.Stage{{ID: "s1"}}}
 	store := newCollabTestStore(t)
-	collab := startCollaboration(store, cfg, f)
+	collab := engine.StartCollaboration(store, cfg, f)
 
 	var err error
-	stderr := captureStderr(t, func() { err = checkFlowTeam(store, f.Team, collab) })
+	stderr := captureStderr(t, func() { err = engine.CheckFlowTeam(store, f.Team, collab) })
 	if err != nil {
 		t.Fatalf("checkFlowTeam: %v, want nil (disabled collaboration must not block the run)", err)
 	}

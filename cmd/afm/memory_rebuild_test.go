@@ -1,6 +1,9 @@
 package main
 
 import (
+	implmemorypipeline "github.com/akopichin/afm-engine/testkit/memorypipeline"
+	"github.com/akopichin/afm/contracts/state"
+
 	"bytes"
 	"context"
 	"errors"
@@ -11,9 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/memorypipeline"
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/flow"
 )
 
 func TestMemoryRebuildCmd_Registered(t *testing.T) {
@@ -132,16 +134,16 @@ session_level: []
 `
 
 // fakeMemoryRunner подменяет reflect/aggregate/prioritize/update без реальных агентов.
-func fakeMemoryRunner() memorypipeline.AgentRunner {
-	return func(_ context.Context, spec memorypipeline.AgentSpec) error {
+func fakeMemoryRunner() implmemorypipeline.AgentRunner {
+	return func(_ context.Context, spec implmemorypipeline.AgentSpec) error {
 		switch spec.Kind {
-		case memorypipeline.KindReflect:
+		case implmemorypipeline.KindReflect:
 			return os.WriteFile(spec.DatasetOut, []byte(nonEmptyDatasetYAML), 0644)
-		case memorypipeline.KindAggregate:
+		case implmemorypipeline.KindAggregate:
 			return os.WriteFile(spec.Out, []byte("1. Pattern — a description\n"), 0644)
-		case memorypipeline.KindPrioritize:
+		case implmemorypipeline.KindPrioritize:
 			return os.WriteFile(spec.Out, []byte("## High\n\n1. Pattern — a description\n\n## Medium\n\n## Low\n"), 0644)
-		case memorypipeline.KindUpdate:
+		case implmemorypipeline.KindUpdate:
 			return os.WriteFile(spec.TargetFile, []byte("# Project rules\n\n## Pattern\n\nA description.\n"), 0644)
 		default:
 			return errors.New("fakeMemoryRunner: unexpected kind " + spec.Kind)
@@ -161,8 +163,8 @@ func withFakeMemoryPipeline(t *testing.T) {
 	t.Helper()
 	prev := newRebuildPipeline
 	t.Cleanup(func() { newRebuildPipeline = prev })
-	newRebuildPipeline = func(p memorypipeline.Prompts, a memorypipeline.AgentConfig) *memorypipeline.Pipeline {
-		return memorypipeline.New(p, a, memorypipeline.WithRunner(fakeMemoryRunner()))
+	newRebuildPipeline = func(p implmemorypipeline.Prompts, a implmemorypipeline.AgentConfig) *implmemorypipeline.Pipeline {
+		return implmemorypipeline.New(p, a, implmemorypipeline.WithRunner(fakeMemoryRunner()))
 	}
 }
 
@@ -186,7 +188,7 @@ func mkRunCLI(t *testing.T, base, name string, statuses map[string]state.StageSt
 	for id := range statuses {
 		ids = append(ids, id)
 	}
-	store, err := state.Open(runDir, ids)
+	store, err := implstate.Open(runDir, ids)
 	if err != nil {
 		t.Fatalf("mkRunCLI: Open: %v", err)
 	}
@@ -348,7 +350,7 @@ func TestRebuildHandler_ActiveRunLocked(t *testing.T) {
 	writeStageSession(t, runDir, "s1")
 
 	// Simulate a live `afm run` still holding the run's flock.
-	store, err := state.Open(runDir, []string{"s1"})
+	store, err := implstate.Open(runDir, []string{"s1"})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
@@ -379,9 +381,9 @@ func TestRebuildHandler_StalePromotingManifestWarns(t *testing.T) {
 		t.Fatal(err)
 	}
 	priorManifest := filepath.Join(priorAttempt, "manifest.json")
-	m := memorypipeline.NewRunningManifest(memorypipeline.OperationMeta{RunID: "testflow-20260101-000000-aaaa"})
-	m.Status = memorypipeline.StatusPromoting
-	if err := memorypipeline.WriteManifest(priorManifest, m); err != nil {
+	m := implmemorypipeline.NewRunningManifest(implmemorypipeline.OperationMeta{RunID: "testflow-20260101-000000-aaaa"})
+	m.Status = implmemorypipeline.StatusPromoting
+	if err := implmemorypipeline.WriteManifest(priorManifest, m); err != nil {
 		t.Fatal(err)
 	}
 
@@ -470,7 +472,7 @@ func TestRebuildHandler_PersistentDirResolvesRunsDir(t *testing.T) {
 	}
 
 	// The attempt's work dir must have been allocated under the CUSTOM dir's run, proving
-	// runsDir()/resolveMemoryDir honored rootDir rather than the process's actual cwd.
+	// runsDir()/engine.ResolveMemoryDir honored rootDir rather than the process's actual cwd.
 	matches, err := filepath.Glob(filepath.Join(runDir, "memory-rebuild", "*", "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -535,7 +537,7 @@ func TestRebuildHandler_WorktreeUsesWorktreeRunsAndMemoryDir(t *testing.T) {
 	if len(matches) != 1 {
 		t.Fatalf("expected exactly one manifest under the feature-x run, got %v", matches)
 	}
-	manifest, err := memorypipeline.LoadManifest(matches[0])
+	manifest, err := implmemorypipeline.LoadManifest(matches[0])
 	if err != nil {
 		t.Fatalf("LoadManifest: %v", err)
 	}
@@ -659,9 +661,9 @@ func TestCommitPreflight_NonGitAncestorIsNoOp(t *testing.T) {
 // maybeCommit receives it in from rebuildHandler.
 func newAwaitingCommitManifest(t *testing.T, manifestPath, runID string) {
 	t.Helper()
-	m := memorypipeline.NewRunningManifest(memorypipeline.OperationMeta{RunID: runID})
-	m.Status = memorypipeline.StatusAwaitingCommit
-	if err := memorypipeline.WriteManifest(manifestPath, m); err != nil {
+	m := implmemorypipeline.NewRunningManifest(implmemorypipeline.OperationMeta{RunID: runID})
+	m.Status = implmemorypipeline.StatusAwaitingCommit
+	if err := implmemorypipeline.WriteManifest(manifestPath, m); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -674,9 +676,9 @@ func TestMaybeCommit_FailureMarksManifestFailed(t *testing.T) {
 	manifestPath := filepath.Join(dir, "manifest.json")
 	newAwaitingCommitManifest(t, manifestPath, "testflow-20260101-000000-aaaa")
 
-	report := memorypipeline.Report{
+	report := implmemorypipeline.Report{
 		RunID: "testflow-20260101-000000-aaaa",
-		Targets: []memorypipeline.TargetResult{
+		Targets: []implmemorypipeline.TargetResult{
 			{FinalPath: filepath.Join(memDir, "memory.md"), Changed: true, Published: true},
 		},
 	}
@@ -686,13 +688,13 @@ func TestMaybeCommit_FailureMarksManifestFailed(t *testing.T) {
 		t.Fatalf("want 'memory files updated but commit failed' error, got %v", err)
 	}
 
-	got, lerr := memorypipeline.LoadManifest(manifestPath)
+	got, lerr := implmemorypipeline.LoadManifest(manifestPath)
 	if lerr != nil {
 		t.Fatalf("LoadManifest: %v", lerr)
 	}
 	// Commit failure must mark the manifest failed with its error and FinishedAt.
-	if got.Status != memorypipeline.StatusFailed {
-		t.Fatalf("want manifest Status=%q, got %q", memorypipeline.StatusFailed, got.Status)
+	if got.Status != implmemorypipeline.StatusFailed {
+		t.Fatalf("want manifest Status=%q, got %q", implmemorypipeline.StatusFailed, got.Status)
 	}
 	if len(got.Errors) == 0 {
 		t.Fatal("want the commit error appended to manifest Errors")
@@ -716,9 +718,9 @@ func TestMaybeCommit_SuccessRecordsCommitCreatedAndSHA(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	newAwaitingCommitManifest(t, manifestPath, "testflow-20260101-000000-aaaa")
 
-	report := memorypipeline.Report{
+	report := implmemorypipeline.Report{
 		RunID: "testflow-20260101-000000-aaaa",
-		Targets: []memorypipeline.TargetResult{
+		Targets: []implmemorypipeline.TargetResult{
 			{FinalPath: target, Changed: true, Published: true},
 			// An unpublished/unchanged target must not be swept into the
 			// commit's pathspec.
@@ -730,7 +732,7 @@ func TestMaybeCommit_SuccessRecordsCommitCreatedAndSHA(t *testing.T) {
 		t.Fatalf("maybeCommit: %v", err)
 	}
 
-	got, err := memorypipeline.LoadManifest(manifestPath)
+	got, err := implmemorypipeline.LoadManifest(manifestPath)
 	if err != nil {
 		t.Fatalf("LoadManifest: %v", err)
 	}
@@ -751,9 +753,9 @@ func TestMaybeCommit_NoPublishedChangesIsNoOp(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	newAwaitingCommitManifest(t, manifestPath, "testflow-20260101-000000-aaaa")
 
-	report := memorypipeline.Report{
+	report := implmemorypipeline.Report{
 		RunID: "testflow-20260101-000000-aaaa",
-		Targets: []memorypipeline.TargetResult{
+		Targets: []implmemorypipeline.TargetResult{
 			{FinalPath: filepath.Join(memDir, "memory.md"), Changed: false, Published: false},
 		},
 	}
@@ -761,14 +763,14 @@ func TestMaybeCommit_NoPublishedChangesIsNoOp(t *testing.T) {
 	if err := maybeCommit(memDir, report, manifestPath); err != nil {
 		t.Fatalf("maybeCommit: %v", err)
 	}
-	got, err := memorypipeline.LoadManifest(manifestPath)
+	got, err := implmemorypipeline.LoadManifest(manifestPath)
 	if err != nil {
 		t.Fatalf("LoadManifest: %v", err)
 	}
 	if got.CommitCreated {
 		t.Fatal("want CommitCreated=false when nothing was published")
 	}
-	if got.Status != memorypipeline.StatusAwaitingCommit {
+	if got.Status != implmemorypipeline.StatusAwaitingCommit {
 		t.Fatalf("manifest status must be untouched when there's nothing to commit, got %q", got.Status)
 	}
 }

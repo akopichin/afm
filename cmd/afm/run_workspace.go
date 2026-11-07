@@ -6,11 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
+	"github.com/akopichin/afm/contracts/config"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/docker"
 	"github.com/akopichin/afm/pkg/server/workspace"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // The workspace is shared by review notes and the dashboard. An absent or
@@ -58,7 +58,7 @@ func workspaceResolveFile(ws workspace.FS) func(root, path string, line *int) (o
 		rf := orchestrator.ResolvedFile{
 			DisplayPath: f.DisplayPath,
 			Reference:   f.Reference,
-			ContentSHA:  state.FileContentSHA([]byte(f.Content)),
+			ContentSHA:  implstate.FileContentSHA([]byte(f.Content)),
 		}
 		if line != nil {
 			// Trim one trailing newline to count real lines; empty files have zero lines.
@@ -83,6 +83,6 @@ func workspaceCurrentFileSHA(ws workspace.FS) func(root, path string) (string, b
 		if err != nil {
 			return "", false
 		}
-		return state.FileContentSHA([]byte(f.Content)), true
+		return implstate.FileContentSHA([]byte(f.Content)), true
 	}
 }

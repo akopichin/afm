@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/akopichin/afm/pkg/sideagent"
+	sideagent "github.com/akopichin/afm/contracts/assistant"
 )
 
 // sideAgentHeartbeatPeriod — интервал SSE-heartbeat (comment-строка), чтобы соединение и промежуточные

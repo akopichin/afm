@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 // fakeProposalActions backs the proposal HTTP layer for tests.

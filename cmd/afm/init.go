@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/contracts/flow"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )

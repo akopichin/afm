@@ -1,14 +1,14 @@
 package afmsdk
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
+	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -18,11 +18,17 @@ type Run struct {
 	dir        string
 	baseURL    string
 	httpClient *http.Client
-	out        *bytes.Buffer
+	out        *tailBuffer
 	exited     chan struct{}
-	waitErr    error
+	waitErr    error // written before exited is closed
 	port       int
 	pid        int
+	mode       Mode
+
+	interruptOnce sync.Once
+	killMu        sync.Mutex // orders a Kill against watchProcess deciding whether that Kill ended afm
+	killSent      bool       // guarded by killMu: a Kill reached a live afm
+	killedByStop  bool       // written before exited is closed
 }
 
 // Dir returns the isolated directory (--dir) this run's afm state lives in.
@@ -40,43 +46,101 @@ func (r *Run) PID() int {
 	return r.pid
 }
 
-const dashboardReadyTimeout = 30 * time.Second
+// readyTimeout is a variable so unit tests can shorten it.
+var readyTimeout = 30 * time.Second
 
-// waitReady polls the run's dashboard API until it responds or the process exits or times out, so
-// Client.Start only returns once the run is actually controllable.
+// waitReady polls until the run is controllable, so Client.Start returns only a usable handle. On any
+// failure the process is stopped and reaped before returning.
 func (r *Run) waitReady(ctx context.Context) error {
-	deadline := time.Now().Add(dashboardReadyTimeout)
+	timeout := time.NewTimer(readyTimeout)
+	defer timeout.Stop()
+	problem := ""
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/api/status", nil)
-		if err == nil {
-			if resp, err := r.httpClient.Do(req); err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					return nil
-				}
-			}
+		select {
+		case <-r.exited:
+			return fmt.Errorf("afmsdk: afm exited before %s became ready: %s", r.mode, r.out.String())
+		default:
+		}
+		ready, fatal := r.probeReady(ctx, &problem)
+		if fatal != nil {
+			return r.abortStart(fatal)
+		}
+		if ready {
+			return nil
 		}
 
 		select {
 		case <-r.exited:
-			return fmt.Errorf("afmsdk: afm exited before dashboard became ready: %s", strings.TrimSpace(r.out.String()))
 		case <-ctx.Done():
-			_ = r.cmd.Process.Kill()
-			return ctx.Err()
+			return r.abortStart(ctx.Err())
+		case <-timeout.C:
+			return r.abortStart(fmt.Errorf("afmsdk: %s did not become ready within %s: %s", r.mode, readyTimeout, problem))
 		case <-time.After(100 * time.Millisecond):
-		}
-
-		if time.Now().After(deadline) {
-			_ = r.cmd.Process.Kill()
-			return fmt.Errorf("afmsdk: dashboard did not become ready within %s", dashboardReadyTimeout)
 		}
 	}
 }
 
-// Wait blocks until the afm subprocess exits.
+// abortStart stops the process and reaps it so the MaxConcurrent slot is free when Start returns.
+func (r *Run) abortStart(cause error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), waitInterruptGrace)
+	defer cancel()
+	r.stop(ctx)
+	if tail := r.out.String(); tail != "" {
+		return fmt.Errorf("%w\nafm output: %s", cause, tail)
+	}
+	return cause
+}
+
+// probeReady reports whether the API is usable. Only a runtime this SDK cannot drive is fatal; anything else
+// may still resolve while afm starts, and is recorded in problem for the timeout message.
+func (r *Run) probeReady(ctx context.Context, problem *string) (ready bool, fatal error) {
+	if r.mode != ModeCore {
+		_, err := r.request(ctx, http.MethodGet, "/api/status", nil, maxJSONBytes)
+		return err == nil, nil
+	}
+	info, found, err := r.fetchRuntime(ctx)
+	if err != nil {
+		*problem = err.Error()
+		return false, nil
+	}
+	if !found {
+		return false, fmt.Errorf("%w: /api/runtime not served, afm is too old for core mode", ErrIncompatibleRuntime)
+	}
+	if err := info.check(); err != nil {
+		return false, err
+	}
+	if Mode(info.Mode) != ModeCore {
+		return false, fmt.Errorf("%w: afm runs in %q mode, want core", ErrIncompatibleRuntime, info.Mode)
+	}
+	if !info.Ready || info.RunID == "" {
+		*problem = "runtime not ready"
+		return false, nil
+	}
+	status, err := r.Status(ctx)
+	if err != nil {
+		*problem = err.Error()
+		return false, nil
+	}
+	if status.RunID != info.RunID {
+		*problem = fmt.Sprintf("status run_id %q differs from runtime run_id %q", status.RunID, info.RunID)
+		return false, nil
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, ".afm", "runs", info.RunID)); err != nil {
+		*problem = "run directory missing: " + err.Error()
+		return false, nil
+	}
+	return true, nil
+}
+
+// Mode returns the afm runtime mode of this run; empty when the afm predates /api/runtime.
+func (r *Run) Mode() Mode {
+	return r.mode
+}
+
+// Wait blocks until the afm subprocess exits. If ctx ends first it sends SIGINT, then kills afm after 15s.
 func (r *Run) Wait(ctx context.Context) error {
 	if r.cmd == nil {
-		return errors.New("afmsdk: Wait: not supported for a Run obtained via Attach")
+		return fmt.Errorf("afmsdk: Wait: not supported for a Run obtained via Attach: %w", ErrNotOwned)
 	}
 	select {
 	case <-r.exited:
@@ -84,13 +148,9 @@ func (r *Run) Wait(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
-	_ = r.cmd.Process.Signal(os.Interrupt)
-	select {
-	case <-r.exited:
-	case <-time.After(15 * time.Second):
-		_ = r.cmd.Process.Kill()
-		<-r.exited
-	}
+	graceCtx, cancel := context.WithTimeout(context.Background(), waitInterruptGrace)
+	defer cancel()
+	r.stop(graceCtx)
 	if r.waitErr != nil {
 		return r.waitErr
 	}
@@ -100,7 +160,7 @@ func (r *Run) Wait(ctx context.Context) error {
 // Cleanup removes this run's isolated state directory.
 func (r *Run) Cleanup() error {
 	if r.cmd == nil {
-		return errors.New("afmsdk: Cleanup: not supported for a Run obtained via Attach")
+		return fmt.Errorf("afmsdk: Cleanup: not supported for a Run obtained via Attach: %w", ErrNotOwned)
 	}
 	select {
 	case <-r.exited:

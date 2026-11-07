@@ -2,27 +2,10 @@
 ARG UV_VERSION=0.12.6
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-# Stage 1: build React dashboard (Vite → index.html + assets/ + статика из public/)
-FROM node:22-bookworm-slim AS web
-WORKDIR /dash
-# Сначала только манифесты зависимостей — слой npm ci кэшируется отдельно от
-# исходников и не инвалидируется при правках в src/.
-COPY pkg/web/dashboard/package.json pkg/web/dashboard/package-lock.json ./
-RUN npm ci
-COPY pkg/web/dashboard/ .
-RUN npm run build
-
-# Stage 2: build afm binary (вкомпилирует собранный дашборд через go:embed)
-FROM golang:1.26-bookworm AS builder
-WORKDIR /src
-COPY . .
-# Удаляем старые assets/skins перед COPY свежего дашборда, чтобы go:embed не включил устаревшие бандлы.
-RUN rm -rf ./pkg/web/dashboard/assets ./pkg/web/dashboard/skins
-COPY --from=web /dash/assets ./pkg/web/dashboard/assets
-COPY --from=web /dash/skins ./pkg/web/dashboard/skins
-COPY --from=web /dash/index.html /dash/favicon.svg /dash/quarium-logo.png ./pkg/web/dashboard/
-ARG AFM_VERSION=dev
-RUN CGO_ENABLED=0 go build -ldflags="-X main.version=$AFM_VERSION" -o /afm ./cmd/afm
+# The trusted build supplies binaries; no private source enters a Docker layer.
+FROM golang:1.26-bookworm AS toolchain
+FROM scratch AS product
+COPY binaries/ /binaries/
 
 # Stage 3: runtime environment
 FROM ubuntu:24.04
@@ -48,7 +31,7 @@ RUN apt-get update && apt-get install -y \
 COPY --from=uv /uv /uvx /usr/local/bin/
 
 # Go 1.26 (для verify: go test и подобных команд в flow)
-COPY --from=builder /usr/local/go /usr/local/go
+COPY --from=toolchain /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:$PATH"
 
 # Claude CLI version is pinned; bump only after testing with the afm release.
@@ -66,7 +49,8 @@ ARG CHROME_DEVTOOLS_MCP_VERSION=1.12.0
 RUN npm install -g chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}
 
 # afm binary
-COPY --from=builder /afm /usr/local/bin/afm
+ARG TARGETARCH
+COPY --from=product /binaries/linux_${TARGETARCH}/afm /usr/local/bin/afm
 
 # Дом для non-root пользователя (entrypoint chown'ит его под host-uid и ставит HOME).
 RUN mkdir -p /home/afm

@@ -1,249 +1,32 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"os"
-	"slices"
+	orchestrator "github.com/akopichin/afm/contracts/control"
+	"github.com/akopichin/afm/contracts/state"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	"context"
+
+	"github.com/akopichin/afm-engine/engine"
+	stagefiles "github.com/akopichin/afm/contracts/activity"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
-// collaborationPolicy is the resolved, immutable-for-the-process-lifetime outcome of the collaboration
-// switch and its delegation-depth policy. Resolved ONCE at process start (see resolveCollaboration's call
-// site in executeFlow) — no hot reload (dev-plan.md Этап 1 §3.3).
-type collaborationPolicy struct {
-	Enabled bool
-	Depth   assistants.DepthPolicy
-}
-
-// resolveCollaboration resolves the effective collaboration toggle and delegation-depth policy, modeled on
-// sideAgentEnabled (cmd/afm/run_side_agent.go:22).
-//
-// Enabled priority: env AFM_COLLABORATION > config collaboration.enabled > default ON — there is
-// deliberately no flow-level override for "enabled" (flow.FlowCollaboration carries only MaxDepth; a flow
-// cannot re-enable a feature switched off by env/config, see flow.FlowCollaboration.UnmarshalYAML).
-//
-// Depth priority: flow > project config > global config > built-in default (assistants.ResolveDepth, T0.2).
-// cfg.Collaboration.MaxDepthLayers() recovers the global/project provenance that mergeFile already folded
-// together, so DepthPolicy.Source names the right layer instead of always blaming "project".
-func resolveCollaboration(cfg config.Config, f *flow.Flow) collaborationPolicy {
-	enabled := cfg.Collaboration.IsEnabled()
-
-	var flowDepth *int
-	if f != nil && f.Collaboration != nil {
-		flowDepth = f.Collaboration.MaxDepth
-	}
-	global, project := cfg.Collaboration.MaxDepthLayers()
-	depth, err := assistants.ResolveDepth(global, project, flowDepth)
-	if err != nil {
-		// Negative max_depth is already rejected at config-load time (pkg/config/collaboration.go's
-		// validateCollaborationMaxDepth) and at flow-parse time (flow.FlowCollaboration.UnmarshalYAML), so
-		// this is unreachable in practice. Fail closed rather than panic: no helpers, not an unrestricted one.
-		return collaborationPolicy{Enabled: false, Depth: assistants.DepthPolicy{Source: assistants.DepthSourceDefault}}
-	}
-
-	return collaborationPolicy{Enabled: enabled, Depth: depth}
-}
-
-// resolveCollaborationMode resolves the collaboration mode: flow > config (layers already merged) > team.
-// It is independent of resolveCollaboration (enabled, max_depth) and of the durable policy record.
-func resolveCollaborationMode(cfg config.Config, f *flow.Flow) assistants.CollaborationMode {
-	if f != nil && f.Collaboration != nil && f.Collaboration.Mode != nil {
-		return *f.Collaboration.Mode
-	}
-	if cfg.Collaboration.Mode != nil {
-		return *cfg.Collaboration.Mode
-	}
-	return assistants.CollaborationModeTeam
-}
-
-// collaborationRuntime owns the resolved policy and, when enabled, the derived profile registry. Mirrors
-// sideAgentRuntime: a nil receiver / disabled policy / registry-build failure all collapse to "capability
-// off" rather than failing the run — collaboration is additive, not reliability-core (Инвариант 9: default
-// ON must not itself start any model call, and a config mistake here must not take the whole flow down).
-type collaborationRuntime struct {
-	policy   collaborationPolicy
-	registry *assistants.Registry
-}
-
-// startCollaboration resolves the policy, durably records it (T2.6/T2.7 — see below) and, if enabled, builds
-// the profile registry from this process's config. There is no code here creating profiles from an HTTP
-// request — only config (global/project collaboration.profiles) and the builtin default feed the registry.
-//
-// store is used ONLY to durably record the resolved policy (state.Store.EnsurePolicyRecorded) before this
-// function returns — the T2.7 recovery-ordering requirement that policy be resolved and any change recorded
-// BEFORE any consumer (orchestrator.New) is created. No task is created here and no agent is spawned; this
-// is pure bookkeeping, consistent with Инвариант 9 (default ON must not itself start any model call).
-func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *collaborationRuntime {
-	policy := resolveCollaboration(cfg, f)
-	if !policy.Enabled {
-		return &collaborationRuntime{policy: policy}
-	}
-
-	if _, err := store.EnsurePolicyRecorded(policy.Depth, state.Actor{Kind: "system", ID: "afm"}); err != nil {
-		// A storage hiccup here must not take down the whole run before it even starts its stages — fall
-		// back to "capability off" (same posture as a malformed profile below), surfaced as a warning rather
-		// than a hard failure, mirroring startSideAgent's "open failed → disable, don't crash the flow".
-		fmt.Fprintf(os.Stderr, "warning: collaboration disabled: failed to record policy: %v\n", err)
-		return &collaborationRuntime{policy: collaborationPolicy{Enabled: false, Depth: policy.Depth}}
-	}
-
-	reg, err := buildProfileRegistry(cfg)
-	if err != nil {
-		// A malformed profile (duplicate/unsafe id) disables the capability instead of failing the whole
-		// run — the same posture as startSideAgent's "open failed → disable, don't crash the flow".
-		fmt.Fprintf(os.Stderr, "warning: collaboration disabled: %v\n", err)
-		return &collaborationRuntime{policy: collaborationPolicy{Enabled: false, Depth: policy.Depth}}
-	}
-	return &collaborationRuntime{policy: policy, registry: reg}
-}
-
-// buildProfileRegistry builds the collaboration profile registry — the builtin default and the configured
-// collaboration.profiles — and is the one validation of the latter, shared by afm run and afm validate.
-func buildProfileRegistry(cfg config.Config) (*assistants.Registry, error) {
-	return assistants.BuildRegistry(assistants.BuiltinProfiles(), profilesFromConfig(cfg.Collaboration.Profiles), nil)
-}
-
-// checkDeclaredAssistants preflights every stage's assistants: field against the resolved collaboration
-// runtime, BEFORE any stage starts. Mirrors config.ValidateVerifySpecs's spot in executeFlow, but cannot live
-// there: it needs the real profile registry, which doesn't exist until startCollaboration runs.
-//
-// When collaboration is disabled, a declared assistants: is a silent no-op at runtime (attachDeclaredAssistants's
-// own gate) — so this does not error, only warns once per offending stage, keeping AFM_COLLABORATION=0 a
-// working way to temporarily turn helpers off without editing every flow.yaml that declares them.
-func checkDeclaredAssistants(f *flow.Flow, collab *collaborationRuntime) error {
-	if !collab.policy.Enabled || collab.registry == nil {
-		warnAssistantsWithoutCollaboration(f.Stages)
+// profilesService returns the server-facing view of the profiles. nil receiver, a disabled policy, or a failed
+// registry build all return a nil interface — capability off: /api/assistant-profiles is not registered.
+// Built from the opened run: stages added during the run live only in its runtime registry.
+func profilesService(r *engine.Collaboration, orch engine.CollaborationAPI) server.AssistantProfilesService {
+	if r == nil || !r.Policy.Enabled || r.Registry == nil {
 		return nil
 	}
-	return checkStageAssistants(f.Stages, collab.registry)
+	return collaborationService{policy: r.Policy, orch: orch}
 }
 
-// warnAssistantsWithoutCollaboration warns once per stage whose assistants: will not be attached.
-func warnAssistantsWithoutCollaboration(stages []flow.Stage) {
-	for _, s := range stages {
-		if len(s.Assistants) > 0 {
-			fmt.Fprintf(os.Stderr, "warning: stage %q declares \"assistants\" but collaboration is disabled — they will not be attached\n", s.ID)
-		}
-	}
-}
-
-// checkStageAssistants reports the first stage assistant whose profile reg lacks.
-func checkStageAssistants(stages []flow.Stage, reg *assistants.Registry) error {
-	for _, s := range stages {
-		for _, a := range s.Assistants {
-			if err := checkHelperProfile(reg, a.Profile); err != nil {
-				return fmt.Errorf("stage %q: %w", s.ID, err)
-			}
-		}
-	}
-	return nil
-}
-
-// checkHelperProfile reports a declared helper whose profile reg lacks. Its executor always resolves (client.command
-// falls back to claude); whether this process may run it is left to admission, since PATH differs between the host
-// and the container.
-func checkHelperProfile(reg *assistants.Registry, id string) error {
-	if _, ok := reg.Get(assistants.ProfileID(id)); !ok {
-		return fmt.Errorf("unknown assistant profile %q (not in collaboration.profiles)", id)
-	}
-	return nil
-}
-
-// checkFlowTeam preflights the flow's team: like checkDeclaredAssistants does a stage's assistants:, before
-// any stage starts. With collaboration disabled it only warns. Otherwise only the members this run has not
-// created an agent for yet need an existing profile: a saved agent keeps the profile snapshot it was created
-// with, so a resume still works after its profile left config.
-func checkFlowTeam(store *state.Store, team flow.Team, collab *collaborationRuntime) error {
-	if !collab.policy.Enabled || collab.registry == nil {
-		warnTeamWithoutCollaboration(team)
-		return nil
-	}
-	toCreate, err := orchestrator.TeamMembersToCreate(store, team)
-	if err != nil {
-		return err
-	}
-	return checkTeamProfiles(toCreate, collab.registry)
-}
-
-// checkTeamProfiles reports the first team member whose profile reg lacks.
-func checkTeamProfiles(team flow.Team, reg *assistants.Registry) error {
-	for _, m := range team {
-		if err := checkHelperProfile(reg, m.Profile); err != nil {
-			return fmt.Errorf("team member %q: %w", m.ID, err)
-		}
-	}
-	return nil
-}
-
-// warnTeamWithoutCollaboration warns that a declared team will not be created: like stage assistants, a
-// team never blocks a run with collaboration off, so AFM_COLLABORATION=0 still runs the flow.
-func warnTeamWithoutCollaboration(team flow.Team) {
-	if len(team) > 0 {
-		fmt.Fprintln(os.Stderr, "warning: the flow declares \"team\" but collaboration is disabled — its agents will not be added")
-	}
-}
-
-// helperCommands returns the sorted, distinct commands helpers may run beyond the stages' and client.command:
-// configured profiles' own ones and resume, those of the saved run's unfinished tasks. Docker preparation needs
-// them before startCollaboration runs; none when collaboration is disabled, as no helper is added or woken then.
-func helperCommands(cfg config.Config, f *flow.Flow, resume []string) []string {
-	if !resolveCollaboration(cfg, f).Enabled {
-		return nil
-	}
-	cmds := slices.Clone(resume)
-	for _, p := range cfg.Collaboration.Profiles {
-		cmds = append(cmds, p.Command)
-	}
-	// A profile without a command runs its stage's command or client.command, which are prepared anyway.
-	cmds = slices.DeleteFunc(cmds, func(cmd string) bool { return cmd == "" })
-	return slices.Compact(slices.Sorted(slices.Values(cmds)))
-}
-
-// profilesFromConfig converts the config layer's YAML-natural map[string]ProfileConfig into the slice form
-// assistants.BuildRegistry expects — Profile.ID carries the map key, which BuildRegistry's duplicate-id
-// guard and path-safety check then validate.
-func profilesFromConfig(m map[string]config.ProfileConfig) []assistants.Profile {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make([]assistants.Profile, 0, len(m))
-	for id, p := range m {
-		out = append(out, assistants.Profile{
-			ID:             assistants.ProfileID(id),
-			Title:          p.Title,
-			Command:        p.Command,
-			Instructions:   p.Instructions,
-			Capabilities:   assistants.Capabilities{Delegate: p.Delegate},
-			RuntimeContext: p.RuntimeContext,
-		})
-	}
-	return out
-}
-
-// service returns the server-facing view of the profiles. nil receiver, a disabled policy, or a failed
-// registry build all return a nil interface — capability off: /api/assistant-profiles is not registered,
-// mirroring sideAgentRuntime.service(). Built after orchestrator.New like actions(): a profile's executor depends
-// on the stage it is attached to, and stages added during the run live in the orchestrator's registry.
-func (r *collaborationRuntime) service(orch *orchestrator.Orchestrator) server.AssistantProfilesService {
-	if r == nil || !r.policy.Enabled || r.registry == nil {
-		return nil
-	}
-	return collaborationService{policy: r.policy, orch: orch}
-}
-
-// collaborationService adapts *orchestrator.Orchestrator to server.AssistantProfilesService.
+// collaborationService adapts engine.CollaborationAPI to server.AssistantProfilesService.
 type collaborationService struct {
-	policy collaborationPolicy
-	orch   *orchestrator.Orchestrator
+	policy engine.CollaborationPolicy
+	orch   engine.CollaborationAPI
 }
 
 func (s collaborationService) Profiles(stageID string) ([]assistants.ProfileView, error) {
@@ -254,32 +37,26 @@ func (s collaborationService) MaxDepth() (depth int, source string) {
 	return s.policy.Depth.MaxDepth, string(s.policy.Depth.Source)
 }
 
-// actions returns the server-facing write-adapter for the collaboration HTTP API (T3.7's AssistantActions:
-// Attach/pause/continue/cancel one helper task), nil when the capability is off (same gate as service()
-// above). Must be called AFTER orch is constructed (orchestrator.New) — unlike service(), which only needs
-// the registry, this wraps the real *orchestrator.Orchestrator whose Attach/PauseTask/ContinueTask/CancelTask
-// methods do the actual admission/lifecycle work (pkg/orchestrator/assistants.go, T3.4).
-func (r *collaborationRuntime) actions(orch *orchestrator.Orchestrator) server.AssistantActions {
-	if r == nil || !r.policy.Enabled || r.registry == nil {
+// assistantActions is the write adapter of the collaboration HTTP API, nil when the capability is off.
+// It needs the built orchestrator, unlike profilesService, which only needs the registry.
+func assistantActions(r *engine.Collaboration, orch engine.CollaborationAPI) server.AssistantActions {
+	if r == nil || !r.Policy.Enabled || r.Registry == nil {
 		return nil
 	}
 	return collaborationActions{orch}
 }
 
-// reader returns the server-facing read-adapter (T3.7's AssistantsReader: a stage's task tree, one task's
-// event-history page), nil under the same gate as actions() above.
-func (r *collaborationRuntime) reader(orch *orchestrator.Orchestrator) server.AssistantsReader {
-	if r == nil || !r.policy.Enabled || r.registry == nil {
+// assistantsReader is the read adapter (task tree, event history), nil under the gate of assistantActions.
+func assistantsReader(r *engine.Collaboration, orch engine.CollaborationAPI) server.AssistantsReader {
+	if r == nil || !r.Policy.Enabled || r.Registry == nil {
 		return nil
 	}
 	return collaborationReader{orch}
 }
 
-// collaborationActions adapts *orchestrator.Orchestrator to server.AssistantActions: translates the HTTP
-// layer's server.AttachRequest/string ids into the orchestrator's own orchestrator.AttachRequest/
-// assistants.TaskID shapes. Every mutation here originates from the dashboard, so Actor is always "user" —
-// mirrors the convention pkg/orchestrator/assistants_test.go's attachTestTask already uses.
-type collaborationActions struct{ orch *orchestrator.Orchestrator }
+// collaborationActions adapts engine.CollaborationAPI to server.AssistantActions, translating HTTP request
+// types and string ids to the orchestrator's. Every mutation comes from the dashboard, so Actor is "user".
+type collaborationActions struct{ orch engine.CollaborationAPI }
 
 func (a collaborationActions) Attach(ctx context.Context, stageID string, req server.AttachRequest) (string, error) {
 	taskID, err := a.orch.Attach(ctx, orchestrator.AttachRequest{
@@ -317,10 +94,10 @@ func (a collaborationActions) CancelTask(ctx context.Context, taskID string) err
 	return a.orch.CancelTask(ctx, assistants.TaskID(taskID))
 }
 
-// collaborationReader adapts *orchestrator.Orchestrator to server.AssistantsReader: converts the
+// collaborationReader adapts engine.CollaborationAPI to server.AssistantsReader: converts the
 // orchestrator/assistants domain types (assistants.Task, state.TaskEvent) into the server package's own
 // dashboard-facing view shapes.
-type collaborationReader struct{ orch *orchestrator.Orchestrator }
+type collaborationReader struct{ orch engine.CollaborationAPI }
 
 func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskView, error) {
 	tasks, err := r.orch.TaskTree(stageID)
@@ -395,25 +172,25 @@ func (r collaborationReader) TaskActivity(taskID string, q stagefiles.ActivityQu
 	return r.orch.TaskActivity(assistants.TaskID(taskID), q)
 }
 
-// discussionService/proposalActions (T6.7) — same nil-gated adapter pattern as actions()/reader() above, wired
-// AFTER orch is constructed since both wrap the real *orchestrator.Orchestrator.
+// discussionService and proposalActions are nil-gated like actions() and reader(): both wrap the run's
+// engine.CollaborationAPI, so they exist only after the orchestrator does.
 
-func (r *collaborationRuntime) discussionService(orch *orchestrator.Orchestrator) server.DiscussionService {
-	if r == nil || !r.policy.Enabled {
+func discussionService(r *engine.Collaboration, orch engine.CollaborationAPI) server.DiscussionService {
+	if r == nil || !r.Policy.Enabled {
 		return nil
 	}
 	return collaborationDiscussion{orch}
 }
 
-func (r *collaborationRuntime) proposalActions(orch *orchestrator.Orchestrator) server.ProposalActions {
-	if r == nil || !r.policy.Enabled {
+func proposalActions(r *engine.Collaboration, orch engine.CollaborationAPI) server.ProposalActions {
+	if r == nil || !r.Policy.Enabled {
 		return nil
 	}
 	return collaborationProposals{orch}
 }
 
-// collaborationDiscussion adapts *orchestrator.Orchestrator to server.DiscussionService.
-type collaborationDiscussion struct{ orch *orchestrator.Orchestrator }
+// collaborationDiscussion adapts engine.CollaborationAPI to server.DiscussionService.
+type collaborationDiscussion struct{ orch engine.CollaborationAPI }
 
 func (d collaborationDiscussion) Messages(stageID string, cursor uint64, limit int) ([]server.DiscussionMessageView, uint64, bool, error) {
 	all := d.orch.DiscussionMessages(stageID)
@@ -450,8 +227,8 @@ func (d collaborationDiscussion) PostMessage(ctx context.Context, stageID string
 	})
 }
 
-// collaborationProposals adapts *orchestrator.Orchestrator to server.ProposalActions.
-type collaborationProposals struct{ orch *orchestrator.Orchestrator }
+// collaborationProposals adapts engine.CollaborationAPI to server.ProposalActions.
+type collaborationProposals struct{ orch engine.CollaborationAPI }
 
 func (p collaborationProposals) Proposals(stageID string) ([]server.ProposalView, error) {
 	props := p.orch.Proposals(stageID)

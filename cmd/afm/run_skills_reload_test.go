@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/skills"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/docker"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/skills"
 )
 
 // The host preflights cycle 1 and hands its libraries to the container; the container then reloads the next
@@ -96,7 +97,7 @@ func TestReloadAgainstHostVerdict(t *testing.T) {
 			cfg := c.cfg(root)
 			prev, next := c.prev(root, project), c.next(root, project)
 
-			_, checked, err := prepareSkillMounts(project, "", home, prev, cfg, nil)
+			_, checked, err := engine.PrepareSkillMounts(project, "", home, prev, cfg, nil)
 			if err != nil {
 				t.Fatalf("host preflight of cycle 1: %v", err)
 			}
@@ -114,7 +115,7 @@ func TestReloadAgainstHostVerdict(t *testing.T) {
 				return
 			}
 			// What reload accepts, a fresh host preflight accepts too.
-			if _, _, err := prepareSkillMounts(project, "", home, next, cfg, nil); err != nil {
+			if _, _, err := engine.PrepareSkillMounts(project, "", home, next, cfg, nil); err != nil {
 				t.Fatalf("reload accepted a flow the host rejects: %v", err)
 			}
 		})

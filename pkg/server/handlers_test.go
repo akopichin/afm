@@ -1,6 +1,11 @@
 package server
 
 import (
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
+
+	implbus "github.com/akopichin/afm-engine/testkit/orchestrator/bus"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,11 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/mcp"
 )
 
 const testStageID = "s1"
@@ -44,7 +48,7 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 		t.Fatalf("write log: %v", err)
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -53,16 +57,16 @@ func setupTestServerWithWS(t *testing.T, pongWait, pingPeriod time.Duration) (*S
 		t.Fatal(err)
 	}
 
-	uiBus := bus.NewUIBus()
+	uiBus := implbus.NewUIBus()
 	srv := New(Config{
 		Port:         0,
 		RunDir:       runDir,
 		Store:        store,
 		UIBus:        uiBus,
-		Actions:      fakeStageActions{},
 		WSPongWait:   pongWait,
 		WSPingPeriod: pingPeriod,
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 	return srv, runDir
 }
 
@@ -181,7 +185,7 @@ func TestHandleStatus(t *testing.T) {
 
 func TestHandleStatus_IncludesStageNames(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.store.SetStageNames(map[string]string{testStageID: "Backend Stage"})
+	writableStore(srv).SetStageNames(map[string]string{testStageID: "Backend Stage"})
 
 	req := httptest.NewRequest("GET", "/api/status", nil)
 	w := httptest.NewRecorder()
@@ -207,7 +211,7 @@ func TestHandleStatus_IncludesStageNames(t *testing.T) {
 
 func TestHandleStatus_IncludesFlowName(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.store.SetFlowName("demo-flow")
+	writableStore(srv).SetFlowName("demo-flow")
 
 	req := httptest.NewRequest("GET", "/api/status", nil)
 	w := httptest.NewRecorder()
@@ -492,7 +496,7 @@ func TestHandlePlan(t *testing.T) {
 func TestHandleApprove(t *testing.T) {
 	approved := ""
 	srv, _ := setupTestServer(t)
-	srv.actions = fakeStageActions{approve: func(ctx context.Context, id string) error { approved = id; return nil }}
+	srv.useFakes(fakeStageActions{approve: func(ctx context.Context, id string) error { approved = id; return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/approve", nil)
 	w := httptest.NewRecorder()
@@ -509,11 +513,11 @@ func TestHandleApprove(t *testing.T) {
 func TestHandleRevise(t *testing.T) {
 	var revisedID, revisedFB string
 	srv, _ := setupTestServer(t)
-	srv.actions = fakeStageActions{revise: func(ctx context.Context, id, fb string) (bool, uint64, error) {
+	srv.useFakes(fakeStageActions{revise: func(ctx context.Context, id, fb string) (bool, uint64, error) {
 		revisedID = id
 		revisedFB = fb
 		return true, 1, nil
-	}}
+	}}, nil)
 
 	body := `{"feedback":"Добавь Redis"}`
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", strings.NewReader(body))
@@ -532,14 +536,14 @@ func TestHandleRevise(t *testing.T) {
 // Revise, which the orchestrator accepts in that status — so the HTTP layer must not refuse it first.
 func TestHandleRevise_AwaitingAssistants(t *testing.T) {
 	srv, _ := setupPendingServer(t, false)
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingAssistants, Event: "main_done"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingAssistants, Event: "main_done"}); err != nil {
 		t.Fatal(err)
 	}
 	revised := ""
-	srv.actions = fakeStageActions{revise: func(ctx context.Context, id, fb string) (bool, uint64, error) {
+	srv.useFakes(fakeStageActions{revise: func(ctx context.Context, id, fb string) (bool, uint64, error) {
 		revised = id
 		return true, 1, nil
-	}}
+	}}, nil)
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", strings.NewReader(`{"feedback":"also cover the edge case"}`))
 	w := httptest.NewRecorder()
 	srv.handleRevise(w, req)
@@ -553,19 +557,19 @@ func TestHandleRevise_AwaitingAssistants(t *testing.T) {
 func setupPendingServer(t *testing.T, isScript bool) (*Server, string) {
 	t.Helper()
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	srv := New(Config{
-		Port:    0,
-		RunDir:  runDir,
-		Store:   store,
-		UIBus:   bus.NewUIBus(),
-		Actions: fakeStageActions{},
-		Stages:  StaticStageConfigs{testStageID: {IsScript: isScript}},
+		Port:   0,
+		RunDir: runDir,
+		Store:  store,
+		UIBus:  implbus.NewUIBus(),
+		Stages: StaticStageConfigs{testStageID: {IsScript: isScript}},
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 	return srv, runDir
 }
 
@@ -624,14 +628,59 @@ func TestHandleStageNote_RejectsScriptStage(t *testing.T) {
 	}
 }
 
+// stageStartingAfterReads shows the stage as stored for the first storedReads reads and as running on every
+// later one: it starts between the pending checks and the end of the note write.
+type stageStartingAfterReads struct {
+	store       *implstate.Store
+	storedReads int
+	reads       int
+}
+
+func (s *stageStartingAfterReads) Snapshot() state.RunState {
+	rs := s.store.Snapshot()
+	s.reads++
+	if s.reads <= s.storedReads {
+		return rs
+	}
+	stages := make(map[string]state.StageState, len(rs.Stages))
+	for id, st := range rs.Stages {
+		stages[id] = st
+	}
+	st := stages[testStageID]
+	st.Status = state.StatusRunning
+	stages[testStageID] = st
+	rs.Stages = stages
+	return rs
+}
+
+// A stage that starts while its note is being saved answers 409, and the note stays for its next prompt.
+func TestHandleStageNote_StageStartsDuringSaveConflicts(t *testing.T) {
+	srv, runDir := setupPendingServer(t, false)
+	srv.actions = engine.NewStageControl(engine.StageDeps{
+		// The handler's check and the command's own check both see pending.
+		State:  &stageStartingAfterReads{store: writableStore(srv), storedReads: 2},
+		RunDir: runDir,
+	})
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/note", strings.NewReader(`{"note":"use staging"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageNote(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("got %d %q, want 409", w.Code, w.Body.String())
+	}
+	if data, _ := os.ReadFile(filepath.Join(runDir, testStageID, "prenote.md")); string(data) != "use staging" {
+		t.Fatalf("prenote.md = %q, want the saved note", data)
+	}
+}
+
 func TestHandleStageButton_Success(t *testing.T) {
 	var gotStage, gotName string
 	srv, _ := setupTestServer(t) // seeded at awaiting_approval — allowed
 	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
-	srv.actions = fakeStageActions{button: func(_ context.Context, id, name string) error {
+	srv.useFakes(fakeStageActions{button: func(_ context.Context, id, name string) error {
 		gotStage, gotName = id, name
 		return nil
-	}}
+	}}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
 	w := httptest.NewRecorder()
@@ -649,7 +698,7 @@ func TestHandleStageButton_Success(t *testing.T) {
 func TestHandleStageButton_NotAppliedIsConflict(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
-	srv.actions = fakeStageActions{button: func(context.Context, string, string) error { return orchestrator.ErrNotApplied }}
+	srv.useFakes(fakeStageActions{button: func(context.Context, string, string) error { return implorchestrator.ErrNotApplied }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
 	w := httptest.NewRecorder()
@@ -663,10 +712,10 @@ func TestHandleStageButton_UnknownName(t *testing.T) {
 	called := false
 	srv, _ := setupTestServer(t)
 	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
-	srv.actions = fakeStageActions{button: func(_ context.Context, _, _ string) error {
+	srv.useFakes(fakeStageActions{button: func(_ context.Context, _, _ string) error {
 		called = true
 		return nil
-	}}
+	}}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Nope"}`))
 	w := httptest.NewRecorder()
@@ -682,7 +731,7 @@ func TestHandleStageButton_UnknownName(t *testing.T) {
 
 func TestHandleStageButton_WrongStatus(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
@@ -737,10 +786,10 @@ func TestHandleStageButton_NonexistentStage(t *testing.T) {
 func TestHandleRetry(t *testing.T) {
 	var retriedID string
 	srv, _ := setupTestServer(t)
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test_fail"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test_fail"}); err != nil {
 		t.Fatal(err)
 	}
-	srv.actions = fakeStageActions{retry: func(ctx context.Context, id string) error { retriedID = id; return nil }}
+	srv.useFakes(fakeStageActions{retry: func(ctx context.Context, id string) error { retriedID = id; return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/retry", nil)
 	w := httptest.NewRecorder()
@@ -756,7 +805,7 @@ func TestHandleRetry(t *testing.T) {
 
 func TestHandleRetryNotFailed(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.actions = fakeStageActions{retry: func(ctx context.Context, id string) error { return nil }}
+	srv.useFakes(fakeStageActions{retry: func(ctx context.Context, id string) error { return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/retry", nil)
 	w := httptest.NewRecorder()
@@ -770,10 +819,10 @@ func TestHandleRetryNotFailed(t *testing.T) {
 func TestHandlePause(t *testing.T) {
 	var pausedID string
 	srv, _ := setupTestServer(t)
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
-	srv.actions = fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}
+	srv.useFakes(fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
 	w := httptest.NewRecorder()
@@ -795,11 +844,11 @@ func TestHandlePause_AwaitingPeer(t *testing.T) {
 		{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"},
 		{StageID: testStageID, From: state.StatusRunning, To: state.StatusAwaitingPeer, Event: "await_peer"},
 	} {
-		if err := srv.store.Apply(&tr); err != nil {
+		if err := writableStore(srv).Apply(&tr); err != nil {
 			t.Fatal(err)
 		}
 	}
-	srv.actions = fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}
+	srv.useFakes(fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
 	w := httptest.NewRecorder()
@@ -818,11 +867,11 @@ func TestHandlePause_AwaitingQuota(t *testing.T) {
 		{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"},
 		{StageID: testStageID, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{Provider: "claude", Target: "implementation"}},
 	} {
-		if err := srv.store.Apply(&tr); err != nil {
+		if err := writableStore(srv).Apply(&tr); err != nil {
 			t.Fatal(err)
 		}
 	}
-	srv.actions = fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}
+	srv.useFakes(fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
 	w := httptest.NewRecorder()
@@ -840,11 +889,11 @@ func TestHandleContinue_AwaitingQuotaNeedsPauseFirst(t *testing.T) {
 		{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"},
 		{StageID: testStageID, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{Provider: "claude", Target: "implementation"}},
 	} {
-		if err := srv.store.Apply(&tr); err != nil {
+		if err := writableStore(srv).Apply(&tr); err != nil {
 			t.Fatal(err)
 		}
 	}
-	srv.actions = fakeStageActions{continue_: func(context.Context, string) error { continued = true; return nil }}
+	srv.useFakes(fakeStageActions{continue_: func(context.Context, string) error { continued = true; return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/continue", nil)
 	w := httptest.NewRecorder()
@@ -855,7 +904,7 @@ func TestHandleContinue_AwaitingQuotaNeedsPauseFirst(t *testing.T) {
 	}
 
 	// После Pause стадия paused (PausedFrom=awaiting_quota): Continue принимается — это ручная проба.
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingQuota, To: state.StatusPaused, Event: "pause"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingQuota, To: state.StatusPaused, Event: "pause"}); err != nil {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()
@@ -867,7 +916,7 @@ func TestHandleContinue_AwaitingQuotaNeedsPauseFirst(t *testing.T) {
 
 func TestHandlePause_WrongStatus(t *testing.T) {
 	srv, _ := setupTestServer(t) // seeded at awaiting_approval by setupTestServer itself
-	srv.actions = fakeStageActions{}
+	srv.useFakes(fakeStageActions{}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
 	w := httptest.NewRecorder()
@@ -880,11 +929,11 @@ func TestHandlePause_WrongStatus(t *testing.T) {
 
 func TestHandlePause_ScriptStageRunning_Returns409(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
 	srv.stages = StaticStageConfigs{testStageID: {IsScript: true}}
-	srv.actions = fakeStageActions{}
+	srv.useFakes(fakeStageActions{}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
 	w := httptest.NewRecorder()
@@ -898,10 +947,10 @@ func TestHandlePause_ScriptStageRunning_Returns409(t *testing.T) {
 func TestHandleContinue(t *testing.T) {
 	var continuedID string
 	srv, _ := setupTestServer(t)
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusPaused, Event: "test_setup"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusPaused, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
-	srv.actions = fakeStageActions{continue_: func(ctx context.Context, id string) error { continuedID = id; return nil }}
+	srv.useFakes(fakeStageActions{continue_: func(ctx context.Context, id string) error { continuedID = id; return nil }}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/continue", nil)
 	w := httptest.NewRecorder()
@@ -917,7 +966,7 @@ func TestHandleContinue(t *testing.T) {
 
 func TestHandleContinue_NotPaused(t *testing.T) {
 	srv, _ := setupTestServer(t) // seeded at awaiting_approval, not paused
-	srv.actions = fakeStageActions{}
+	srv.useFakes(fakeStageActions{}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/continue", nil)
 	w := httptest.NewRecorder()
@@ -931,10 +980,10 @@ func TestHandleContinue_NotPaused(t *testing.T) {
 func TestHandleRetryHook_Success(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	called := ""
-	srv.secondary = fakeSecondaryActions{retryHook: func(stageID string) error {
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{retryHook: func(stageID string) error {
 		called = stageID
 		return nil
-	}}
+	}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
 	w := httptest.NewRecorder()
@@ -951,10 +1000,10 @@ func TestHandleRetryHook_Success(t *testing.T) {
 func TestHandleSkipHook_Success(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	called := ""
-	srv.secondary = fakeSecondaryActions{skipHook: func(stageID string) error {
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{skipHook: func(stageID string) error {
 		called = stageID
 		return nil
-	}}
+	}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/skip-hook", nil)
 	w := httptest.NewRecorder()
@@ -970,9 +1019,9 @@ func TestHandleSkipHook_Success(t *testing.T) {
 
 func TestHandleRetryHook_FnReturnsError(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.secondary = fakeSecondaryActions{retryHook: func(stageID string) error {
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{retryHook: func(stageID string) error {
 		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
-	}}
+	}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/retry-hook", nil)
 	w := httptest.NewRecorder()
@@ -985,9 +1034,9 @@ func TestHandleRetryHook_FnReturnsError(t *testing.T) {
 
 func TestHandleSkipHook_FnReturnsError(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.secondary = fakeSecondaryActions{skipHook: func(stageID string) error {
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{skipHook: func(stageID string) error {
 		return fmt.Errorf("stage %q has no hook awaiting a decision", stageID)
-	}}
+	}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/skip-hook", nil)
 	w := httptest.NewRecorder()
@@ -1023,7 +1072,7 @@ func TestDialogGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1032,8 +1081,9 @@ func TestDialogGet(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  bus.NewUIBus(),
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 
 	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/dialog", nil)
 	w := httptest.NewRecorder()
@@ -1060,7 +1110,7 @@ func TestDialogGet_SkipsMalformedPendingQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1069,8 +1119,9 @@ func TestDialogGet_SkipsMalformedPendingQuestion(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  bus.NewUIBus(),
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 
 	req := httptest.NewRequest("GET", "/api/stages/"+testStageID+"/dialog", nil)
 	w := httptest.NewRecorder()
@@ -1205,7 +1256,7 @@ func TestDialogAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1218,12 +1269,12 @@ func TestDialogAnswer(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  bus.NewUIBus(),
-		Secondary: fakeSecondaryActions{notifyAnswer: func(s, p, q, a string, fo bool) error {
-			called.stage, called.phase, called.id, called.answer, called.fromOptions = s, p, q, a, fo
-			return nil
-		}},
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(s, p, q, a string, fo bool) error {
+		called.stage, called.phase, called.id, called.answer, called.fromOptions = s, p, q, a, fo
+		return nil
+	}})
 
 	body := `{"id":"` + testQuestionID + `","phase":"implementation","answer":"hello","from_options":false}`
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/answer", strings.NewReader(body))
@@ -1279,7 +1330,7 @@ func TestHandleDialogAnswer_InvalidID(t *testing.T) {
 // awaiting_user_input is cancelled and CancelDialog is invoked.
 func TestDialogCancelAwaiting(t *testing.T) {
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1290,11 +1341,11 @@ func TestDialogCancelAwaiting(t *testing.T) {
 
 	cancelled := ""
 	srv := New(Config{
-		RunDir:    runDir,
-		Store:     store,
-		UIBus:     bus.NewUIBus(),
-		Secondary: fakeSecondaryActions{cancelDialog: func(id string) error { cancelled = id; return nil }},
+		RunDir: runDir,
+		Store:  store,
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{cancelDialog: func(id string) error { cancelled = id; return nil }})
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/cancel", nil)
 	w := httptest.NewRecorder()
@@ -1310,7 +1361,7 @@ func TestDialogCancelAwaiting(t *testing.T) {
 
 func TestDialogCancelRejectsNonAwaiting(t *testing.T) {
 	runDir := t.TempDir()
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1322,8 +1373,9 @@ func TestDialogCancelRejectsNonAwaiting(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  bus.NewUIBus(),
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{}, nil)
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/cancel", nil)
 	w := httptest.NewRecorder()
@@ -1395,7 +1447,7 @@ func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1405,12 +1457,12 @@ func TestHandleDialogAnswer_AppendAnswerFailureStillNotifies(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  bus.NewUIBus(),
-		Secondary: fakeSecondaryActions{notifyAnswer: func(s, p, q, a string, fo bool) error {
-			notifyCalled = true
-			return nil
-		}},
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{}, &fakeSecondaryActions{notifyAnswer: func(s, p, q, a string, fo bool) error {
+		notifyCalled = true
+		return nil
+	}})
 
 	body := `{"id":"q1","phase":"planning","answer":"yes","from_options":false}`
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/dialog/answer",
@@ -1506,7 +1558,7 @@ func TestHandleRevise_RunningAllowed(t *testing.T) {
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(runDir, []string{testStageID})
+	store, err := implstate.Open(runDir, []string{testStageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1519,12 +1571,12 @@ func TestHandleRevise_RunningAllowed(t *testing.T) {
 	srv := New(Config{
 		RunDir: runDir,
 		Store:  store,
-		UIBus:  bus.NewUIBus(),
-		Actions: fakeStageActions{revise: func(_ context.Context, _, _ string) (bool, uint64, error) {
-			reviseCalled = true
-			return true, 1, nil
-		}},
+		UIBus:  implbus.NewUIBus(),
 	})
+	srv.useFakes(fakeStageActions{revise: func(_ context.Context, _, _ string) (bool, uint64, error) {
+		reviseCalled = true
+		return true, 1, nil
+	}}, nil)
 
 	body, _ := json.Marshal(map[string]string{"feedback": "note"})
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", bytes.NewReader(body))
@@ -1565,10 +1617,10 @@ func TestHandleStatus_IncludesIdleSinceWhenIdle(t *testing.T) {
 
 func TestHandleStatus_ClosesCountersWhenRunEnds(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	if err := srv.store.BeginRun(); err != nil {
+	if err := writableStore(srv).BeginRun(); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.store.EndRun(state.RunStatusFailed); err != nil {
+	if err := writableStore(srv).EndRun(state.RunStatusFailed); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
@@ -1590,7 +1642,7 @@ func TestHandleStatus_ClosesCountersWhenRunEnds(t *testing.T) {
 
 func TestHandleStatus_IncludesBackoffOpenSinceWhenRetrying(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRetrying, Event: "test"}); err != nil {
+	if err := writableStore(srv).Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRetrying, Event: "test"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1712,5 +1764,30 @@ func TestHandleStatus_HideAttachHelpers(t *testing.T) {
 				t.Errorf("collaboration_mode = %q, want team (unchanged)", resp.CollaborationMode)
 			}
 		})
+	}
+}
+
+// useFakes puts the real command logic of engine.StageControl over the server's own state, run directory and
+// bus, with fake orchestrator actions beneath it. A nil dialog leaves the hook commands unconfigured.
+func (s *Server) useFakes(ops fakeStageActions, dialog *fakeSecondaryActions) {
+	deps := engine.StageDeps{
+		Ops:    ops,
+		State:  writableStore(s),
+		RunDir: s.runDir,
+		Settings: func(id string) engine.StageSettings {
+			cfg := s.stageConfig(id)
+			return engine.StageSettings{Interactive: cfg.Interactive, IsScript: cfg.IsScript, Buttons: cfg.Buttons}
+		},
+		ReviewState: s.reviewState,
+		Events:      writableBus(s),
+	}
+	s.secondary = nil
+	if dialog != nil {
+		deps.Dialog = *dialog
+	}
+	control := engine.NewStageControl(deps)
+	s.actions = control
+	if dialog != nil {
+		s.secondary = control
 	}
 }

@@ -3,6 +3,9 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	"github.com/akopichin/afm/contracts/state"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,12 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	orchestrator "github.com/akopichin/afm/contracts/control"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 	"golang.org/x/sys/unix"
 )
 
@@ -310,10 +312,10 @@ func TestStartDashboard_WithoutAPortClosesTheTokenPipe(t *testing.T) {
 	t.Cleanup(func() { ownerTokenPipe = old })
 	port := 0
 
-	srv, err := startDashboard(config.Config{Server: config.ServerConfig{Port: &port}}, server.Config{}, nil, true)
+	srv, _, err := startServer(config.Config{Server: config.ServerConfig{Port: &port}}, server.Config{}, nil, launchDashboard, true)
 
 	if srv != nil || err != nil {
-		t.Fatalf("startDashboard = %v, %v; want no dashboard and no error", srv, err)
+		t.Fatalf("startServer = %v, %v; want no dashboard and no error", srv, err)
 	}
 	if err := w.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("closing the descriptor again = %v, want os.ErrClosed: it must have been closed already", err)
@@ -375,13 +377,13 @@ func pointTerminalAt(t *testing.T, path string) {
 }
 
 // newOwnerWaitAdapter is a real orchestrator and store behind the owner adapter.
-func newOwnerWaitAdapter(t *testing.T) (ownerWaitActions, *orchestrator.Orchestrator) {
+func newOwnerWaitAdapter(t *testing.T) (ownerWaitActions, *implorchestrator.Orchestrator) {
 	t.Helper()
 	a, _ := newMeshAdapterTestActions(t, "impl", "docs")
-	return ownerWaitActions(a), a.orch
+	return ownerWaitActions(a), a.orch.(*implorchestrator.Orchestrator)
 }
 
-func registerStageWait(t *testing.T, orch *orchestrator.Orchestrator, stage, op, thread string) agentcomm.WaitID {
+func registerStageWait(t *testing.T, orch *implorchestrator.Orchestrator, stage, op, thread string) agentcomm.WaitID {
 	t.Helper()
 	deadline := time.Now().Add(time.Hour)
 	receipt, err := orch.Wait(context.Background(), orchestrator.WaitRequest{
@@ -465,11 +467,11 @@ func TestOwnerWaitActions_ARequestIdUsedByAnotherOperationDoesNotConflict(t *tes
 	}
 }
 
-// startOwnerTestDashboard starts the real dashboard via startDashboard with the owner token delivered into a pipe.
-func startOwnerTestDashboard(t *testing.T) (baseURL, token string, orch *orchestrator.Orchestrator) {
+// startOwnerTestDashboard starts the real dashboard via startServer with the owner token delivered into a pipe.
+func startOwnerTestDashboard(t *testing.T) (baseURL, token string, orch *implorchestrator.Orchestrator) {
 	t.Helper()
 	a, store := newMeshAdapterTestActions(t, "impl")
-	orch = a.orch
+	orch = a.orch.(*implorchestrator.Orchestrator)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -488,9 +490,9 @@ func startOwnerTestDashboard(t *testing.T) (baseURL, token string, orch *orchest
 	ownerTokenPipe = w
 	t.Cleanup(func() { ownerTokenPipe = old })
 
-	srv, err := startDashboard(cfg, server.Config{RunDir: t.TempDir(), Store: store, Stages: registryStageProvider{orch: orch}}, orch, false)
+	srv, _, err := startServer(cfg, server.Config{RunDir: t.TempDir(), Store: store, Stages: registryStageProvider{reader: orchStages{orch}}}, orch, launchDashboard, false)
 	if err != nil {
-		t.Fatalf("startDashboard: %v", err)
+		t.Fatalf("startServer: %v", err)
 	}
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	raw, err := io.ReadAll(r)
@@ -574,7 +576,7 @@ func TestStartDashboard_WithoutADeliveryChannelTheOwnerRoutesStayClosed(t *testi
 	ownerTokenPipe = nil
 	t.Cleanup(func() { ownerTokenPipe = old })
 
-	srv, err := startDashboard(cfg, server.Config{RunDir: t.TempDir(), Store: store, Stages: registryStageProvider(a)}, a.orch, false)
+	srv, _, err := startServer(cfg, server.Config{RunDir: t.TempDir(), Store: store, Stages: registryStageProvider{reader: orchStages{a.orch.(*implorchestrator.Orchestrator)}}}, a.orch.(*implorchestrator.Orchestrator), launchDashboard, false)
 	if err != nil {
 		t.Fatal(err)
 	}

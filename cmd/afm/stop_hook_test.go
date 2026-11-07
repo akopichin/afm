@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/executor"
+	executor "github.com/akopichin/afm/contracts/agent"
 )
 
 func runStopHookCmd(t *testing.T, stdin string) (stdout, stderr string, err error) {

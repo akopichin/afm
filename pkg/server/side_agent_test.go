@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/sideagent"
+	sideagent "github.com/akopichin/afm/contracts/assistant"
 )
 
 // fakeSideAgent подменяет методы сервиса, записывает порядок Subscribe/History и аргументы Send.

@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	orchestrator "github.com/akopichin/afm/contracts/control"
 )
 
 // Agent Mesh Phase 7, T7.1: /api/mesh/* — the UI-facing adapter over the shared Service. Unlike

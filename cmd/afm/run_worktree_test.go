@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/state"
-	"github.com/akopichin/afm/pkg/worktree"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/docker"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/worktree"
 )
 
 func TestWorktreesEnabled_Precedence(t *testing.T) {
@@ -58,7 +58,7 @@ func TestRunNameFor(t *testing.T) {
 
 func TestWorktreeBase_UsesRootDirWhenSet(t *testing.T) {
 	f := &flow.Flow{RootDir: "sub"}
-	got, err := worktreeBase("/a", f)
+	got, err := engine.WorktreeBase("/a", f)
 	if err != nil {
 		t.Fatalf("worktreeBase: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestWorktreeBase_UsesRootDirWhenSet(t *testing.T) {
 
 	// Absolute root_dir passes through, ignoring afmRoot entirely.
 	fAbs := &flow.Flow{RootDir: "/elsewhere"}
-	got, err = worktreeBase("/a", fAbs)
+	got, err = engine.WorktreeBase("/a", fAbs)
 	if err != nil {
 		t.Fatalf("worktreeBase: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestWorktreeBase_FallsBackToAfmRoot(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(orig) })
 
 	f := &flow.Flow{}
-	got, err := worktreeBase("project", f)
+	got, err := engine.WorktreeBase("project", f)
 	if err != nil {
 		t.Fatalf("worktreeBase: %v", err)
 	}
@@ -295,39 +295,6 @@ func TestResolveWorktree_RejectsInvalidName(t *testing.T) {
 	}
 }
 
-// TestResolveRun_WorktreeNameIsolatesRuns proves a run started with --worktree=<name> gets its own run
-// directory prefix and never resumes a run started under the plain flow name (or vice versa) — the two
-// are isolated exactly like renaming `name:` in flow.yaml would isolate them today.
-func TestResolveRun_WorktreeNameIsolatesRuns(t *testing.T) {
-	chdirTemp(t)
-
-	oldRunDir := makeRunState(t, "flow-20260101-100000", "stage1", state.StatusAwaitingApproval)
-
-	f := &flow.Flow{Name: "flow", Stages: []flow.Stage{{ID: "stage1"}}}
-
-	runDir, store, err := resolveRun(f, "feature-x", false)
-	if err != nil {
-		t.Fatalf("resolveRun: %v", err)
-	}
-	store.Close()
-	if runDir == oldRunDir {
-		t.Error("resolveRun(worktree=feature-x): reused the plain-flow-name run dir, want an isolated one")
-	}
-	if !strings.HasPrefix(filepath.Base(runDir), "feature-x-") {
-		t.Errorf("resolveRun(worktree=feature-x): run dir %q does not have the feature-x- prefix", runDir)
-	}
-
-	resumedDir, store2, err := resolveRun(f, "flow", false)
-	if err != nil {
-		t.Fatalf("resolveRun: %v", err)
-	}
-	store2.Close()
-	// resolveRun hands out an absolute run dir: its paths reach agents whose CWD may be a worktree.
-	if want, _ := filepath.Abs(oldRunDir); resumedDir != want {
-		t.Errorf("resolveRun(worktree=flow): got %q, want it to resume %q", resumedDir, want)
-	}
-}
-
 func TestRunCmd_HasWorktreeFlag(t *testing.T) {
 	f := newRunCmd().Flags().Lookup("worktree")
 	if f == nil {
@@ -335,38 +302,6 @@ func TestRunCmd_HasWorktreeFlag(t *testing.T) {
 	}
 	if f.DefValue != "" {
 		t.Errorf("--worktree default = %q, want empty", f.DefValue)
-	}
-}
-
-func TestResolveRun_ForceNewSkipsResume(t *testing.T) {
-	chdirTemp(t)
-
-	oldRunDir := makeRunState(t, "flow-20260101-100000", "stage1", state.StatusAwaitingApproval)
-	oldEvents, err := os.ReadFile(filepath.Join(oldRunDir, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	f := &flow.Flow{Name: "flow", Stages: []flow.Stage{{ID: "stage1"}}}
-
-	runDir, store, err := resolveRun(f, "", true)
-	if err != nil {
-		t.Fatalf("resolveRun: %v", err)
-	}
-	defer store.Close()
-
-	if runDir == oldRunDir {
-		t.Errorf("resolveRun(forceNew=true): reused the old run dir %q, want a brand-new one", oldRunDir)
-	}
-	if _, statErr := os.Stat(oldRunDir); statErr != nil {
-		t.Errorf("resolveRun(forceNew=true): old run dir %q was removed/touched: %v", oldRunDir, statErr)
-	}
-	newEvents, err := os.ReadFile(filepath.Join(oldRunDir, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(newEvents) != string(oldEvents) {
-		t.Error("resolveRun(forceNew=true): old run dir's events.jsonl was modified")
 	}
 }
 

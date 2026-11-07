@@ -4,8 +4,8 @@ import (
 	"maps"
 	"strings"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/contracts/agentcomm"
+	"github.com/akopichin/afm/contracts/config"
 )
 
 // verifyKindShell is the kind of a verify step whose command is the check itself rather than an agent.

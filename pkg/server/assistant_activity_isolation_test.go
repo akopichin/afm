@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	implstagefiles "github.com/akopichin/afm-engine/testkit/orchestrator/stagefiles"
+	bus "github.com/akopichin/afm/contracts/events"
 )
 
 // writeActivity appends n assistant_activity notices for stageID, as the orchestrator's publisher does.
 func writeActivity(runDir, stageID string, n int) {
 	for i := range n {
-		stagefiles.AppendNotice(runDir, stageID, string(bus.EventAssistantActivity), map[string]any{
+		implstagefiles.AppendNotice(runDir, stageID, string(bus.EventAssistantActivity), map[string]any{
 			"event_id": "act-" + strconv.Itoa(i), "task_id": "t-1", "turn": 1, "tool": "text",
 			"detail": strings.Repeat("x", 512),
 		})
@@ -23,7 +23,7 @@ func writeActivity(runDir, stageID string, n int) {
 // Activity has its own API: it must neither appear in /api/events nor push real notices out of the replay caps.
 func TestHandleEvents_ExcludesAssistantActivityBeforeCaps(t *testing.T) {
 	runDir := t.TempDir()
-	stagefiles.AppendNotice(runDir, "s1", string(bus.EventAgentCompleted), "planning")
+	implstagefiles.AppendNotice(runDir, "s1", string(bus.EventAgentCompleted), "planning")
 	writeActivity(runDir, "s1", maxStageReplayEvents+100)
 	srv := newTestServerForRunDir(t, runDir, []string{"s1"})
 
@@ -53,10 +53,10 @@ func TestLatestVerifyByStage_IgnoresActivityLines(t *testing.T) {
 	runDir := t.TempDir()
 	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyResult), map[string]any{"step": 2, "command": "codex", "verdict": "pass"})
 	writeActivity(runDir, "build", 300)
-	stagefiles.AppendNotice(runDir, "build", string(bus.EventAssistantActivity), map[string]any{
+	implstagefiles.AppendNotice(runDir, "build", string(bus.EventAssistantActivity), map[string]any{
 		"event_id": "act-x", "tool": "text", "detail": `{"type":"verify_result","verdict":"needs_changes"}`,
 	})
-	stagefiles.AppendNotice(runDir, "other", string(bus.EventAssistantActivity), map[string]any{"event_id": "act-y", "tool": "text", "detail": "verify_started"})
+	implstagefiles.AppendNotice(runDir, "other", string(bus.EventAssistantActivity), map[string]any{"event_id": "act-y", "tool": "text", "detail": "verify_started"})
 
 	views := latestVerifyByStage(runDir)
 	if v := views["build"]; v == nil || v.Phase != "pass" || v.Step != 2 {
@@ -71,7 +71,7 @@ func TestLatestVerifyByStage_IgnoresActivityLines(t *testing.T) {
 // the marker in its text is still a real notice.
 func TestHandleEvents_KeepsForeignNoticeQuotingActivityMarker(t *testing.T) {
 	runDir := t.TempDir()
-	stagefiles.AppendNotice(runDir, "s1", string(bus.EventAgentCompleted), "assistant_activity")
+	implstagefiles.AppendNotice(runDir, "s1", string(bus.EventAgentCompleted), "assistant_activity")
 	srv := newTestServerForRunDir(t, runDir, []string{"s1"})
 
 	rr := httptest.NewRecorder()

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/docker"
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/docker"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func boolPtr(b bool) *bool { return &b }

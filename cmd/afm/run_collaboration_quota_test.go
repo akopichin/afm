@@ -1,6 +1,9 @@
 package main
 
 import (
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+
 	"context"
 	"encoding/json"
 	"os"
@@ -9,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/pkg/server"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 // writeLimitedCodexHelper writes a "codex-as-claude" script whose every turn hits the claude-style usage limit
@@ -39,7 +42,7 @@ func TestCollaborationReader_ParkedHelperExposesTheSmallQuotaView(t *testing.T) 
 
 	runDir := t.TempDir()
 	const stageID = "work"
-	store, err := state.Open(runDir, []string{stageID})
+	store, err := implstate.Open(runDir, []string{stageID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +54,12 @@ func TestCollaborationReader_ParkedHelperExposesTheSmallQuotaView(t *testing.T) 
 		Enabled:  &enabled,
 		Profiles: map[string]config.ProfileConfig{"reviewer": {Title: "Reviewer", Command: "codex-as-claude", Instructions: "Review."}},
 	}
-	collab := startCollaboration(store, cfg, &flow.Flow{Name: "quota"})
+	collab := engine.StartCollaboration(store, cfg, &flow.Flow{Name: "quota"})
 	runner := &fakeAutoRunner{acquired: make(chan string, 1), release: make(chan struct{})}
-	orch := orchestrator.New(orchestrator.Options{
+	orch := implorchestrator.New(implorchestrator.Options{
 		RunDir: runDir, Stages: []flow.Stage{{ID: stageID, Name: "Work", Agents: []flow.AgentType{flow.AgentAuto}}},
-		Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(), Runner: runner,
-		AssistantsEnabled: collab.policy.Enabled, AssistantsRegistry: collab.registry,
+		Store: store, Config: cfg, Prompts: implorchestrator.DefaultPrompts(), Runner: runner,
+		AssistantsEnabled: collab.Policy.Enabled, AssistantsRegistry: collab.Registry,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -69,7 +72,7 @@ func TestCollaborationReader_ParkedHelperExposesTheSmallQuotaView(t *testing.T) 
 		t.Fatal("timed out waiting for the stage to start")
 	}
 
-	taskID, err := collab.actions(orch).Attach(ctx, stageID, server.AttachRequest{RequestID: "req-1", ProfileID: "reviewer", Title: "Check", Instruction: "Look."})
+	taskID, err := assistantActions(collab, orch).Attach(ctx, stageID, server.AttachRequest{RequestID: "req-1", ProfileID: "reviewer", Title: "Check", Instruction: "Look."})
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -77,7 +80,7 @@ func TestCollaborationReader_ParkedHelperExposesTheSmallQuotaView(t *testing.T) 
 	var view server.AssistantTaskView
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		tree, err := collab.reader(orch).TaskTree(stageID)
+		tree, err := assistantsReader(collab, orch).TaskTree(stageID)
 		if err != nil {
 			t.Fatal(err)
 		}

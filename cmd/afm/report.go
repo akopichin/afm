@@ -10,10 +10,10 @@ import (
 	"slices"
 	"time"
 
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/spf13/cobra"
-
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 func newReportCmd() *cobra.Command {
@@ -31,7 +31,7 @@ func newReportCmd() *cobra.Command {
 				return err
 			}
 
-			rs, err := state.LoadRunState(runDir)
+			rs, err := implstate.LoadRunState(runDir)
 			if err != nil {
 				return fmt.Errorf("load state: %w", err)
 			}

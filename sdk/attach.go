@@ -45,6 +45,9 @@ func (c *Client) Attach(ctx context.Context, dir string, port int, pid int) (*Ru
 		return nil, ErrPortUnreachable
 	}
 
+	if err := run.detectMode(ctx); err != nil {
+		return nil, fmt.Errorf("afmsdk: attach: %w", err)
+	}
 	return run, nil
 }
 

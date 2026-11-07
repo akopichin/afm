@@ -1,0 +1,8 @@
+name: core-question
+stages:
+  - id: build
+    agents: [planning, implementation]
+    interactive: true
+    command: __ASK_AGENT__
+    verify:
+      run: echo verified >> "$AFM_IT_VERIFY_LOG"

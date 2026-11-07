@@ -10,16 +10,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/lifecyclehooks"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/lifecyclehooks"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	flowSchemaPath   = "../../schema/flow.schema.json"
-	configSchemaPath = "../../schema/config.schema.json"
+	flowSchemaPath   = "../../contracts/schema/flow.schema.json"
+	configSchemaPath = "../../contracts/schema/config.schema.json"
 )
 
 type schemaDocument map[string]any

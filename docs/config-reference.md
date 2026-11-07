@@ -33,7 +33,7 @@ executor:
 #   max_waits: 4             # pause after more than 4 consecutive refusals (default: 4)
 
 server:
-  port: 9876                # web dashboard port
+  port: 9876                # web dashboard / HTTP API port; must be > 0 with `afm run --mode core`
   open_browser: false       # open the browser on startup (default: false)
 
 # theme: graphite           # dashboard theme: graphite | goga | novacorps (default: graphite; legacy "coffee" → graphite)
@@ -302,7 +302,7 @@ the names match the host. The dashboard layer is described in
 
 Highest to lowest:
 
-1. CLI flags (`--max-parallel`, `--port`, `--require-approval`)
+1. CLI flags (`--max-parallel`, `--port`, `--mode`, `--require-approval`)
 2. The project's `.afm/config.yaml`
 3. The global `~/.afm/config.yaml`
 4. Default values

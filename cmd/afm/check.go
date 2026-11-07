@@ -8,12 +8,12 @@ import (
 	"slices"
 	"strings"
 
+	implorchestrator "github.com/akopichin/afm-engine/engine/inspection/orchestrator"
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/spf13/cobra"
-
-	"github.com/akopichin/afm/pkg/accounting"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/orchestrator"
-	"github.com/akopichin/afm/pkg/state"
 )
 
 const (
@@ -67,7 +67,7 @@ func newCheckCmd() *cobra.Command {
 			slices.Sort(dirs)
 			latest := dirs[len(dirs)-1]
 
-			rs, err := state.LoadRunState(latest)
+			rs, err := implstate.LoadRunState(latest)
 			if err != nil {
 				return fmt.Errorf("load state: %w", err)
 			}
@@ -120,8 +120,8 @@ func newCheckCmd() *cobra.Command {
 						action = blocked
 					}
 				}
-				if q := orchestrator.StageQuota(s); q != nil {
-					action = orchestrator.StageQuotaMessage(s, q) // the agent's last log line says nothing about the wait
+				if q := implorchestrator.StageQuota(s); q != nil {
+					action = implorchestrator.StageQuotaMessage(s, q) // the agent's last log line says nothing about the wait
 				}
 				r := row{
 					id:         id,

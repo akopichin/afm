@@ -1,0 +1,6 @@
+name: core-paths
+root_dir: __ROOT_DIR__
+stages:
+  - id: build
+    agents: [auto]
+    command: __AUTO_AGENT__

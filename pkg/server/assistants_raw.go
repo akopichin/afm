@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implorchestrator "github.com/akopichin/afm-engine/engine/inspection/orchestrator"
 )
 
 // maxAssistantRawBytes caps the raw answer file we'll read into memory — same discipline as
@@ -31,7 +31,7 @@ func (s *Server) handleAssistantRawResult(w http.ResponseWriter, r *http.Request
 	}
 	defer root.Close()
 
-	f, err := root.Open(orchestrator.TaskRawResultRelPath(taskID))
+	f, err := root.Open(implorchestrator.TaskRawResultRelPath(taskID))
 	if err != nil {
 		http.NotFound(w, r)
 		return

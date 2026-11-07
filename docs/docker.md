@@ -42,7 +42,9 @@ Notes on the flags:
   without it they stay as zombies until the container exits. afm adds this flag
   itself when it starts the container.
 - `-p 127.0.0.1:9876:9876` maps the dashboard port so `http://localhost:9876` works
-  from the host (use the same port as `server.port`).
+  from the host (use the same port as `server.port`). With `--mode core` the same
+  mapping exposes the API only and no tab is opened on the host
+  ([Core mode](core-mode.md)).
 - `-e AFM_IN_DOCKER=1` tells afm it is already inside a container, so it does **not**
   try to launch another container even if a mounted `~/.afm/config.yaml` has
   `docker.enabled: true`. Since afm now also **auto-detects** a container by its

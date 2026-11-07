@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 const flagFeedback = "--feedback"

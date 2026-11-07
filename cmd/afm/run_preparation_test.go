@@ -2,25 +2,13 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/flow"
-	"github.com/akopichin/afm/pkg/lifecyclehooks"
+	"github.com/akopichin/afm-engine/testkit/engine"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/contracts/lifecyclehooks"
 )
-
-func TestNormalizeInteractiveStagesDoesNotMutateFlow(t *testing.T) {
-	stages := []flow.Stage{{ID: "interactive", Interactive: true}, {ID: "regular"}}
-	headless := normalizeInteractiveStages(stages, false)
-	if headless[0].Interactive || headless[1].Interactive {
-		t.Fatal("headless stages must be non-interactive")
-	}
-	withDashboard := normalizeInteractiveStages(stages, true)
-	if !withDashboard[0].Interactive || withDashboard[1].Interactive || !stages[0].Interactive {
-		t.Fatal("normalization changed the parsed flow or dashboard configuration")
-	}
-}
 
 func TestRunLifecycleTransportUsesCombinedHookOrder(t *testing.T) {
 	t.Setenv("AFM_IN_DOCKER", "1")
@@ -39,7 +27,7 @@ func TestRunLifecycleTransportUsesCombinedHookOrder(t *testing.T) {
 	t.Setenv(lifecyclehooks.TransportName(1, 0), "chat-value")
 	t.Setenv(lifecyclehooks.TransportName(1, 1), "audit-value")
 	t.Setenv(lifecyclehooks.TransportName(99, 0), "unused-value")
-	if err := resolveLifecycleEnv(t.TempDir(), hooks); err != nil {
+	if err := engine.ResolveLifecycleEnv(t.TempDir(), hooks); err != nil {
 		t.Fatal(err)
 	}
 	if hooks[0].Hook.ResolvedEnv["TOKEN"] != "notify-value" ||
@@ -53,30 +41,5 @@ func TestRunLifecycleTransportUsesCombinedHookOrder(t *testing.T) {
 		if _, exists := os.LookupEnv(name); exists {
 			t.Errorf("transport variable %s still available to child processes", name)
 		}
-	}
-}
-
-func TestRunLifecycleMissingTransportFailsBeforeDispatcher(t *testing.T) {
-	t.Setenv("AFM_IN_DOCKER", "1")
-	t.Setenv(lifecyclehooks.TransportName(0, 0), "")
-	hooks := []lifecyclehooks.RegisteredHook{{Hook: lifecyclehooks.Hook{
-		ID: "notify", Env: map[string]lifecyclehooks.SecretRef{"TOKEN": "env:HOST_ONLY_TOKEN"}, //nolint:gosec // test environment variable name
-	}}}
-	d, err := prepareLifecycleDispatcher(t.TempDir(), lifecyclehooks.DispatcherConfig{}, hooks, nil)
-	if err == nil || d != nil {
-		t.Fatal("missing secret must fail before constructing a dispatcher")
-	}
-}
-
-func TestRunLifecycleWithoutEnvSkipsSecretsFile(t *testing.T) {
-	t.Setenv("AFM_IN_DOCKER", "")
-	root := t.TempDir()
-	// A directory cannot be read as secrets.env; hooks without env need not open it.
-	if err := os.MkdirAll(filepath.Join(root, ".afm", "secrets.env"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	hooks := []lifecyclehooks.RegisteredHook{{Hook: lifecyclehooks.Hook{ID: "notify"}}}
-	if err := resolveLifecycleEnv(root, hooks); err != nil {
-		t.Fatal(err)
 	}
 }

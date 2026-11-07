@@ -56,22 +56,29 @@ func (f *fakeDiscussionService) PostMessage(ctx context.Context, stageID string,
 	return id, nil
 }
 
-// reviseTrackingStageActions wraps fakeStageActions, counting Revise calls — used to prove a discussion
-// message never auto-triggers Revise.
-type reviseTrackingStageActions struct {
-	fakeStageActions
-	reviseCalls int
+// reviseSpy counts Revise calls on the server's own StageActions, before any status check can refuse them:
+// the proof that a discussion message never auto-triggers Revise.
+type reviseSpy struct {
+	StageActions
+	calls int
 }
 
-func (r *reviseTrackingStageActions) Revise(ctx context.Context, stageID, feedback string) (bool, uint64, error) {
-	r.reviseCalls++
-	return r.fakeStageActions.Revise(ctx, stageID, feedback)
+func (r *reviseSpy) Revise(ctx context.Context, stageID, feedback string) error {
+	r.calls++
+	return r.StageActions.Revise(ctx, stageID, feedback)
+}
+
+// spyOnRevise wraps the actions installed by newTestServer.
+func spyOnRevise(srv *Server) *reviseSpy {
+	spy := &reviseSpy{StageActions: srv.actions}
+	srv.actions = spy
+	return spy
 }
 
 func TestDiscussion_UserMessageIsNotAutoRevise(t *testing.T) {
-	tracker := &reviseTrackingStageActions{}
 	fake := &fakeDiscussionService{}
-	srv := newTestServer(t, Config{Actions: tracker, DiscussionService: fake})
+	srv := newTestServer(t, Config{DiscussionService: fake})
+	reviseSpy := spyOnRevise(srv)
 
 	body, _ := json.Marshal(map[string]string{"request_id": "req-1", "body": "what about the retry loop?"})
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/discussion", bytes.NewReader(body))
@@ -84,17 +91,17 @@ func TestDiscussion_UserMessageIsNotAutoRevise(t *testing.T) {
 	if fake.postCalls != 1 {
 		t.Fatalf("expected exactly one PostMessage call, got %d", fake.postCalls)
 	}
-	if tracker.reviseCalls != 0 {
-		t.Fatalf("a discussion message must never auto-trigger Revise, got %d Revise calls", tracker.reviseCalls)
+	if reviseSpy.calls != 0 {
+		t.Fatalf("a discussion message must never auto-trigger Revise, got %d Revise calls", reviseSpy.calls)
 	}
 }
 
 // TestDiscussion_PostPassesMentionsAndInterrupt: the composer's `@` mentions and its "Interrupt agent" toggle
 // reach the discussion service unchanged; the handler itself never decides about Revise.
 func TestDiscussion_PostPassesMentionsAndInterrupt(t *testing.T) {
-	tracker := &reviseTrackingStageActions{}
 	fake := &fakeDiscussionService{}
-	srv := newTestServer(t, Config{Actions: tracker, DiscussionService: fake})
+	srv := newTestServer(t, Config{DiscussionService: fake})
+	reviseSpy := spyOnRevise(srv)
 
 	body, _ := json.Marshal(map[string]any{"request_id": "req-2", "body": "how is the plan going?", "mentions": []string{"run:t-qa"}, "interrupt": true})
 	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/discussion", bytes.NewReader(body))
@@ -108,8 +115,8 @@ func TestDiscussion_PostPassesMentionsAndInterrupt(t *testing.T) {
 	if !reflect.DeepEqual(fake.lastPost, want) {
 		t.Fatalf("post = %+v, want %+v", fake.lastPost, want)
 	}
-	if tracker.reviseCalls != 0 {
-		t.Fatalf("the handler must not call Revise itself, got %d calls", tracker.reviseCalls)
+	if reviseSpy.calls != 0 {
+		t.Fatalf("the handler must not call Revise itself, got %d calls", reviseSpy.calls)
 	}
 }
 

@@ -1,0 +1,4 @@
+name: core-script-gate
+stages:
+  - id: glue
+    script: test -f __GATE__ || { echo boom >&2; exit 1; }

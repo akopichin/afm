@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func TestRetryFailedStage(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/orchestrator"
+	implorchestrator "github.com/akopichin/afm-engine/testkit/orchestrator"
 )
 
 // tokenRecordingActions notes the bearer token the Wait request of the real route carried in its context.
@@ -17,7 +17,7 @@ type tokenRecordingActions struct {
 }
 
 func (a *tokenRecordingActions) Wait(ctx context.Context, requestID, actor string, req MeshWaitRequest) (MeshWaitReceipt, error) {
-	a.waitToken = orchestrator.MeshInvocation(ctx)
+	a.waitToken = implorchestrator.MeshInvocation(ctx)
 	return a.fakeAgentMeshActions.Wait(ctx, requestID, actor, req)
 }
 

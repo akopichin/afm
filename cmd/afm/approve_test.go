@@ -5,7 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akopichin/afm/pkg/state"
+	implstate "github.com/akopichin/afm-engine/testkit/state"
+	"github.com/akopichin/afm/contracts/state"
 )
 
 func TestFindLatestRunDirCorrectFlow(t *testing.T) {
@@ -17,7 +18,7 @@ func TestFindLatestRunDirCorrectFlow(t *testing.T) {
 	// flow-b — новее (позже по алфавиту/времени), содержит "b-stage"
 	makeRunState(t, "flow-b-20260101-120000", "b-stage", state.StatusAwaitingApproval)
 
-	dir, _, err := state.FindLatestRunForStage(filepath.Join(".afm", "runs"), "a-stage")
+	dir, _, err := implstate.FindLatestRunForStage(filepath.Join(".afm", "runs"), "a-stage")
 	if err != nil {
 		t.Fatalf("findLatestRunDir: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestFindLatestRunDirNewestWins(t *testing.T) {
 	makeRunState(t, "flow-20260101-100000", "init", state.StatusDone)
 	makeRunState(t, "flow-20260101-120000", "init", state.StatusAwaitingApproval)
 
-	dir, _, err := state.FindLatestRunForStage(filepath.Join(".afm", "runs"), "init")
+	dir, _, err := implstate.FindLatestRunForStage(filepath.Join(".afm", "runs"), "init")
 	if err != nil {
 		t.Fatalf("findLatestRunDir: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestFindLatestRunDirNotFound(t *testing.T) {
 
 	makeRunState(t, "flow-20260101-120000", "other-stage", state.StatusAwaitingApproval)
 
-	_, _, err := state.FindLatestRunForStage(filepath.Join(".afm", "runs"), "nonexistent-stage")
+	_, _, err := implstate.FindLatestRunForStage(filepath.Join(".afm", "runs"), "nonexistent-stage")
 	if err == nil {
 		t.Fatal("ожидалась ошибка, но её нет")
 	}

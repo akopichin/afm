@@ -1,6 +1,6 @@
 package server
 
-import "github.com/akopichin/afm/pkg/accounting"
+import "github.com/akopichin/afm/contracts/accounting"
 
 // Mapping of the accounting read model to the wire types. It always fills tokens and money; ForMode
 // removes what the display mode must not show, so no field is dropped here by accident.

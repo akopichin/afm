@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
 #
-# Agent Mesh Phase 9, T9.1 live-run fixture. NOT run by any Go test — pkg/orchestrator/agentcomm_adapter_smoke_test.go
+# Live-run fixture. The private engine integration/afm/agentcomm_adapter_smoke_test.go
 # drives a real adapter directly (no orchestrator bootstrap, see dev-plan.md's Execution rule). This flow is
 # for the pipeline's dedicated `live-run` stage to run for real (once on the host, once with docker.enabled:
 # true, both with max_parallel: 1), observing the same four afm agent primitives (list/send/inbox/wait) a
