@@ -345,13 +345,7 @@ const TimePaused TimeKind = "paused"
 const TimeScheduling TimeKind = "scheduling"
 const TimeWork TimeKind = "work"
 
-// isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое состояние на весь флоу.
-//
-// awaiting_assistants (T7.7, §5.6) — особый случай: сам по себе статус НЕ пользовательский Idle (работающий
-// помощник — машинная работа), но если durable-гейт сейчас блокирован required-задачей, которая требует
-// решения человека (needs_changes/inconclusive-вердикт, failed/cancelled-задача или ручная пауза задачи) —
-// это пользовательское ожидание, как и needs_changes/approval/pause у самой стадии. Классификация считается
-// по rs.Assistants (durable projection), не по наличию WebSocket — одинаково и в live, и при replay.
+// Human attention is derived from durable stage and helper gates, equally during live execution and replay.
 func isIdle(rs *RunState) bool {
 	hasFailed := false
 	anyActive := false
@@ -446,11 +440,7 @@ func (e *StorageError) Error() string { return "storage failure: " + e.Inner.Err
 
 func (e *StorageError) Unwrap() error { return e.Inner }
 
-// currentRootChildren returns stageID's direct (ParentTaskID == nil) helper tasks belonging to the CURRENT
-// root generation (RootGenerations[stageID], 0 if never bumped) — a stage-level mirror of
-// pkg/orchestrator's currentChildren one level up. MINOR, intentional duplication: pkg/state cannot import
-// pkg/orchestrator (forbidden cycle), and introducing a third, lower-level package for six lines of map
-// filtering is not worth it — see dev-plan.md's Review decisions.
+// Only direct helpers in the current root generation contribute to the stage barrier.
 func (as AssistantsState) currentRootChildren(stageID string) []assistants.TaskID {
 	gen := as.RootGenerations[stageID]
 	var out []assistants.TaskID
@@ -486,10 +476,7 @@ func (as AssistantsState) tasksFor(ids []assistants.TaskID) []assistants.Task {
 	return out
 }
 
-// taskGateClosed reports whether task id has durably closed its own required gate (assistants.TaskGateClosed),
-// reading LastVerdict from the projection — never a file. A WAIVED task (Этап 7, T7.6 — a separate, audited
-// human decision) always counts as closed, regardless of its actual Status/LastVerdict: that is the whole
-// point of a waiver — accepting the risk of a task that will never otherwise close its gate.
+// A durable waiver closes the required gate independently of the helper outcome.
 func (as AssistantsState) taskGateClosed(id assistants.TaskID) bool {
 	t, ok := as.Tasks[id]
 	if !ok {
@@ -501,12 +488,7 @@ func (as AssistantsState) taskGateClosed(id assistants.TaskID) bool {
 	return assistants.TaskGateClosed(t.Status, t.LastVerdict, t.LastVerdict != "")
 }
 
-// RequiredBlocker walks stageID's CURRENT required-chain task subtree (pkg/assistants.RequiredGateOpen,
-// starting from the stage's current-generation direct children) and returns the first helper task that has
-// not yet closed its required gate. ok=false means the barrier is currently satisfied for stageID — either
-// there are no required tasks at all, or every one of them (recursively, through required edges only) has
-// closed its gate. An advisory task's subtree is never descended into (§4.3) — a required task nested under
-// an advisory one blocks only that advisory task, never the root stage.
+// RequiredBlocker follows required edges in the current generation; advisory subtrees do not block their root stage.
 func (as AssistantsState) RequiredBlocker(stageID string) (TaskState, bool) {
 	roots := as.tasksFor(as.currentRootChildren(stageID))
 	children := func(t assistants.Task) []assistants.Task {
@@ -525,15 +507,7 @@ func (as AssistantsState) RequiredBlocker(stageID string) (TaskState, bool) {
 	return *ts, true
 }
 
-// NeedsHumanDecision reports whether stageID's CURRENT required-completion blocker (if any) requires a human
-// decision rather than just more machine work (T7.7, §5.6): a failed/cancelled/held task, or one that
-// completed with a non-pass verdict (needs_changes/inconclusive), needs a Revise/Retry/Waiver from a person.
-// A task still actively working (waiting_parent/queued/running/waiting_children/watching) does not. ok=false
-// from RequiredBlocker (gate already satisfied, or nothing required attached) is "no decision pending" — a
-// race between the stage's status and this read, not a durable state. Used both by isIdle (state.go) and by
-// pkg/server's StageView (Этап 7, T7.9) to decide whether awaiting_assistants counts as dashboard attention.
-// An idle on_message blocker needs a person — a new request or a decision — unless its last request passed,
-// which the system closes on its own; while a request is open it is machine work.
+// NeedsHumanDecision reports durable blockers that require a person, including idle requests without a passing result.
 func (as AssistantsState) NeedsHumanDecision(stageID string) bool {
 	blocker, ok := as.RequiredBlocker(stageID)
 	if !ok {

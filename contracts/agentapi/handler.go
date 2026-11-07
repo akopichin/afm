@@ -15,9 +15,7 @@ import (
 	orchestrator "github.com/akopichin/afm/contracts/control"
 )
 
-// Agent Mesh Phase 3, T3.1: /api/agent-mesh/* — the agent-facing adapter over the shared Service. The actor
-// is ALWAYS resolved from the bearer token (ResolveToken); no request body here ever carries a sender/actor
-// field a model could set itself (mirrors TestAttach_RejectsClientSuppliedCommand's rule for /api/mesh/*).
+// The bearer token determines the actor; request bodies cannot choose another sender.
 
 // MaxAgentMeshBodyBytes bounds every POST body on this surface.
 const MaxAgentMeshBodyBytes = 32 << 10
@@ -176,11 +174,7 @@ type MeshPublishRequest struct {
 	ExpectedVersion int      `json:"expected_version"`
 }
 
-// MeshBoardTaskRequest is the body of a typed board task change on both surfaces — POST
-// /api/agent-mesh/task and POST /api/mesh/tasks. It has no actor field: the caller is the token's participant
-// or the human. Text is the progress text, the done result or the release/reopen reason. The pointer fields
-// keep whether the body has them: an edit changes only the fields it has ("" clears the description or the
-// coordinator), and a progress or done with "artifact_refs": [] clears the assignment's refs.
+// Pointer fields distinguish omitted values from explicit clears. The authenticated caller supplies the actor.
 type MeshBoardTaskRequest struct {
 	Action          string    `json:"action"`
 	Key             string    `json:"key"`
@@ -327,13 +321,7 @@ func WithMeshToken(ctx context.Context, token string) context.Context {
 	return orchestrator.WithMeshInvocation(ctx, token)
 }
 
-// ServeHTTP deliberately does NOT check sameOriginOK, unlike every other mutating POST route in this
-// package (assistants.go, discussion.go, proposals.go, graph.go, side_agent.go all do): the `afm agent` CLI
-// is not a browser and never sends an Origin header, so requiring one would 403 every real agent request.
-// The bearer token (authenticateAgentMesh) is this surface's actual CSRF-equivalent defense — a same-origin
-// check would add nothing a browser-originated request could exploit anyway, since no browser ever holds a
-// valid per-invocation mesh token.
-// AgentMeshActionReply is the /api/agent-mesh/reply route segment.
+// Agent CLI requests use invocation bearer tokens and do not require a browser Origin header.
 const AgentMeshActionReply = "reply"
 
 func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
