@@ -11,6 +11,10 @@ older ones further down. Dates follow the commits that shipped each change.
 - Preserve the 2.x maintenance line with independent build, CI, Homebrew, and Docker channels.
 - Separate public contracts/UI/SDK checks from trusted full-product builds and record exact dependency revisions in release manifests.
 
+### Fix:
+
+- Shell verification stops promptly on pause or cancellation even when a descendant keeps its output pipe open.
+
 ### Improvement: SDK core mode
 
 The Go SDK can start the API-only core: set `Config.Mode` to `ModeCore`, then use

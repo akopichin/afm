@@ -23,6 +23,6 @@ require (
 	golang.org/x/text v0.14.0 // indirect
 )
 
-require github.com/akopichin/afm-engine v0.0.0-20261107190807-684261518914
+require github.com/akopichin/afm-engine v0.0.0-20261107194627-547835e8d5a8
 
 require github.com/akopichin/afm/contracts v0.0.0-20261107174108-3441adf34f43
