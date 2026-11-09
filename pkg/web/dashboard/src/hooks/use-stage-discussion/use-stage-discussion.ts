@@ -51,8 +51,43 @@ export function withAnswersApplied(messages: DiscussionMessage[]): DiscussionMes
   return messages.map((m) => (m.unanswered === true && answered.has(m.id) ? { ...m, unanswered: false } : m))
 }
 
-type Loaded = { stageId: string | null; messages: DiscussionMessage[] }
-const EMPTY: Loaded = { stageId: null, messages: [] }
+// History — the messages read so far, the ids of posts that already got a reply and each message's position, so a
+// new page touches only the rows its replies answer instead of walking the whole history again.
+type History = { messages: DiscussionMessage[]; answered: ReadonlySet<string>; positions: ReadonlyMap<string, number> }
+
+export function emptyHistory(): History {
+  return { messages: [], answered: new Set(), positions: new Map() }
+}
+
+// appendPage gives the same messages as withAnswersApplied(history.messages.concat(added)); rows that stay as they
+// were keep their identity.
+export function appendPage(history: History, added: DiscussionMessage[]): History {
+  const answered = new Set(history.answered)
+  const newlyAnswered: string[] = []
+  for (const m of added) {
+    const parent = m.parentMessageId
+    if (m.authorKind !== 'human' && parent && !answered.has(parent)) {
+      answered.add(parent)
+      newlyAnswered.push(parent)
+    }
+  }
+  const markAnswered = (m: DiscussionMessage) => (m.unanswered === true && answered.has(m.id) ? { ...m, unanswered: false } : m)
+  const messages = history.messages.slice()
+  for (const parent of newlyAnswered) {
+    const position = history.positions.get(parent)
+    const row = position === undefined ? undefined : messages[position]
+    if (position !== undefined && row) messages[position] = markAnswered(row)
+  }
+  const positions = new Map(history.positions)
+  for (const m of added) {
+    positions.set(m.id, messages.length)
+    messages.push(markAnswered(m))
+  }
+  return { messages, answered, positions }
+}
+
+type Loaded = { stageId: string | null; history: History }
+const EMPTY: Loaded = { stageId: null, history: emptyHistory() }
 
 // useStageDiscussion polls stage stageId's conversation with its agent (its own serial poll, forward from the last
 // cursor, so a page is never appended twice). finished — the stage is done or failed: the log is then read again
@@ -78,13 +113,13 @@ export function useStageDiscussion(stageId: string | null, finished: boolean): D
       fresh = false
       if (added.length === 0 && !replace) return
       setLoaded((prev) => {
-        const base = replace || prev.stageId !== stageId ? [] : prev.messages
-        return { stageId, messages: withAnswersApplied(base.concat(added)) }
+        const base = replace || prev.stageId !== stageId ? emptyHistory() : prev.history
+        return { stageId, history: appendPage(base, added) }
       })
     }, POLL_INTERVAL_MS)
     return poll.stop
   }, [stageId, finished])
 
   // A response for the previous stage is never shown for this one.
-  return loaded.stageId === stageId ? loaded.messages : EMPTY.messages
+  return loaded.stageId === stageId ? loaded.history.messages : EMPTY.history.messages
 }

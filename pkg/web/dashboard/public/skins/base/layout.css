@@ -504,6 +504,18 @@
   font-size: 12px;
   white-space: nowrap;
 }
+.workspace-reply-needed-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-reply-needed-btn:hover { text-decoration: underline; }
 .workspace-reply-needed svg { width: 14px; height: 14px; }
 .workspace-action-error { color: var(--danger-text); font-size: 12px; overflow-wrap: anywhere; }
 /* Focus / Exit focus and, in focus mode, the waiting item: text actions whose label never wraps inside 28px. */

@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type SyntheticEvent as ReactSyntheticEvent } from 'react'
+import { flushSync } from 'react-dom'
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
-import { toFeedItems, buildFeedTimeline, feedFilterCounts, groupToolRuns, isForYou, toolCall, toolRunSummary, type FeedActor, type FeedFilter, type FeedGroup, type FeedItem } from './feed-view-model'
+import { toFeedItems, buildFeedTimeline, feedFilterCounts, groupToolRuns, isForYou, toolCall, toolRunSummary, windowFeedTimeline, FEED_WINDOW_STEP, type FeedActor, type FeedFilter, type FeedGroup, type FeedItem } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import { selectConversation, selectThought } from './composer-draft'
 import { createComposerDraftStore, useComposerContext, type ComposerDraftStore } from './composer-draft-store'
-import { renderPlainMarkdown } from '../plan-panel/markdown'
+import { renderPlainMarkdown, renderPlainMarkdownCached } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
 import type { MeshParticipant } from '../../api/mesh-client'
@@ -26,6 +27,9 @@ import { ExecutorBadge } from '../ExecutorBadge'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
+  // arrivals — live events accepted for these events so far, cumulative (see ArrivalCounts): the list length stops
+  // growing at its cap, the counter does not. Feeds the unseen count.
+  arrivals?: number
   // The caller supplies the events for this stage or read-only activity view.
   stageId: string | null
   // emptyHint — текст пустого состояния, когда events пуст.
@@ -61,6 +65,8 @@ type FeedWorkspaceProps = {
   holdActive?: boolean
   paused?: boolean
   onReplyNeededChange?: (stageId: string | null, count: number) => void
+  // Filled with a function that goes to the next question awaiting the user's reply.
+  replyJumpRef?: { current: (() => void) | null }
   // aboveFeed — a block between the filter row and the feed (the Stage note); it stays outside the scroll area.
   aboveFeed?: ReactNode
 }
@@ -82,6 +88,7 @@ export function feedItemSignature(item: { stageId: string; kind: string; actor: 
 
 export function FeedWorkspace({
   events,
+  arrivals = 0,
   stageId,
   emptyHint,
   onOpenDialog,
@@ -100,6 +107,7 @@ export function FeedWorkspace({
   holdActive = false,
   paused = false,
   onReplyNeededChange,
+  replyJumpRef,
   aboveFeed,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
@@ -111,7 +119,7 @@ export function FeedWorkspace({
   const context = useComposerContext(drafts, noteTarget)
   // focusRequest — an action that wants the input focused (↩, Reply in conversation); a restored draft never does.
   const [focusRequest, setFocusRequest] = useState({ stageId: '', seq: 0 })
-  const requestFocus = (id: string): void => setFocusRequest((prev) => ({ stageId: id, seq: prev.seq + 1 }))
+  const requestFocus = useCallback((id: string): void => setFocusRequest((prev) => ({ stageId: id, seq: prev.seq + 1 })), [])
   const sectionRef = useRef<HTMLElement | null>(null)
 
   const unknownPrefix = useUnknownCommandName()
@@ -132,6 +140,29 @@ export function FeedWorkspace({
   const filterCounts = useMemo(() => feedFilterCounts(items, conversationMessages), [items, conversationMessages])
   const messageById = useMemo(() => new Map(conversationMessages.map((m) => [m.id, m])), [conversationMessages])
 
+  // The window: only the last rows are mounted. While the reader is away from the bottom its start is pinned to a
+  // row key, so new events do not shift what is being read; back at the bottom it shrinks to the default again.
+  const windowScope = `${stageId ?? ''}|${filter}`
+  const [pin, setPin] = useState<{ scope: string; key: string } | null>(null)
+  const startKey = !feed.stick && pin?.scope === windowScope ? pin.key : null
+  const win = useMemo(() => windowFeedTimeline(timeline, startKey, FEED_WINDOW_STEP), [timeline, startKey])
+  if (feed.stick) {
+    if (pin !== null) setPin(null)
+  } else if (startKey === null && win.rowKeys.length > 0) {
+    setPin({ scope: windowScope, key: win.rowKeys[win.start] as string })
+  }
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const setScrollNode = useCallback((node: HTMLDivElement | null) => {
+    scrollRef.current = node
+    feed.ref(node)
+  }, [feed.ref])
+  const keepScroll = useScrollAnchor(win.start)
+  function showEarlier(): void {
+    keepScroll(scrollRef.current)
+    setPin({ scope: windowScope, key: win.rowKeys[Math.max(0, win.start - FEED_WINDOW_STEP)] as string })
+    feed.release()
+  }
+
   // Jump to a quoted message: show it (Author's work may hide it), scroll to it and flash it.
   const [jump, setJump] = useState<{ id: string; n: number } | null>(null)
   function jumpTo(id: string): void {
@@ -139,15 +170,31 @@ export function FeedWorkspace({
     if (filter === 'author' && target !== undefined && !isForYou(target)) setFilter('all')
     setJump((prev) => ({ id, n: (prev?.n ?? 0) + 1 }))
   }
+  // A quoted message above the window widens it to that row first.
+  const jumpRow = jump === null ? -1 : win.rowKeys.indexOf(jump.id)
+  const jumpHidden = jumpRow >= 0 && jumpRow < win.start
+  useLayoutEffect(() => {
+    if (!jumpHidden || jump === null) return
+    setPin({ scope: windowScope, key: jump.id })
+    feed.release()
+  }, [jumpHidden, jump, windowScope, feed.release])
+  // The request is consumed once the row is shown: a kept one would pull the window back to the quote later.
+  const jumpHighlight = useRef<{ el: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null)
   useEffect(() => {
-    if (jump === null) return
+    if (jump === null || jumpHidden) return
     const el = [...(sectionRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])].find((x) => x.dataset.messageId === jump.id)
+    setJump(null)
     if (el === undefined) return
     el.scrollIntoView?.({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     el.classList.add('is-jump-target')
-    const t = setTimeout(() => el.classList.remove('is-jump-target'), 1600)
-    return () => clearTimeout(t)
-  }, [jump])
+    jumpHighlight.current = { el, timer: setTimeout(() => el.classList.remove('is-jump-target'), 1600) }
+  }, [jump, jumpHidden])
+  useEffect(() => setJump(null), [windowScope])
+  useEffect(() => () => {
+    if (jumpHighlight.current === null) return
+    clearTimeout(jumpHighlight.current.timer)
+    jumpHighlight.current.el.classList.remove('is-jump-target')
+  }, [])
 
   // Анимация появления: только самая свежая строка ленты и только когда её КОНТЕНТ отличается от прошлой
   // свежей строки.
@@ -157,6 +204,8 @@ export function FeedWorkspace({
   const resetToken = stageId
   const { animate, onEntered } = useEnteringLast(lastSig, resetToken)
   const enteringKey = animate && lastItem?.kind !== 'tool' ? lastKey : null
+  // Only the group holding the entering row gets the props: the others stay equal and are not re-rendered.
+  const enteringIn = (group: FeedGroup): string | null => (enteringKey !== null && group.items.some((item) => item.key === enteringKey) ? enteringKey : null)
   useEffect(() => {
     if (!animate) return
     const timer = window.setTimeout(onEntered, 2400)
@@ -177,15 +226,33 @@ export function FeedWorkspace({
   const waitingForYou = new Set(conversationMessages.filter((m) => m.kind === 'request' && isAgentMessageToUser(m) && canReplyInConversation(m, conversation.threads[m.thread_id], participants) && !conversationMessages.some((answer) => m.recipient_ids.includes(answer.sender_id) && answer.in_reply_to === m.id)).map((m) => m.id))
   const replyNeeded = waitingForYou.size
   useEffect(() => { onReplyNeededChange?.(stageId, replyNeeded) }, [stageId, replyNeeded, onReplyNeededChange])
+  const lastReplyJump = useRef<string | null>(null)
+  useEffect(() => {
+    if (replyJumpRef === undefined) return
+    replyJumpRef.current = () => {
+      const pending = [...waitingForYou]
+      if (pending.length === 0) return
+      const next = pending[pending.indexOf(lastReplyJump.current ?? '') + 1] ?? (pending[0] as string)
+      lastReplyJump.current = next
+      jumpTo(next)
+    }
+    return () => { replyJumpRef.current = null }
+  })
 
   const composerMounted = noteTarget !== null && onSendNote !== undefined
   // A reply is a context of the composer's one input: it needs the composer, and Chat for a conversation.
   const canAnswerInConversation = composerMounted && mesh !== undefined
   const canAnswerThought = composerMounted
+  const meshOn = mesh !== undefined
+  const replyToThought = useCallback((key: string, text: string): void => {
+    if (noteTarget === null) return
+    drafts.update(noteTarget, (d) => selectThought(d, { key, text }, meshOn))
+    requestFocus(noteTarget)
+  }, [drafts, noteTarget, meshOn, requestFocus])
   const stageIndex = mesh?.stages.findIndex((stage) => stage.id === stageId) ?? -1
   const stageAgent = participants.find((person) => person.id === `stage:${stageId}`)
   const stageExecutor = executorLabel(stageAgent?.command ?? '', stageAgent?.command_name, useUnknownCommandName())
-  const unseen = useUnseenCount(feed.stick, items.length + conversationMessages.length, stageId)
+  const unseen = useUnseenCount(feed.stick, stageId, arrivals + conversation.arrived)
 
   // Раскрытая группа — режим чтения: новые события не уводят её из вида. Свернули — снова решаем по позиции,
   // иначе раскрытая у низа и свёрнутая группа навсегда отпускает ленту.
@@ -207,11 +274,13 @@ export function FeedWorkspace({
       )}
       {/* Фрагмент отделяет ключ слота от key={noteTarget} композера: совпавшие ключи среди детей section осиротят DOM слота. */}
       <>{aboveFeed}</>
-      <div id="feed-content" className="feed-scroll" ref={feed.ref} onClickCapture={onSummaryClick}>
+      <div id="feed-content" className="feed-scroll" ref={setScrollNode} onClickCapture={onSummaryClick}>
         {timeline.length === 0 ? (
           <div className="empty-hint feed-empty">{items.length + conversationMessages.length === 0 ? (emptyHint ?? 'No events yet') : 'Nothing to show for this filter'}</div>
         ) : (
-          timeline.map((entry) =>
+          <>
+          {win.hidden > 0 && <ShowEarlierButton hidden={win.hidden} onClick={showEarlier} />}
+          {win.entries.map((entry) =>
             entry.kind === 'conversation' ? (
               <ul key={entry.key} className="team-conversation-message-list feed-conversation" aria-label="Conversation messages">
                 {entry.messages.map((m, index) => (
@@ -255,24 +324,18 @@ export function FeedWorkspace({
                 group={entry.group}
                 showStageBadges={false}
                 imagePolicy={imagePolicy}
-                enteringKey={enteringKey}
-                onEntered={onEntered}
+                enteringKey={enteringIn(entry.group)}
+                onEntered={enteringIn(entry.group) === null ? undefined : onEntered}
                 toolCountScope={`${stageId ?? ''}|${filter}`}
                 onOpenDialog={onOpenDialog}
                 // A thought is answerable only where the composer is: the quote becomes its reply context.
-                onReplyToThought={
-                  canAnswerThought && noteTarget !== null
-                    ? (key, text) => {
-                        drafts.update(noteTarget, (d) => selectThought(d, { key, text }, mesh !== undefined))
-                        requestFocus(noteTarget)
-                      }
-                    : undefined
-                }
+                onReplyToThought={canAnswerThought && noteTarget !== null ? replyToThought : undefined}
                 quoteRestarts={mesh === undefined}
                 activeReplyKey={activeReplyKey}
               />
             ),
-          )
+          )}
+          </>
         )}
         {stageId !== null && !paused && <WorkingLine stageId={stageId} participants={participants} conversation={conversation} />}
         {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} unseen={unseen} />}
@@ -305,18 +368,19 @@ export function FeedWorkspace({
 }
 
 // useUnseenCount — сколько событий пришло, пока лента отпущена от низа: без счётчика она выглядит замершей.
-// Отсчёт начинается заново при отпускании и при смене стадии.
-function useUnseenCount(stick: boolean, total: number, stageId: string | null): number {
-  const [base, setBase] = useState<{ stageId: string | null; total: number } | null>(null)
+// arrived растёт только вверх и не зависит от порядка и капа списка, поэтому счёт — разница с моментом
+// отпускания; он сбрасывается при возврате вниз и при смене стадии.
+function useUnseenCount(stick: boolean, stageId: string | null, arrived: number): number {
+  const [released, setReleased] = useState<{ stageId: string | null; arrived: number } | null>(null)
   if (stick) {
-    if (base !== null) setBase(null)
+    if (released !== null) setReleased(null)
     return 0
   }
-  if (base === null || base.stageId !== stageId) {
-    setBase({ stageId, total })
+  if (released === null || released.stageId !== stageId || arrived < released.arrived) {
+    setReleased({ stageId, arrived })
     return 0
   }
-  return Math.max(0, total - base.total)
+  return arrived - released.arrived
 }
 
 const EMPTY_PARTICIPANTS: MeshParticipant[] = []
@@ -385,9 +449,36 @@ type FeedGroupViewProps = {
   messageCard?: boolean
 }
 
+function sameItem(a: FeedItem, b: FeedItem): boolean {
+  const keys = Object.keys(a) as (keyof FeedItem)[]
+  return keys.length === Object.keys(b).length && keys.every((key) => (key === 'executor' ? shallowEqual(a.executor, b.executor) : a[key] === b[key]))
+}
+
+function sameItems(a: FeedItem[], b: FeedItem[]): boolean {
+  return a.length === b.length && a.every((item, i) => sameItem(item, b[i] as FeedItem))
+}
+
+function shallowEqual(a: object | undefined, b: object | undefined): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  const keys = Object.keys(a) as (keyof typeof a)[]
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === (b as typeof a)[key])
+}
+
+// Items are rebuilt on every event, so a group is compared by content: only a group that changed re-renders.
+function sameGroupProps(prev: FeedGroupViewProps, next: FeedGroupViewProps): boolean {
+  const { group: prevGroup, ...prevRest } = prev
+  const { group: nextGroup, ...nextRest } = next
+  const sameGroup = prevGroup.key === nextGroup.key && prevGroup.side === nextGroup.side && prevGroup.stageId === nextGroup.stageId &&
+    prevGroup.actor === nextGroup.actor && prevGroup.authorLabel === nextGroup.authorLabel && sameItems(prevGroup.items, nextGroup.items)
+  return sameGroup && shallowEqual(prevRest, nextRest)
+}
+
 // FeedGroupView — одна группа: стейдж-агент — строка автора и тело без рамки, события флоу — тихие строки,
 // пользователь и карточки истории — пузырь с шапкой.
-export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, quoteRestarts = false, activeReplyKey = null, enteringKey = null, onEntered, toolCountScope, messageCard = false }: FeedGroupViewProps): ReactElement {
+export const FeedGroupView = memo(FeedGroupViewImpl, sameGroupProps)
+
+function FeedGroupViewImpl({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, quoteRestarts = false, activeReplyKey = null, enteringKey = null, onEntered, toolCountScope, messageCard = false }: FeedGroupViewProps): ReactElement {
   // Подпись автора: agent/user — фиксированные, system — параметризуемая (боковой
   // чат заменяет «Flow» своей подписью, см. systemAuthorLabel).
   const authorLabel = group.authorLabel ?? (group.actor === 'system' || (messageCard && group.actor === 'agent') ? systemAuthorLabel : ACTOR_LABEL[group.actor])
@@ -437,7 +528,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
                 imagePolicy === 'none' ? (
                   // imagePolicy='none': [AFM image: …]-маркеры не раскрываются в <FeedImage> — у беседы
                   // нет каталога артефактов стадии, строить per-stage URL некуда.
-                  <div className="feed-item-text md" dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(item.text) }} />
+                  <div className="feed-item-text md" dangerouslySetInnerHTML={{ __html: renderPlainMarkdownCached(item.text) }} />
                 ) : (
                   // Нарратив агента — markdown. Нейтральный рендерер (без plan-обёрток), html:false → без
                   // XSS.
@@ -447,7 +538,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
                         <div
                           key={`seg${i}`}
                           className="feed-item-text md"
-                          dangerouslySetInnerHTML={{ __html: renderPlainMarkdown(seg.text) }}
+                          dangerouslySetInnerHTML={{ __html: renderPlainMarkdownCached(seg.text) }}
                         />
                       ) : (
                         <FeedImage key={`seg${i}`} stageId={item.stageId} name={seg.name} />
@@ -550,36 +641,77 @@ function useToolCountBump(count: number, scope: string): { bump: number; playing
   return { bump: state.bump, playing: state.playing, onBumpEnd }
 }
 
+// ShowEarlierButton — расширяет окно ленты или раскрытой tool-серии на шаг; hidden — сколько строк выше окна.
+// useScrollAnchor — the scroll position before rows are inserted above: once `rowsKey` changes, the reader is moved
+// down by their height, so what was being read stays in place.
+function useScrollAnchor(rowsKey: number): (scroller: HTMLElement | null) => void {
+  const anchor = useRef<{ scroller: HTMLElement; height: number; top: number } | null>(null)
+  useLayoutEffect(() => {
+    const saved = anchor.current
+    if (saved !== null) saved.scroller.scrollTop = saved.top + saved.scroller.scrollHeight - saved.height
+    anchor.current = null
+  }, [rowsKey])
+  return useCallback((scroller) => {
+    anchor.current = scroller === null ? null : { scroller, height: scroller.scrollHeight, top: scroller.scrollTop }
+  }, [])
+}
+
+function ShowEarlierButton({ hidden, onClick }: { hidden: number; onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void }): ReactElement {
+  return (
+    <button type="button" className="feed-show-earlier" onClick={onClick}>
+      Show earlier ({hidden})
+    </button>
+  )
+}
+
 // ToolRun — подряд идущие вызовы инструментов агента: одна свёрнутая полоса вместо строки на каждый вызов.
-// Число вызовов анимируется, когда у показанной серии добавился вызов.
-function ToolRun({ items, countScope = '' }: { items: FeedItem[]; countScope?: string }): ReactElement {
+// Число вызовов анимируется, когда у показанной серии добавился вызов. Строки монтируются только в раскрытом
+// виде и ограничены окном: свёрнутые серии иначе были бы основной массой скрытых DOM-узлов.
+const ToolRun = memo(function ToolRun({ items, countScope = '' }: { items: FeedItem[]; countScope?: string }): ReactElement {
   const { count, label, names } = toolRunSummary(items)
   const { bump, playing, onBumpEnd } = useToolCountBump(count, countScope)
+  const [open, setOpen] = useState(false)
+  const [limit, setLimit] = useState(FEED_WINDOW_STEP)
+  const keepScroll = useScrollAnchor(limit)
+  // flushSync: the feed's recheck listener on this toggle measures the layout right after, so the rows must be gone.
+  const onToggle = (event: ReactSyntheticEvent<HTMLDetailsElement>): void => {
+    const nowOpen = event.currentTarget.open
+    flushSync(() => {
+      setOpen(nowOpen)
+      if (!nowOpen) setLimit(FEED_WINDOW_STEP)
+    })
+  }
   return (
-    <details className="feed-tool-group">
+    <details className="feed-tool-group" onToggle={onToggle}>
       <summary data-feed-item="">
         <strong>
           <span key={bump} className={`feed-tool-count${playing ? ' feed-tool-count--bump' : ''}`} onAnimationEnd={onBumpEnd}>{count}</span> {label}
         </strong>
         {names !== '' && <span className="feed-tool-names"> · {names}</span>}
       </summary>
-      <div className="feed-tool-rows">
-        {items.map((item) => {
-          const { name, detail } = toolCall(item)
-          return (
-            <div key={item.key} className="feed-item feed-kind-tool tone-neutral mono" data-feed-item="">
-              <span className="feed-item-text">
-                <span className="feed-tool-name">{name}</span>
-                {detail !== '' && ` ${detail}`}
-              </span>
-              <MessageTime timestamp={item.ts} gap={item.gap} firstEvent={item.firstEvent} focusable />
-            </div>
-          )
-        })}
-      </div>
+      {open && (
+        <div className="feed-tool-rows">
+          {items.length > limit && <ShowEarlierButton hidden={items.length - limit} onClick={(event) => {
+            keepScroll(event.currentTarget.closest<HTMLElement>('.feed-scroll'))
+            setLimit((current) => current + FEED_WINDOW_STEP)
+          }} />}
+          {items.slice(-limit).map((item) => {
+            const { name, detail } = toolCall(item)
+            return (
+              <div key={item.key} className="feed-item feed-kind-tool tone-neutral mono" data-feed-item="">
+                <span className="feed-item-text">
+                  <span className="feed-tool-name">{name}</span>
+                  {detail !== '' && ` ${detail}`}
+                </span>
+                <MessageTime timestamp={item.ts} gap={item.gap} firstEvent={item.firstEvent} focusable />
+              </div>
+            )
+          })}
+        </div>
+      )}
     </details>
   )
-}
+}, (prev, next) => prev.countScope === next.countScope && sameItems(prev.items, next.items))
 
 type VerifyReportLinkProps = {
   stageId: string

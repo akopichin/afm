@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { resetUnknownCommandLabels } from '../lib/executor-label'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
+import { FEED_FLUSH_MS } from '../hooks/use-event-feed/use-event-feed'
 import { isTeamUnread } from '../lib/team-unread'
 
 // Минимальный stub WebSocket — App открывает соединение при монтировании.
@@ -86,6 +87,16 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
     if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
 
     return { ok: true, json: async () => [] } as Response
+  })
+}
+
+// Строки tool-вызовов монтируются только у открытой группы: браузер шлёт toggle после открытия.
+function openToolGroups(): void {
+  document.querySelectorAll('#feed-content details').forEach((details) => {
+    act(() => {
+      ;(details as HTMLDetailsElement).open = true
+      details.dispatchEvent(new Event('toggle'))
+    })
   })
 }
 
@@ -176,6 +187,32 @@ describe('App', () => {
     await waitFor(() => expect(statusCalls).toBe(2))
   })
 
+  test('a significant history event that is not last in the snapshot still refreshes /api/status', async () => {
+    let statusCalls = 0
+    const fetchSpy = mockFetchForStatus(
+      () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }),
+      () => {
+        statusCalls += 1
+      },
+    )
+    const base = fetchSpy.getMockImplementation()
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.endsWith('/api/events')) {
+        const history = [
+          { type: 'stage_status_changed', stage_id: 's1', seq: 1, data: { status: 'done' }, timestamp: '2026-11-09T10:00:00Z' },
+          { type: 'agent_action', stage_id: 's1', seq: 2, data: {}, timestamp: '2026-11-09T10:00:01Z' },
+        ]
+        return { ok: true, json: async () => history } as Response
+      }
+      return base!(input, init)
+    })
+
+    render(<App />)
+
+    await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2))
+  })
+
   test('CRITICAL: a batch of several significant events triggers only one refresh (throttled)', async () => {
     let statusCalls = 0
     mockFetchForStatus(
@@ -230,6 +267,10 @@ describe('App', () => {
       for (let i = 0; i < 10005; i += 1) {
         ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { n: i }, stage_id: 's1' }) })
       }
+    })
+    // Публикуем накопленные 10000 событий: окно должно дойти до кэпа до значимого триггера.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, FEED_FLUSH_MS + 50))
     })
     expect(statusCalls).toBe(1)
 
@@ -1489,11 +1530,15 @@ describe('App', () => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'agent_action', data: { tool: 'read_file', detail: 'b.ts' }, stage_id: 's2' }) })
     })
 
-    // Default view — Feed для выбранной s1: только её событие видно.
+    // Default view — Feed для выбранной s1: только её событие видно (tool-группа ленивая — раскрываем).
+    await waitFor(() => expect(document.querySelector('#feed-content details.feed-tool-group')).not.toBeNull())
+    openToolGroups()
     await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file a.ts'))
     expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file b.ts')
 
     fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
+    await waitFor(() => expect(document.querySelector('#feed-content details.feed-tool-group')).not.toBeNull())
+    openToolGroups()
     await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file b.ts'))
     expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file a.ts')
   })

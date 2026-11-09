@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
+#
+# Dashboard load fixture: a fake agent (no LLM) streams tens of thousands of feed events so
+# dashboard memory and render cost can be measured. See README.md. Copy this file and
+# fake_agent.py into an isolated fixture directory and run with --dir pointing at it.
+
+name: dashboard-load
+description: "Synthetic long-run load for measuring dashboard memory and render cost"
+
+max_parallel: 2
+
+# Agents start in the fixture directory, where fake_agent.py and the gates/ directory live.
+root_dir: "."
+
+stages:
+  - id: load
+    name: "Load generator"
+    description: "Fake agent: gated phases of feed events, mesh messages and board publications."
+    agents: [auto]
+    command: ./fake_agent.py
+
+  - id: peer
+    name: "Peer (stage switching)"
+    description: "Short stage to switch to and back from the loaded one."
+    script: |
+      for i in $(seq 1 50); do echo "peer line $i"; done

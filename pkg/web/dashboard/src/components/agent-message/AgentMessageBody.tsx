@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { MarkdownRenderer } from '../plan-panel'
 import { parseAgentResultBody, verdictLabel } from '../../lib/agent-result'
-import { renderPlainMarkdown } from '../plan-panel/markdown'
+import { renderPlainMarkdownCached } from '../plan-panel/markdown'
 import { highlightMentions } from './render-mentions'
 
 type AgentMessageBodyProps = {
@@ -39,7 +39,7 @@ export function AgentMessageBody({ body, fromAgent, markdown = false, autoResult
         </span>
       )}
       {markdown ? mentionHandles !== undefined ? (
-        <div className="md" dangerouslySetInnerHTML={{ __html: highlightMentions(renderPlainMarkdown(text), mentionHandles) }} />
+        <div className="md" dangerouslySetInnerHTML={{ __html: highlightMentions(renderPlainMarkdownCached(text), mentionHandles) }} />
       ) : <MarkdownRenderer source={text} /> : text}
       {result !== null && (
         <details className="agent-result-raw">

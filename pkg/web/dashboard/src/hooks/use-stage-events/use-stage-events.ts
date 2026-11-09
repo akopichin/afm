@@ -33,20 +33,42 @@ export function useStageEvents(stageId: string | null, globalEvents: AfmEvent[],
       .then((r) => (r.ok ? r.json() : []))
       .then((raw: unknown) => {
         if (gen.current !== myGen || !Array.isArray(raw)) return
-        // Фильтруем историю по stageId даже при ответе старого сервера, проигнорировавшего ?stage.
-        setHistory({ stageId, runEpoch, events: raw.map(toEvent).filter((e) => e.stageId === stageId) })
+        // Фильтруем историю по stageId даже при ответе старого сервера, проигнорировавшего ?stage. Обрезаем до
+        // конвертации: toEvent и ключи нужны только удерживаемому хвосту.
+        const events = raw
+          .filter((item) => isFromStage(item, stageId))
+          .slice(-MAX_STAGE_EVENTS)
+          .map(toEvent)
+        setHistory({ stageId, runEpoch, events })
       })
       .catch(() => {
         // Сеть/старый сервер — деградируем к чистому live-хвосту (см. ниже).
       })
   }, [stageId, runEpoch])
 
+  // События других стадий не должны пересчитывать ленту выбранной: пока её срез глобального окна не
+  // изменился, остаётся прежний массив.
+  const liveRef = useRef<AfmEvent[]>([])
+  const live = useMemo(() => {
+    const next = globalEvents.filter((e) => e.stageId === stageId).slice(-MAX_STAGE_EVENTS)
+    if (isSameEvents(liveRef.current, next)) return liveRef.current
+    liveRef.current = next
+    return next
+  }, [stageId, globalEvents])
+
   return useMemo(() => {
     if (stageId === null) return []
     // history может ещё принадлежать ПРЕДЫДУЩЕЙ стадии или рану (см. комментарий выше
     // StageHistory) — считаем её пустой, пока фетч новой не резолвится.
-    const hist = history.stageId === stageId && history.runEpoch === runEpoch ? history.events : []
-    const live = globalEvents.filter((e) => e.stageId === stageId)
-    return mergeCapped(hist, live, MAX_STAGE_EVENTS)
-  }, [stageId, runEpoch, history, globalEvents])
+    const hist = history.stageId === stageId && history.runEpoch === runEpoch ? history : EMPTY_HISTORY
+    return mergeCapped(hist.events, live, MAX_STAGE_EVENTS)
+  }, [stageId, runEpoch, history, live])
+}
+
+function isFromStage(item: unknown, stageId: string): boolean {
+  return typeof item === 'object' && item !== null && (item as { stage_id?: unknown }).stage_id === stageId
+}
+
+function isSameEvents(a: AfmEvent[], b: AfmEvent[]): boolean {
+  return a.length === b.length && a.every((e, i) => e === b[i])
 }

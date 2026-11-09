@@ -16,17 +16,27 @@ export type StageConversation = {
   // threads — the stage feed's threads, by id. The server sends a thread again only when it is opened or closed
   // (a status change shows even in a quiet thread); the newest-changed MAX_STAGE_THREADS are kept.
   threads: Record<string, MeshThread>
+  // arrived — messages that came after the first read of this stage, cumulative: it keeps growing at the cap,
+  // where the list length stops.
+  arrived: number
 }
 
 type Loaded = StageConversation & { stageId: string | null }
 
-const EMPTY: Loaded = { stageId: null, messages: [], threads: {} }
+const EMPTY: Loaded = { stageId: null, messages: [], threads: {}, arrived: 0 }
 
 // useStageConversation polls the conversations of stage stageId's feed — GET /api/mesh/stages/{id}/messages,
 // forward from the last seq read, so each tick fetches only what is new. Polls are serial, so pages are
 // applied in order and the cursor never skips or re-reads a page. null — no stage (or no mesh): no requests.
 export function useStageConversation(stageId: string | null): StageConversation {
   const [loaded, setLoaded] = useState<Loaded>(EMPTY)
+  // Смена стадии сбрасывает прочитанное сразу, в рендере: иначе при возврате на стадию показалось бы устаревшее
+  // содержимое, а курсор нового опроса уже стартовал с 0 (тот же приём, что в useRunEpoch).
+  const [subscribed, setSubscribed] = useState(stageId)
+  if (subscribed !== stageId) {
+    setSubscribed(stageId)
+    setLoaded(EMPTY)
+  }
 
   useEffect(() => {
     if (stageId === null) return
@@ -41,7 +51,8 @@ export function useStageConversation(stageId: string | null): StageConversation 
       const messages: MeshMessage[] = read.pages.flatMap((p) => p.messages)
       const threads: MeshThread[] = read.pages.flatMap((p) => p.threads)
       setLoaded((prev) => {
-        const base = prev.stageId === stageId ? prev : { ...EMPTY, stageId }
+        const firstRead = prev.stageId !== stageId
+        const base = firstRead ? { ...EMPTY, stageId } : prev
         const known = new Set(base.messages.map((m) => m.id))
         const added: MeshMessage[] = []
         for (const m of messages) {
@@ -52,7 +63,8 @@ export function useStageConversation(stageId: string | null): StageConversation 
         const changedThreads = threads.filter((t) => !sameThread(base.threads[t.id], t))
         if (added.length === 0 && changedThreads.length === 0 && base === prev) return prev
         const kept = added.length === 0 ? base.messages : [...base.messages, ...added].slice(-MAX_STAGE_MESSAGES)
-        return { stageId, messages: kept, threads: mergeThreads(base.threads, changedThreads) }
+        const arrived = firstRead ? 0 : base.arrived + added.length
+        return { stageId, messages: kept, threads: mergeThreads(base.threads, changedThreads), arrived }
       })
     }, POLL_INTERVAL_MS)
     return poll.stop

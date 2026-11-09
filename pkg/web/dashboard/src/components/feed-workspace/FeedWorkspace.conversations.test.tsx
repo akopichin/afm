@@ -537,7 +537,7 @@ describe('conversation motion', () => {
   it('animates only a newly arrived message, clears it on timeout and resets on navigation', async () => {
     const hooks = await import('../../hooks/use-mesh')
     const history = [msg('history', 1)]
-    const read = vi.spyOn(hooks, 'useStageConversation').mockReturnValue({ messages: history, threads: { 'mt-1': withUser } })
+    const read = vi.spyOn(hooks, 'useStageConversation').mockReturnValue({ messages: history, threads: { 'mt-1': withUser }, arrived: 0 })
     vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages: [], nextCursor: 0, hasMore: false })
     vi.useFakeTimers()
     const props = { events: [], mesh: meshProps(), stageId: 'impl' }
@@ -545,7 +545,7 @@ describe('conversation motion', () => {
     await act(async () => {})
     expect(document.querySelector('.is-new-agent-message')).toBeNull()
     const live = msg('live', 2)
-    read.mockReturnValue({ messages: [...history, live], threads: { 'mt-1': withUser } })
+    read.mockReturnValue({ messages: [...history, live], threads: { 'mt-1': withUser }, arrived: 0 })
     view.rerender(<FeedWorkspace {...props} />)
     expect(document.querySelectorAll('.is-new-agent-message')).toHaveLength(1)
     expect(row('live')).toHaveClass('is-new-agent-message')
@@ -553,7 +553,7 @@ describe('conversation motion', () => {
     expect(row('live')).toHaveClass('is-new-agent-message')
     act(() => vi.advanceTimersByTime(1))
     expect(document.querySelector('.is-new-agent-message')).toBeNull()
-    read.mockReturnValue({ messages: [...history, live, msg('newer', 3)], threads: { 'mt-1': withUser } })
+    read.mockReturnValue({ messages: [...history, live, msg('newer', 3)], threads: { 'mt-1': withUser }, arrived: 0 })
     view.rerender(<FeedWorkspace {...props} />)
     expect(row('newer')).toHaveClass('is-new-agent-message')
     view.rerender(<FeedWorkspace {...props} stageId="other" />)
@@ -565,7 +565,7 @@ describe('conversation motion', () => {
 
   it.each([false, true])('jumps to a quote respecting reduced motion=%s', async (reduced) => {
     const hooks = await import('../../hooks/use-mesh')
-    vi.spyOn(hooks, 'useStageConversation').mockReturnValue({ messages, threads: { 'mt-1': withUser, 'mt-old': legacy } })
+    vi.spyOn(hooks, 'useStageConversation').mockReturnValue({ messages, threads: { 'mt-1': withUser, 'mt-old': legacy }, arrived: 0 })
     vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages: [], nextCursor: 0, hasMore: false })
     vi.stubGlobal('matchMedia', () => ({ matches: reduced, addEventListener() {}, removeEventListener() {} }))
     const scroll = vi.fn()

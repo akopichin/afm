@@ -13,6 +13,16 @@ import type { SideAgentEvent } from '../../types/side-agent'
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string): AfmEvent =>
   ({ type, payload, stageId, timestamp }) as AfmEvent
 
+// Tool call rows are mounted only while their group is open: the browser's toggle event follows opening.
+function openToolGroups(root: ParentNode = document): void {
+  root.querySelectorAll('details').forEach((details) => {
+    act(() => {
+      details.open = true
+      details.dispatchEvent(new Event('toggle'))
+    })
+  })
+}
+
 describe('FeedWorkspace', () => {
   beforeEach(() => {
     window.localStorage.clear()
@@ -25,6 +35,7 @@ describe('FeedWorkspace', () => {
       ev('dialog_answer', { phase: 'planning', id: 'q1', title: 'reply to user' }, 's1', '2026-07-10T10:00:01Z'),
     ]
     const { container } = render(<FeedWorkspace events={events} stageId={null} />)
+    openToolGroups(container)
     const groups = container.querySelectorAll('.feed-group')
     expect(groups).toHaveLength(2)
     expect(groups[0]).toHaveClass('feed-left')
@@ -98,6 +109,7 @@ describe('FeedWorkspace', () => {
       expect(groups).toHaveLength(1)
       expect(groups[0]).not.toHaveAttribute('open')
       expect(groups[0]?.querySelector('summary')).toHaveTextContent('3 tool calls · read, edit')
+      openToolGroups(container)
       expect(groups[0]?.querySelectorAll('.feed-tool-rows .feed-item')).toHaveLength(3)
       const rows = groups[0]?.closest('.feed-rows')
       expect(rows?.querySelector('.feed-item-markdown')).toHaveTextContent('Working on it')
@@ -106,6 +118,7 @@ describe('FeedWorkspace', () => {
     it('shows each call as "<Tool> <detail>" and says "1 tool call" for a single call', () => {
       const { container } = render(<FeedWorkspace events={tools.slice(0, 1)} stageId="s1" />)
       expect(container.querySelector('summary')).toHaveTextContent(/^1 tool call · read$/)
+      openToolGroups(container)
       const row = container.querySelector('.feed-tool-rows .feed-item')
       expect(row?.querySelector('.feed-tool-name')).toHaveTextContent('Read')
       expect(row?.querySelector('.feed-item-text')).toHaveTextContent('Read src/a.ts')
@@ -245,6 +258,7 @@ describe('FeedWorkspace', () => {
         <FeedWorkspace events={events} stageId={stageId} />
       </MessageTimeZoneProvider>,
     )
+    openToolGroups(container)
     const times = Array.from(container.querySelectorAll('time.message-time'))
     // The flow line, the stage agent's author row (the time of its first row), then the two tool calls.
     expect(times).toHaveLength(4)
@@ -258,6 +272,7 @@ describe('FeedWorkspace', () => {
   it('omits a time label for an invalid event timestamp', () => {
     const events = [ev('agent_action', { tool: 'read_file', detail: 'a' }, 's1', 'invalid')]
     const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+    openToolGroups(container)
     expect(container.querySelector('.feed-item')).toBeInTheDocument()
     expect(container.querySelector('time.message-time')).toBeNull()
   })
@@ -340,6 +355,7 @@ describe('FeedWorkspace', () => {
       ev('agent_action', { tool: 'read_file', detail: 'noise' }, 's2', '2026-07-10T10:00:01Z'),
     ]
     render(<FeedWorkspace events={events} stageId="early" />)
+    openToolGroups()
     // both rows present — FeedWorkspace does not filter by stageId anymore
     expect(screen.getByText(/early/)).toBeInTheDocument()
     expect(screen.getByText(/noise/)).toBeInTheDocument()
@@ -466,6 +482,7 @@ describe('FeedWorkspace', () => {
     const events = [ev('agent_action', { tool: 'read_file', detail: 'x.ts' }, 's1', '2026-07-10T10:00:00Z')]
     const onOpenDialog = vi.fn()
     render(<FeedWorkspace events={events} stageId="s1" onOpenDialog={onOpenDialog} />)
+    openToolGroups()
     expect(screen.queryByRole('button', { name: /read_file/ })).not.toBeInTheDocument()
     expect(screen.getByText('read_file').closest('.feed-item')?.tagName).toBe('DIV')
   })
@@ -725,6 +742,7 @@ describe('FeedWorkspace', () => {
       const { container } = render(
         <FeedGroupView group={groupOf(rows)} showStageBadges={false} onReplyToThought={vi.fn()} onOpenDialog={vi.fn()} />,
       )
+      openToolGroups(container)
       const children = Array.from(container.querySelector('.feed-rows')?.children ?? [])
       expect(children.length).toBeGreaterThanOrEqual(4)
       // A tool run is a container: its summary and every call row are the items.
@@ -790,6 +808,7 @@ describe('FeedWorkspace', () => {
       const onReply = vi.fn()
       const tool = thoughtItem({ kind: 'tool', markdown: false, mono: true, text: 'Bash: ls' })
       render(<FeedGroupView group={groupOf([tool])} showStageBadges={false} onReplyToThought={onReply} />)
+      openToolGroups()
       expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
       fireEvent.click(screen.getByText('Bash'))
       expect(onReply).not.toHaveBeenCalled()
@@ -1085,12 +1104,12 @@ describe('reading position around an expanded tool group', () => {
 
   it('counts the events that arrived below a released feed on the jump button', async () => {
     const events = [call('step 1', 0)]
-    const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
+    const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" arrivals={1} />)
     atScroll(container, 800)
     await toggle(container.querySelector('details') as HTMLDetailsElement)
     expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeTruthy()
 
-    rerender(<FeedWorkspace events={[...events, call('step 2', 1), call('step 3', 2)]} stageId="s1" />)
+    rerender(<FeedWorkspace events={[...events, call('step 2', 1), call('step 3', 2)]} stageId="s1" arrivals={3} />)
     const jump = screen.getByRole('button', { name: 'Jump to latest, 2 new' })
     expect(jump.textContent).toBe('2')
 

@@ -269,3 +269,11 @@ describe('WorkspaceHeader Feed focus', () => {
     expect(onOpen).toHaveBeenCalledOnce()
   })
 })
+
+it('the reply-needed indicator is a button that goes to the pending question', () => {
+  const onReplyJump = vi.fn()
+  render(<WorkspaceHeader stage={stage({ status: 'running' })} connected replyNeeded={1} onReplyJump={onReplyJump} />)
+  expect(screen.getByRole('status')).toHaveTextContent('1 reply needed')
+  fireEvent.click(screen.getByRole('button', { name: 'Go to the question awaiting your reply' }))
+  expect(onReplyJump).toHaveBeenCalledTimes(1)
+})

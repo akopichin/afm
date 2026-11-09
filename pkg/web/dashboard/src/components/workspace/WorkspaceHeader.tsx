@@ -53,6 +53,7 @@ type WorkspaceHeaderProps = {
   // statusAvailable — свежесть /api/status: пока он устарел, счётчик ожидания лимита замирает.
   statusAvailable?: boolean
   replyNeeded?: number
+  onReplyJump?: () => void
   controlsEnabled?: boolean
   showControls?: boolean
   // showStageButtons — false, когда в воркспейсе выбран helper, а не сама стадия: кнопки принадлежат стадии.
@@ -80,7 +81,7 @@ const COLLAPSE_ICON = icon(<path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5" />)
 // WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + чип статуса (точка, слово,
 // «thinking» во время running) и справа действия: ответ ждут, People, ожидание (в фокусе), Retry,
 // Pause/Continue иконкой, Focus.
-export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, controlsEnabled = true, showControls = true, showStageButtons = true, onContinue, feedFocus, pendingAttention }: WorkspaceHeaderProps): ReactElement {
+export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, onReplyJump, controlsEnabled = true, showControls = true, showStageButtons = true, onContinue, feedFocus, pendingAttention }: WorkspaceHeaderProps): ReactElement {
   const action = useStageAction(stage)
   const paused = stage.status === 'paused'
   const buttonsShown = showStageButtons && !stage.isScript && BUTTON_STATUSES.has(stage.status) && stage.buttons.length > 0
@@ -129,7 +130,9 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
         </span>
       )}
       <span className="workspace-header-actions">
-        {replyNeeded > 0 && <span className="workspace-reply-needed" role="status">{REPLY_ICON}{replyNeeded} {replyNeeded === 1 ? 'reply' : 'replies'} needed</span>}
+        {replyNeeded > 0 && <span className="workspace-reply-needed" role="status">
+          <button type="button" className="workspace-reply-needed-btn" aria-label="Go to the question awaiting your reply" onClick={onReplyJump}>{REPLY_ICON}{replyNeeded} {replyNeeded === 1 ? 'reply' : 'replies'} needed</button>
+        </span>}
         {actions}
         {feedFocus?.active === true && pendingAttention !== undefined && (
           <button type="button" className="workspace-action feed-focus-wait" data-kind={pendingAttention.kind} onClick={pendingAttention.onOpen}>

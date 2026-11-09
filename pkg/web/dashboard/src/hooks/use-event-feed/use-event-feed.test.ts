@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { mergeCapped, useEventFeed } from './use-event-feed'
+import { mergeCapped } from './event-buffer'
+import { FEED_FLUSH_MS, useEventFeed } from './use-event-feed'
 import type { AfmEvent } from '../../types'
 
 // Минимальный fake WebSocket для тестирования подписки и backoff-реконнекта.
@@ -46,6 +47,13 @@ class FakeWebSocket {
   emitMessage(data: unknown) {
     this.onmessage?.({ data: JSON.stringify(data) })
   }
+}
+
+// Входящие события публикуются пачкой по таймеру: тест с fake timers дожидается flush.
+function flushFeed() {
+  act(() => {
+    vi.advanceTimersByTime(FEED_FLUSH_MS)
+  })
 }
 
 describe('useEventFeed', () => {
@@ -107,7 +115,26 @@ describe('useEventFeed', () => {
     expect(result.current.events).toHaveLength(3)
   })
 
+  test('publishes the arrival counters once per batch, together with the events', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'agent_action', data: 'a', stage_id: 's1' })
+      FakeWebSocket.last().emitMessage({ type: 'mesh_board', data: 'b', stage_id: '' })
+      FakeWebSocket.last().emitMessage({ type: 'agent_action', data: 'c', stage_id: 's1' })
+    })
+    expect(result.current.arrivals).toEqual({ stages: new Map(), mesh: 0 })
+
+    flushFeed()
+    expect(result.current.arrivals).toEqual({ stages: new Map([['s1', 2], ['', 1]]), mesh: 1 })
+  })
+
   test('diverts assistant_activity into its own ring, never into the event feed', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -121,11 +148,13 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'assistant_activity', stage_id: '', data: { detail: 'no identity' } })
     })
 
+    flushFeed()
     expect(result.current.events).toEqual([])
     expect(result.current.activity.map((e) => e.eventId)).toEqual(['act-1', 'act-2'])
   })
 
   test('drops the live activity of the previous run when the run changes', () => {
+    vi.useFakeTimers()
     const { result, rerender } = renderHook(({ runId }) => useEventFeed('/ws', runId), { initialProps: { runId: 'run-a' } })
     act(() => {
       FakeWebSocket.last().emitMessage({
@@ -133,6 +162,7 @@ describe('useEventFeed', () => {
         data: { event_id: 'act-1', task_id: 't1', occurred_at: '2026-10-27T12:00:00Z', tool: 'Bash', detail: 'ls' },
       })
     })
+    flushFeed()
     expect(result.current.activity).toHaveLength(1)
 
     rerender({ runId: 'run-b' })
@@ -140,6 +170,7 @@ describe('useEventFeed', () => {
   })
 
   test('bounds the live activity ring', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       for (let i = 0; i < 2005; i++) {
@@ -149,6 +180,7 @@ describe('useEventFeed', () => {
         })
       }
     })
+    flushFeed()
     expect(result.current.activity).toHaveLength(2000)
     expect(result.current.activity[0]?.eventId).toBe('act-5')
   })
@@ -260,6 +292,7 @@ describe('useEventFeed', () => {
   })
 
   test('caps the global feed at 10000 events', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
@@ -272,6 +305,7 @@ describe('useEventFeed', () => {
       }
     })
 
+    flushFeed()
     expect(result.current.events).toHaveLength(10000)
     expect(result.current.events[0]?.stageId).toBe('s200')
     expect(result.current.events[9999]?.stageId).toBe('s10199')
@@ -452,6 +486,34 @@ describe('useEventFeed', () => {
     expect(result.current.events.map((e) => e.seq)).toEqual([1, 2, 3])
   })
 
+  test('F20: a live event arriving before the reconnect history resolves stays after the recovered suffix', async () => {
+    const history = Array.from({ length: 10 }, (_, i) => ({ type: 'agent_action', stage_id: 's1', data: {}, seq: i + 1 }))
+    let resolveFetch: (value: unknown) => void = () => {}
+    const fetchPromise = new Promise((res) => {
+      resolveFetch = res
+    })
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise))
+
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    for (const seq of [1, 2, 11]) {
+      act(() => {
+        FakeWebSocket.last().emitMessage({ type: 'agent_action', stage_id: 's1', data: {}, seq })
+      })
+    }
+    await act(async () => {
+      resolveFetch({ ok: true, json: () => Promise.resolve(history) })
+      await fetchPromise
+    })
+
+    await waitFor(() => {
+      expect(result.current.events).toHaveLength(11)
+    })
+    expect(result.current.events.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  })
+
   // T4b: dialog_question/dialog_answer публикуются И live, И в notices.jsonl — без seq, поэтому дедуп идёт
   // по контенту.
   test('dialog_question arriving live first, then the same question in history — one row', async () => {
@@ -566,6 +628,7 @@ describe('useEventFeed', () => {
   // Trap #2 из брифа: контент-дедуп на входе не должен схлопывать легитимные
   // повторы agent_action/script_output — только dialog_question/dialog_answer.
   test('identical seq-less agent_action live messages are not content-deduped', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -575,6 +638,7 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'agent_action', stage_id: 's1', data: { tool: 'Bash', detail: 'pwd' } })
     })
 
+    flushFeed()
     expect(result.current.events).toHaveLength(2)
   })
 
@@ -662,6 +726,7 @@ describe('useEventFeed', () => {
   // Regression for the dedup-collapses-distinct-failures bug: two genuinely DIFFERENT script_failed
   // occurrences for the same stage must NOT collapse into one row.
   test('two script_failed for the same stage with different seq are both kept (distinct occurrences)', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
@@ -680,6 +745,7 @@ describe('useEventFeed', () => {
       })
     })
 
+    flushFeed()
     expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(2)
   })
 
@@ -782,6 +848,7 @@ describe('useEventFeed', () => {
   // Два РАЗНЫХ авто-ответа на один и тот же вопрос (тот же id/phase, разный answer) — это две
   // самостоятельные записи и обе должны выжить: ключ включает answer.
   test('two navigable auto_answered with same id/phase but different answer are both kept', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -791,12 +858,14 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: 'no', dialog: true } })
     })
 
+    flushFeed()
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(2)
   })
 
   // Legacy/repair авто-ответы (без dialog-флага) НЕ проходят dialog-дедуп: два
   // разных прогресс-сообщения ремонта с одинаковым id обязаны оба остаться.
   test('two different repair auto_answered (no dialog flag) are both kept', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -806,12 +875,14 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: '⚙️ step 2' } })
     })
 
+    flushFeed()
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(2)
   })
 
   // Тот же id/answer, но в РАЗНЫХ стадиях/фазах — разные записи (ключ включает
   // stageId и phase), обе выживают.
   test('navigable auto_answered with same id/answer but different stage or phase are both kept', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -822,6 +893,7 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'implementation', id: 'q1', answer: 'yes', dialog: true } })
     })
 
+    flushFeed()
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(3)
   })
 
@@ -843,6 +915,7 @@ describe('useEventFeed', () => {
   // Review HIGH #2/#3: два навигируемых авто-ответа на переиспользованный id с ОДИНАКОВЫМ answer, но для
   // РАЗНЫХ вопросов — обе записи.
   test('two navigable auto_answered with same id/answer but different question_title are both kept', () => {
+    vi.useFakeTimers()
     const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -852,6 +925,7 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'auto_answered', stage_id: 's1', data: { phase: 'planning', id: 'q1', answer: 'Yes', question_title: 'Enable cache?', dialog: true } })
     })
 
+    flushFeed()
     expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(2)
   })
 
@@ -882,6 +956,37 @@ describe('useEventFeed', () => {
     })
     // Второй onopen — реконнект после close — досасывает историю ещё раз.
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test('reconnect with a history window shorter than the live window keeps order and drops nothing', async () => {
+    vi.useFakeTimers()
+    const raw = (n: number) => ({ type: 'agent_action', stage_id: 's1', seq: n, timestamp: '2026-11-09T10:00:00.000Z' })
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => raw(from + i))
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) })
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(range(101, 320)) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      for (const e of range(1, 300)) FakeWebSocket.last().emitMessage(e)
+    })
+    flushFeed()
+    act(() => {
+      FakeWebSocket.last().emitClose()
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+    const seqs = result.current.events.map((e) => e.seq as number)
+    expect(seqs).toEqual(range(1, 320).map((e) => e.seq))
   })
 
   // T11.2 — discussion_message/assistant_task_status events (the helper-agents feature) never carry a
@@ -942,6 +1047,7 @@ describe('useEventFeed', () => {
     act(() => {
       FakeWebSocket.last().emitMessage(msg) // delivered live first
     })
+    flushFeed()
     expect(result.current.events.filter((e) => e.type === 'discussion_message')).toHaveLength(1)
 
     act(() => {
@@ -977,6 +1083,7 @@ describe('useEventFeed', () => {
     act(() => {
       FakeWebSocket.last().emitMessage(msg) // delivered live first
     })
+    flushFeed()
     expect(result.current.events.filter((e) => e.type === 'mesh_message')).toHaveLength(1)
 
     act(() => {
@@ -991,6 +1098,227 @@ describe('useEventFeed', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(result.current.events.filter((e) => e.type === 'mesh_message')).toHaveLength(1)
   })
+  describe('batching', () => {
+    function renderCounted(runId = 'run-a') {
+      const renders = { count: 0 }
+      const hook = renderHook(
+        ({ id }) => {
+          renders.count += 1
+          return useEventFeed('/ws', id)
+        },
+        { initialProps: { id: runId } },
+      )
+      return { ...hook, renders }
+    }
+
+    function emit(type: string, data: unknown, stageId = 's1') {
+      FakeWebSocket.last().emitMessage({ type, data, stage_id: stageId })
+    }
+
+    test('a burst inside one flush window publishes once', () => {
+      vi.useFakeTimers()
+      const { result, renders } = renderCounted()
+      const before = renders.count
+
+      act(() => {
+        for (let i = 0; i < 50; i += 1) emit('agent_action', i)
+      })
+      expect(result.current.events).toHaveLength(0)
+      expect(renders.count).toBe(before)
+
+      flushFeed()
+      expect(result.current.events).toHaveLength(50)
+      expect(renders.count).toBe(before + 1)
+    })
+
+    test('a significant event publishes the whole queue immediately, in order', () => {
+      vi.useFakeTimers()
+      const { result } = renderCounted()
+
+      act(() => {
+        emit('agent_action', 'a')
+        emit('approved', 'b')
+      })
+
+      expect(result.current.events.map((e) => e.payload)).toEqual(['a', 'b'])
+      expect(result.current.significantVersion).toBe(1)
+    })
+
+    test('a significant event in the middle of a batch bumps significantVersion once', () => {
+      vi.useFakeTimers()
+      const { result } = renderCounted()
+
+      act(() => {
+        emit('agent_action', 'a')
+        emit('approved', 'b')
+        emit('agent_action', 'c')
+        emit('agent_action', 'd')
+      })
+      flushFeed()
+
+      expect(result.current.events.map((e) => e.payload)).toEqual(['a', 'b', 'c', 'd'])
+      expect(result.current.significantVersion).toBe(1)
+    })
+
+    test('non-significant events and collapsed duplicates leave significantVersion alone', () => {
+      vi.useFakeTimers()
+      const { result } = renderCounted()
+
+      act(() => {
+        emit('stage_status_changed', 'ready')
+      })
+      expect(result.current.significantVersion).toBe(1)
+
+      act(() => {
+        emit('stage_status_changed', 'ready')
+        emit('agent_action', 'x')
+      })
+      flushFeed()
+
+      expect(result.current.events).toHaveLength(2)
+      expect(result.current.significantVersion).toBe(1)
+    })
+
+    test('activity batches with the same flush', () => {
+      vi.useFakeTimers()
+      const { result, renders } = renderCounted()
+      const before = renders.count
+
+      act(() => {
+        for (let i = 0; i < 5; i += 1) {
+          emit('assistant_activity', { event_id: `act-${i}`, task_id: 't1', occurred_at: '2026-10-27T12:00:00Z', tool: 'Bash', detail: '' })
+        }
+        emit('agent_action', 'x')
+      })
+      flushFeed()
+
+      expect(result.current.activity).toHaveLength(5)
+      expect(result.current.events).toHaveLength(1)
+      expect(renders.count).toBe(before + 1)
+    })
+
+    test('a history merge inside the flush window also publishes queued activity', async () => {
+      vi.useFakeTimers()
+      let resolveFetch: (value: unknown) => void = () => {}
+      vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise((resolve) => { resolveFetch = resolve })))
+      const { result } = renderCounted()
+
+      act(() => {
+        emit('assistant_activity', { event_id: 'act-1', task_id: 't1', occurred_at: '2026-10-27T12:00:00Z', tool: 'Bash', detail: '' })
+        emit('agent_action', 'x')
+      })
+      await act(async () => {
+        resolveFetch({ ok: true, json: () => Promise.resolve([]) })
+        await vi.advanceTimersByTimeAsync(FEED_FLUSH_MS)
+      })
+
+      expect(result.current.activity.map((e) => e.eventId)).toEqual(['act-1'])
+      expect(result.current.events.map((e) => e.payload)).toEqual(['x'])
+    })
+
+    test('a dropped connection publishes the queue before reporting disconnected', () => {
+      vi.useFakeTimers()
+      const { result } = renderCounted()
+      act(() => {
+        FakeWebSocket.last().emitOpen()
+        emit('agent_action', 'queued')
+      })
+      expect(result.current.events).toHaveLength(0)
+
+      act(() => {
+        FakeWebSocket.last().emitClose()
+      })
+
+      expect(result.current.events).toHaveLength(1)
+      expect(result.current.connected).toBe(false)
+    })
+
+    test('a history merge publishes the queued live events after the history, once', async () => {
+      vi.useFakeTimers()
+      const history = [{ type: 'agent_action', stage_id: 's1', data: 'h', seq: 1, timestamp: '2026-11-09T10:00:00Z' }]
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(history) }))
+      const { result } = renderCounted()
+      act(() => {
+        emit('agent_action', 'live')
+      })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      expect(result.current.events.map((e) => e.payload)).toEqual(['h', 'live'])
+      flushFeed()
+      expect(result.current.events.map((e) => e.payload)).toEqual(['h', 'live'])
+    })
+
+    test('a history merge with a new significant event bumps significantVersion', async () => {
+      vi.useFakeTimers()
+      const history = [{ type: 'approved', stage_id: 's1', data: 'ok', seq: 7, timestamp: '2026-11-09T10:00:00Z' }]
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(history) }))
+      const { result } = renderCounted()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      expect(result.current.significantVersion).toBe(1)
+    })
+
+    test('an evicted dedupe key is accepted again', () => {
+      vi.useFakeTimers()
+      const { result } = renderCounted()
+      const note = { id: 'n1', text: 'hello' }
+
+      act(() => {
+        emit('agent_note', note)
+        emit('agent_note', note)
+      })
+      expect(result.current.events).toHaveLength(1)
+
+      act(() => {
+        for (let i = 0; i < 10000; i += 1) emit('agent_action', i)
+      })
+      flushFeed()
+      expect(result.current.events).toHaveLength(10000)
+      expect(result.current.events.some((e) => e.type === 'agent_note')).toBe(false)
+
+      act(() => {
+        emit('agent_note', note)
+      })
+      expect(result.current.events.filter((e) => e.type === 'agent_note')).toHaveLength(1)
+    })
+
+    test('a run change drops the queued events and their timer', () => {
+      vi.useFakeTimers()
+      const { result, rerender } = renderCounted('run-a')
+      act(() => {
+        emit('agent_action', 'old')
+      })
+
+      rerender({ id: 'run-b' })
+      flushFeed()
+      expect(result.current.events).toEqual([])
+
+      act(() => {
+        emit('agent_action', 'new')
+      })
+      flushFeed()
+      expect(result.current.events.map((e) => e.payload)).toEqual(['new'])
+    })
+
+    test('unmount discards the queue without publishing', () => {
+      vi.useFakeTimers()
+      const { unmount } = renderCounted()
+      act(() => {
+        emit('agent_action', 'x')
+      })
+
+      unmount()
+
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
   describe('run change', () => {
     const history = (stageId: string, seq: number) => ({ type: 'agent_action', stage_id: stageId, seq, timestamp: '2026-01-01T00:00:00.000Z' })
 

@@ -1943,6 +1943,21 @@ describe('TeamView', () => {
     expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
   })
 
+  test('Activity mounts its feed only while its tab is active', () => {
+    mockThreadAndBoardFetches()
+    renderTeamView()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    const panel = screen.getByRole('tabpanel', { name: 'Activity' })
+    expect(within(panel).getByRole('region', { name: 'Feed' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Messages' }))
+    expect(screen.queryByRole('region', { name: 'Feed', hidden: true })).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    expect(within(screen.getByRole('tabpanel', { name: 'Activity' })).getByRole('region', { name: 'Feed' })).toBeInTheDocument()
+  })
+
   test('Back returns from Board and Activity to the narrow list', () => {
     mockThreadAndBoardFetches()
     mockTeamWidth(341)

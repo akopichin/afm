@@ -1,4 +1,4 @@
-import { codeBlockLineRanges } from '../plan-panel/markdown'
+import { codeBlockLineRanges, createMarkdownCache } from '../plan-panel/markdown'
 
 // splitImageMarkers — сегментация текста сообщения агента на markdown-текст и ссылки на опубликованные
 // стадией картинки.
@@ -12,7 +12,7 @@ export const MAX_FEED_IMAGES = 20
 // валидатора имени артефакта на бэкенде.
 const MARKER_RE = /^\[AFM image: ([A-Za-z0-9._-]+)\]$/
 
-export function splitImageMarkers(text: string): Segment[] {
+function splitImageMarkersUncached(text: string): Segment[] {
   const lines = text.split('\n')
   const segments: Segment[] = []
   let buffer: string[] = []
@@ -48,3 +48,6 @@ export function splitImageMarkers(text: string): Segment[] {
   flush()
   return segments
 }
+
+// Сообщения ленты не меняются между рендерами: разбор кода и маркеров повторяется только для нового текста.
+export const splitImageMarkers = createMarkdownCache(splitImageMarkersUncached, { maxEntries: 500, maxChars: 2_000_000 })

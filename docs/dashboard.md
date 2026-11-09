@@ -82,6 +82,12 @@ right. The selected stage's Feed can also show a People panel on wide screens.
   reading position, and the **Jump to latest** button shows how many events
   arrived below. Collapsing the series near the bottom, scrolling back down or
   pressing **Jump to latest** follows new events again.
+- **Long runs** — the Feed renders only the latest 150 rows; earlier ones load in
+  steps of 150 with **Show earlier (N)** at the top, and clicking a quote jumps to
+  its message by loading the needed part. An `N tool calls` series shows its calls
+  only while expanded (long series also page with **Show earlier**). The Team
+  **Activity** tab renders only while it is selected. To check dashboard memory on a
+  long run, use the `scripts/dashboard-load/` fixture (fake agent, no LLM; see its README).
 - **Stage header** — a compact row above the selected stage's view shows its name
   and current status. When applicable it shows a reply count, **People**,
   **Retry** for a failed stage, and **Pause** or **Continue**. **People** shows

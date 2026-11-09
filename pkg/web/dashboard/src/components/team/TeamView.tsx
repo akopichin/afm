@@ -37,6 +37,8 @@ export type TeamViewProps = {
   board: MeshBoard
   stages: Stage[]
   events: AfmEvent[]
+  // meshArrivals — mesh_* events accepted live so far; the Activity tab counts what came after it was released.
+  meshArrivals?: number
   profiles: AssistantProfile[]
 }
 
@@ -51,7 +53,7 @@ function savedPreview(body: string): string {
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
 // use-workspace-view/workspace-view.ts's openTeam — a manual view that owns its own detail state).
-export function TeamView({ runId, active = true, roster, onParticipantAdded, board, stages, events, profiles }: TeamViewProps): ReactElement {
+export function TeamView({ runId, active = true, roster, onParticipantAdded, board, stages, events, meshArrivals, profiles }: TeamViewProps): ReactElement {
   const [tab, setTab] = useState<TeamTab>('messages')
   const visitedTabs = useRef<Set<TeamTab>>(new Set(['messages']))
   const [listView, setListView] = useState<TeamListView>('conversations')
@@ -650,7 +652,7 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
         )}
         {visitedTabs.current.has('activity') && (
           <div className="team-tab-panel" hidden={tab !== 'activity'} {...tabPanelProps(tabsId, 'activity')}>
-            <ActivityPanel events={events} />
+            {tab === 'activity' && <ActivityPanel events={events} arrivals={meshArrivals} />}
           </div>
         )}
       </div>

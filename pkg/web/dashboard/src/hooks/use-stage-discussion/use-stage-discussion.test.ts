@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { useStageDiscussion } from './use-stage-discussion'
+import { appendPage, emptyHistory, useStageDiscussion, withAnswersApplied, type DiscussionMessage } from './use-stage-discussion'
 import * as runClient from '../../api/run-client'
 
 type Page = Awaited<ReturnType<typeof runClient.listStageDiscussion>>
@@ -61,5 +61,74 @@ describe('useStageDiscussion', () => {
       ['m1', false],
       ['m2', undefined],
     ])
+  })
+})
+
+describe('appendPage', () => {
+  const msg = (id: string, authorKind: string, extra: Partial<DiscussionMessage> = {}): DiscussionMessage => ({ id, authorKind, round: 0, body: id, createdAt: '', ...extra })
+
+  // Deterministic pseudo-random pages: human posts (some unanswered) and replies of every author kind to earlier posts.
+  function generatePages(seed: number): DiscussionMessage[][] {
+    let state = seed
+    const next = (n: number) => (state = (state * 1103515245 + 12345) % 2147483648) % n
+    const kinds = ['human', 'afm', 'assistant', 'main_agent']
+    const humans: string[] = []
+    let counter = 0
+    return Array.from({ length: 6 }, () =>
+      Array.from({ length: next(5) }, () => {
+        const id = `m${counter++}`
+        const authorKind = kinds[next(kinds.length)] as string
+        if (authorKind === 'human') {
+          humans.push(id)
+          return msg(id, authorKind, { unanswered: next(2) === 0 })
+        }
+        return msg(id, authorKind, { parentMessageId: humans.length > 0 && next(3) > 0 ? humans[next(humans.length)] : undefined })
+      }),
+    )
+  }
+
+  test('gives the same messages as marking the whole history again', () => {
+    for (let seed = 1; seed <= 50; seed++) {
+      let history = emptyHistory()
+      const all: DiscussionMessage[] = []
+      for (const added of generatePages(seed)) {
+        history = appendPage(history, added)
+        all.push(...added)
+        expect(history.messages).toEqual(withAnswersApplied(all))
+      }
+    }
+  })
+
+  test('a reply in the same page answers a post of that page; afm and assistant replies count, human ones do not', () => {
+    const { messages } = appendPage(emptyHistory(), [
+      msg('q1', 'human', { unanswered: true }),
+      msg('q2', 'human', { unanswered: true }),
+      msg('q3', 'human', { unanswered: true }),
+      msg('a1', 'afm', { parentMessageId: 'q1' }),
+      msg('a2', 'assistant', { parentMessageId: 'q2' }),
+      msg('h1', 'human', { parentMessageId: 'q3' }),
+    ])
+    expect(messages.filter((m) => m.unanswered).map((m) => m.id)).toEqual(['q3'])
+  })
+
+  test('messages a new page does not touch keep their identity', () => {
+    const first = appendPage(emptyHistory(), [msg('q1', 'human', { unanswered: true }), msg('q2', 'human', { unanswered: true })])
+    const second = appendPage(first, [msg('a1', 'assistant', { parentMessageId: 'q1' })])
+    expect(second.messages[0]?.unanswered).toBe(false)
+    expect(second.messages[1]).toBe(first.messages[1])
+  })
+
+  test('a new answer does not read the history it does not answer', () => {
+    let reads = 0
+    const old = Array.from({ length: 1000 }, (_, i) => {
+      const m = msg(`q${i}`, 'human', { unanswered: true })
+      Object.defineProperty(m, 'unanswered', { get: () => (reads++, true), enumerable: true })
+      return m
+    })
+    const first = appendPage(emptyHistory(), old)
+    reads = 0
+    const second = appendPage(first, [msg('a1', 'assistant', { parentMessageId: 'q5' })])
+    expect(reads).toBeLessThanOrEqual(2)
+    expect(second.messages[5]?.unanswered).toBe(false)
   })
 })

@@ -3,6 +3,17 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-09
+
+### Improvement:
+
+- Dashboard stays responsive and keeps a flat memory profile on long runs: live events are applied in batches, the Feed shows the latest 150 rows with **Show earlier**, tool-call series render their calls only when expanded, and the Team Activity tab renders only while selected.
+- Add the `scripts/dashboard-load/` fixture (fake agent, no LLM) to measure dashboard memory and render cost on tens of thousands of events.
+
+### Fix:
+
+- **Jump to latest** counts events arriving below your reading position even when the stage's event list is capped.
+
 ## 2026-11-07
 
 ### Improvement:

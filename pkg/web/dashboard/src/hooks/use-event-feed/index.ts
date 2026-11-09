@@ -1,1 +1,2 @@
-export { dedupeKey, mergeCapped, toEvent, useEventFeed } from './use-event-feed'
+export { feedDedupeKey, mergeCapped, type ArrivalCounts } from './event-buffer'
+export { toEvent, useEventFeed } from './use-event-feed'

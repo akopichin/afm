@@ -734,6 +734,11 @@
 .feed-tool-names { min-width: 0; overflow-wrap: anywhere; }
 .feed-tool-rows .feed-item { border-top: 1px solid var(--separator-subtle); border-radius: 0; padding: 8px 14px; white-space: pre-wrap; }
 .feed-tool-name { color: var(--text-secondary); }
+/* Expands the feed window (or an expanded tool series) by one step of earlier rows. */
+.feed-show-earlier { align-self: center; flex: none; padding: 5px 12px; border: 0; border-radius: var(--radius-md); background: var(--surface-tool); color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.feed-show-earlier:hover { color: var(--text-primary); }
+.feed-show-earlier:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.feed-tool-rows > .feed-show-earlier { display: block; margin: 6px auto; }
 /* The number in a collapsed run pops and flashes the accent when the run grows; only transform and color move. */
 .feed-tool-count { display: inline-block; transform-origin: left center; }
 .feed-tool-count--bump { animation: feedToolCountBump var(--motion-slow) var(--ease-out); }

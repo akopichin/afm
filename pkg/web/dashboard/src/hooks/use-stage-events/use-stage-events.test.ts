@@ -243,4 +243,188 @@ describe('useStageEvents', () => {
     expect(result.current).toHaveLength(1)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps only the last 2000 events of the stage from history, in order', async () => {
+    const raw = Array.from({ length: 2100 }, (_, i) => ({ type: 'agent_action', stage_id: 's1', seq: i + 1, timestamp: '2026-01-01T00:00:00.000Z' }))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([...raw, { type: 'agent_action', stage_id: 'other', seq: 5000 }])))
+    const { result } = renderHook(() => useStageEvents('s1', [], 'run-a'))
+
+    await waitFor(() => expect(result.current).toHaveLength(2000))
+
+    expect(result.current[0]?.seq).toBe(101)
+    expect(result.current[1999]?.seq).toBe(2100)
+  })
+
+  it('does not re-append live events that were truncated out of the stage history', async () => {
+    const raw = Array.from({ length: 2100 }, (_, i) => ({ type: 'agent_action', stage_id: 's1', seq: i + 1, timestamp: '2026-01-01T00:00:00.000Z' }))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(raw)))
+    const live = Array.from({ length: 2100 }, (_, i) => ev('s1', i + 1))
+    const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+
+    await waitFor(() => expect(result.current[0]?.seq).toBe(101))
+
+    expect(result.current).toHaveLength(2000)
+    expect(result.current[1999]?.seq).toBe(2100)
+  })
+
+  it('returns the same array when only other stages gain events', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([])))
+    const own = ev('s1', 1)
+    const { result, rerender } = renderHook(({ events }) => useStageEvents('s1', events, 'run-a'), {
+      initialProps: { events: [own, ev('noise', 2)] },
+    })
+    await act(async () => {})
+    const before = result.current
+
+    rerender({ events: [own, ev('noise', 2), ev('noise', 3)] })
+
+    expect(result.current).toBe(before)
+
+    rerender({ events: [own, ev('noise', 2), ev('noise', 3), ev('s1', 4)] })
+
+    expect(result.current).not.toBe(before)
+    expect(result.current.map((e) => e.seq)).toEqual([1, 4])
+  })
+  describe('positional merge of a truncated history with the live window', () => {
+    const rawSeq = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => ({ type: 'agent_action', stage_id: 's1', seq: from + i, timestamp: '2026-01-01T00:00:00.000Z' }))
+    const rawNoSeq = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => ({ type: 'agent_action', stage_id: 's1', data: { n: from + i }, timestamp: '2026-01-01T00:00:00.000Z' }))
+    const liveSeq = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => ev('s1', from + i))
+    const liveNoSeq = (from: number, to: number): AfmEvent[] =>
+      Array.from({ length: to - from + 1 }, (_, i) => ({ type: 'agent_action', stageId: 's1', payload: { n: from + i }, timestamp: '2026-01-01T00:00:00.000Z' }))
+    const nOf = (e: AfmEvent | undefined) => (e?.payload as { n: number } | undefined)?.n
+
+    it('T1: history of the newest 2000 plus the full live window yields exactly those 2000, in order', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(rawSeq(1001, 3000))))
+      const live = liveSeq(1, 3000)
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(result.current[0]?.seq).toBe(1001))
+      expect(result.current).toHaveLength(2000)
+      expect(result.current[1999]?.seq).toBe(3000)
+      const seqs = result.current.map((e) => e.seq as number)
+      expect(seqs.every((s, i) => i === 0 || s > (seqs[i - 1] as number))).toBe(true)
+    })
+
+    it('T1: same for events without seq', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(rawNoSeq(1001, 3000))))
+      const live = liveNoSeq(1, 3000)
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(nOf(result.current[0])).toBe(1001))
+      expect(result.current).toHaveLength(2000)
+      expect(nOf(result.current[1999])).toBe(3000)
+    })
+
+    it('T2: converts only the retained tail of a huge seq-less history', async () => {
+      let converted = 0
+      const raw = Array.from({ length: 30000 }, (_, n) => ({
+        type: 'agent_action',
+        stage_id: 's1',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        get data() {
+          converted++
+          return { n }
+        },
+      }))
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => raw } as unknown as Response)
+      const { result } = renderHook(() => useStageEvents('s1', [], 'run-a'))
+      await waitFor(() => expect(result.current).toHaveLength(2000))
+      expect(converted).toBeLessThanOrEqual(2000)
+      expect(nOf(result.current[1999])).toBe(29999)
+    })
+
+    it('T3: a lagging live window never re-appends events older than the first covered one', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(rawSeq(1001, 3000))))
+      const { result, rerender } = renderHook(({ globalEvents }) => useStageEvents('s1', globalEvents, 'run-a'), {
+        initialProps: { globalEvents: liveSeq(1, 2950) },
+      })
+      await waitFor(() => expect(result.current[0]?.seq).toBe(1001))
+      expect(result.current).toHaveLength(2000)
+      expect(result.current[1999]?.seq).toBe(3000)
+
+      rerender({ globalEvents: liveSeq(1, 3005) })
+      expect(result.current).toHaveLength(2000)
+      expect(result.current[0]?.seq).toBe(1006)
+      expect(result.current[1999]?.seq).toBe(3005)
+    })
+
+    it('F15: an out-of-order seq-less status keeps history order and live-only runs after history', async () => {
+      const t = '2026-01-01T00:00:00.000Z'
+      const rawStatus = { type: 'stage_status_changed', stage_id: 's1', data: { status: 'running' }, timestamp: t }
+      const liveStatus: AfmEvent = { type: 'stage_status_changed', stageId: 's1', payload: { status: 'running' }, timestamp: t }
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([...rawNoSeq(1004, 2964), rawStatus, ...rawNoSeq(2965, 3000)])))
+      const live = [...liveNoSeq(1304, 3193), liveStatus, ...liveNoSeq(3194, 3300)]
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(3300))
+      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+      const pos = order.indexOf('S')
+      expect(order.slice(pos + 1)).toEqual(Array.from({ length: 3300 - 2965 + 1 }, (_, i) => 2965 + i))
+    })
+
+    it('F16: a seq-less status high in history but first in live keeps older live actions before history', async () => {
+      const t = '2026-01-01T00:00:00.000Z'
+      const rawStatus = { type: 'stage_status_changed', stage_id: 's1', data: { status: 'running' }, timestamp: t }
+      const liveStatus: AfmEvent = { type: 'stage_status_changed', stageId: 's1', payload: { status: 'running' }, timestamp: t }
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([...rawNoSeq(3001, 3212), rawStatus, ...rawNoSeq(3213, 3300)])))
+      const live = [liveStatus, ...liveNoSeq(2832, 3300)]
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(3300))
+      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+      const pos = order.indexOf('S')
+      expect(order.slice(pos)).toEqual(['S', ...Array.from({ length: 3300 - 3213 + 1 }, (_, i) => 3213 + i)])
+      const nums = order.filter((x): x is number => x !== 'S')
+      expect(nums[0]).toBe(2832)
+      expect(nums.every((n, i) => i === 0 || n > (nums[i - 1] as number))).toBe(true)
+    })
+
+    it('F17: a single outlier anchor keeps live-only events in the tail after history', async () => {
+      const t = '2026-01-01T00:00:00.000Z'
+      const rawStatus = { type: 'stage_status_changed', stage_id: 's1', data: { status: 'running' }, timestamp: t }
+      const liveStatus: AfmEvent = { type: 'stage_status_changed', stageId: 's1', payload: { status: 'running' }, timestamp: t }
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([...rawNoSeq(1004, 2964), rawStatus, ...rawNoSeq(2965, 3000)])))
+      const live = [...liveNoSeq(3002, 3193), liveStatus, ...liveNoSeq(3194, 5000)]
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(5000))
+      expect(result.current).toHaveLength(2000)
+      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+      expect(order).toEqual([3000, ...Array.from({ length: 5000 - 3002 + 1 }, (_, i) => 3002 + i)])
+    })
+
+    it('F18: two shared status events do not displace live-only events from the tail', async () => {
+      const t = '2026-01-01T00:00:00.000Z'
+      const raw = (status: string) => ({ type: 'stage_status_changed', stage_id: 's1', data: { status }, timestamp: t })
+      const live_ = (status: string): AfmEvent => ({ type: 'stage_status_changed', stageId: 's1', payload: { status }, timestamp: t })
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify([...rawNoSeq(1003, 2964), raw('paused'), raw('running'), ...rawNoSeq(2965, 3000)])),
+      )
+      const live = [...liveNoSeq(3003, 3193), live_('paused'), live_('running'), ...liveNoSeq(3194, 5000)]
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(5000))
+      expect(result.current).toHaveLength(2000)
+      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+      expect(order).toEqual([2999, 3000, ...Array.from({ length: 5000 - 3003 + 1 }, (_, i) => 3003 + i)])
+    })
+
+    it('F19: a single genuine action anchor keeps older live actions before history', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(rawNoSeq(1001, 3000))))
+      const live = liveNoSeq(1, 1001)
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(3000))
+      expect(result.current.map(nOf)).toEqual(Array.from({ length: 2000 }, (_, i) => 1001 + i))
+    })
+
+    it('F13: an old shared status event does not move older live actions after history', async () => {
+      const rawStatus = { type: 'stage_status_changed', stage_id: 's1', seq: 1000000, data: { status: 'running' }, timestamp: '2026-01-01T00:00:00.000Z' }
+      const liveStatus: AfmEvent = { type: 'stage_status_changed', stageId: 's1', payload: { status: 'running' }, timestamp: '2026-01-01T00:00:00.000Z', seq: 1000000 }
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([rawStatus, ...rawSeq(1301, 3300)])))
+      const live = [liveStatus, ...liveSeq(1, 3300)]
+      const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
+      await waitFor(() => expect(result.current.some((e) => e.seq === 1301)).toBe(true))
+      const seqs = result.current.filter((e) => e.type === 'agent_action').map((e) => e.seq as number)
+      expect(seqs[0]).toBe(1301)
+      expect(seqs).toHaveLength(2000 - 1 + (result.current.some((e) => e.type === 'stage_status_changed') ? 0 : 1))
+      expect(seqs[seqs.length - 1]).toBe(3300)
+      expect(seqs.every((s, i) => i === 0 || s > (seqs[i - 1] as number))).toBe(true)
+    })
+  })
 })

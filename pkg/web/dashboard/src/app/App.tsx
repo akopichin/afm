@@ -56,7 +56,6 @@ import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
 import { usePauseOnFocus } from '../hooks/use-pause-on-focus'
 import { useIsEditing } from '../hooks/use-is-editing'
 import { useFeedFocus } from '../hooks/use-feed-focus'
-import { SIGNIFICANT_EVENT_TYPES } from '../types'
 
 // Подписи контекстной вкладки воркспейса по виду attention (Approval/Question/…).
 const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
@@ -129,7 +128,7 @@ export function App(): ReactElement {
   }
 
   const wsUrl = buildWebSocketUrl()
-  const { events, connected, activity: liveActivity } = useEventFeed(wsUrl, runId)
+  const { events, arrivals, connected, activity: liveActivity, significantVersion } = useEventFeed(wsUrl, runId)
 
   // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано справа от рейла: Feed,
   // контекстный attention или read-only просмотр истории плана/диалога.
@@ -197,6 +196,7 @@ export function App(): ReactElement {
   )
   const [feedReplies, setFeedReplies] = useState<{ stageId: string | null; count: number }>({ stageId: null, count: 0 })
   const reportFeedReplies = useCallback((stageId: string | null, count: number) => setFeedReplies({ stageId, count }), [])
+  const replyJumpRef = useRef<(() => void) | null>(null)
   const [peoplePick, setPeoplePick] = useState<MeshPick | null>(null)
   const closePeople = useCallback(() => setPeopleOpen(false), [setPeopleOpen])
   // addedParticipants — run agents added from the people panel that the roster poll has not reported yet.
@@ -511,21 +511,15 @@ export function App(): ReactElement {
   const idleMs = useIdleMs(idleAccumulatedMs, idleSince, statusLive)
   const backoffMs = useBackoffMs(backoffAccumulatedMs, backoffOpenSince, statusLive)
 
-  const lastRefreshedEvent = useRef<object | null>(null)
+  const lastRefreshedVersion = useRef(0)
 
   // WebSocket как канал обновления: значимое событие → ре-запрос состояния флоу.
   useEffect(() => {
-    if (events.length === 0) return
+    if (significantVersion === lastRefreshedVersion.current) return
 
-    // Сравниваем ссылку на последнее событие: длина ленты перестаёт меняться после MAX_EVENTS.
-    const latest = events[events.length - 1]
-    if (latest === undefined || latest === lastRefreshedEvent.current) return
-
-    lastRefreshedEvent.current = latest
-    if (SIGNIFICANT_EVENT_TYPES.has(latest.type)) {
-      refresh()
-    }
-  }, [events, refresh])
+    lastRefreshedVersion.current = significantVersion
+    refresh()
+  }, [significantVersion, refresh])
 
   // Очередь attention и позиция активного элемента — для навигации prev/next между несколькими стадиями,
   // ждущими действия. Очередь ведёт сам редьюсер (wsState.items).
@@ -779,6 +773,7 @@ export function App(): ReactElement {
                     feedFocus={focusAvailable ? { active: feedFocus.active, onToggle: feedFocus.toggle, target: stageFeedShown ? 'feed' : 'view', onShowFeed: stageFeedShown ? undefined : openFeed } : undefined}
                     pendingAttention={beacon ?? undefined}
                     replyNeeded={wsState.view === 'feed' && feedReplies.stageId === workspaceStage.id ? feedReplies.count : 0}
+                    onReplyJump={() => replyJumpRef.current?.()}
                     attentionNav={
                       inAttention && attnIndex >= 0 && attnItems.length > 1
                         ? { pos: attnIndex + 1, total: attnItems.length, onPrev: () => goAttention(-1), onNext: () => goAttention(1) }
@@ -840,6 +835,7 @@ export function App(): ReactElement {
                     <FeedWorkspace
                       key={runId}
                       events={stageEvents}
+                      arrivals={workspaceStage === null ? 0 : (arrivals.stages.get(workspaceStage.id) ?? 0)}
                       stageId={workspaceStage?.id ?? null}
                       emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                       onOpenDialog={handleOpenDialogFromFeed}
@@ -870,6 +866,7 @@ export function App(): ReactElement {
                       reviseAvailable={reviseAvailable}
                       paused={workspaceStage?.status === 'paused' || flowPauseState !== 'none'}
                       onReplyNeededChange={reportFeedReplies}
+                      replyJumpRef={replyJumpRef}
                       aboveFeed={
                         wsState.view === 'feed' && selection?.kind === 'stage' && workspaceStage !== null ? (
                           <StageNote
@@ -955,7 +952,7 @@ export function App(): ReactElement {
                     in-flight sends (with their idempotency keys), selection and reading position live in it. */}
                 {teamOpenedRun === runId && teamViewsAvailable && (
                   <div style={{ display: wsState.view === 'team' ? 'contents' : 'none' }}>
-                    <TeamView key={runId} runId={runId} active={wsState.view === 'team'} roster={mergedRoster} onParticipantAdded={addParticipant} board={meshBoard} stages={stages} events={events} profiles={assistantProfiles} />
+                    <TeamView key={runId} runId={runId} active={wsState.view === 'team'} roster={mergedRoster} onParticipantAdded={addParticipant} board={meshBoard} stages={stages} events={events} meshArrivals={arrivals.mesh} profiles={assistantProfiles} />
                   </div>
                 )}
               </div>

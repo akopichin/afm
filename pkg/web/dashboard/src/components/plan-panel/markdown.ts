@@ -86,6 +86,38 @@ export function renderPlainMarkdown(text: string): string {
   return md.render(text)
 }
 
+type MarkdownCacheLimits = { maxEntries: number; maxChars: number }
+
+// LRU поверх Map (порядок вставки = порядок свежести): лимит и по числу записей, и по сумме длин входа,
+// чтобы кэш не рос вместе с раном.
+export function createMarkdownCache<T = string>(render: (text: string) => T, limits: MarkdownCacheLimits): (text: string) => T {
+  const entries = new Map<string, T>()
+  let totalChars = 0
+  return (text) => {
+    const cached = entries.get(text)
+    if (cached !== undefined) {
+      entries.delete(text)
+      entries.set(text, cached)
+      return cached
+    }
+    const html = render(text)
+    if (text.length > limits.maxChars) return html
+    entries.set(text, html)
+    totalChars += text.length
+    for (const [oldest] of entries) {
+      if (entries.size <= limits.maxEntries && totalChars <= limits.maxChars) break
+      entries.delete(oldest)
+      totalChars -= oldest.length
+    }
+    return html
+  }
+}
+
+// Строки ленты не меняются между рендерами: неизменённый текст не разбирается заново.
+const FEED_CACHE_LIMITS = { maxEntries: 500, maxChars: 2_000_000 }
+export const renderPlainMarkdownCached = createMarkdownCache(renderPlainMarkdown, FEED_CACHE_LIMITS)
+export const renderMarkdownCached = createMarkdownCache(renderMarkdown, FEED_CACHE_LIMITS)
+
 export function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

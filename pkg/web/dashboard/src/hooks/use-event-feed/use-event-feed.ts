@@ -1,44 +1,91 @@
-import { useEffect, useState } from 'react'
-import type { AfmEvent } from '../../types'
+import { useEffect, useRef, useState } from 'react'
+import { SIGNIFICANT_EVENT_TYPES, type AfmEvent } from '../../types'
 import { parseAssistantActivity, type AssistantActivityEntry } from '../../types/assistant-activity'
 import { useRunEpoch } from '../use-run-epoch'
+import { EventBuffer, NO_ARRIVALS, type ArrivalCounts } from './event-buffer'
 
 // Подписка на WebSocket /ws с автопереконнектом и keepalive. Heartbeat от сервера в ленту событий НЕ
 // попадает (liveness only).
 const INITIAL_RECONNECT_DELAY_MS = 1000
 const MAX_RECONNECT_DELAY_MS = 10000
-// Лента событий ограничена.
-const MAX_EVENTS = 10000
+// Входящие события копятся и публикуются не чаще раза за это окно: число рендеров ограничено частотой flush,
+// а не потоком событий. Значимые события публикуются сразу.
+export const FEED_FLUSH_MS = 80
 // Живой хвост активности помощников — отдельное кольцо: объёмный поток не должен вытеснять события стадий и
 // не запускает обновление статуса. Полноту истории обеспечивает опрос /activity, а не сокет.
 const MAX_LIVE_ACTIVITY = 2000
 const ACTIVITY_EVENT_TYPE = 'assistant_activity'
 const WATCHDOG_INTERVAL_MS = 5000
 const WATCHDOG_SILENCE_MS = 75000
-// Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ. agent_action/script_output намеренно
-// исключены — легитимные одинаковые повторы не должны схлопываться.
-const CONTENT_DEDUPE_ON_INGEST = new Set(['agent_note', 'script_failed'])
 
 // runId нужен, чтобы пережить авто-повтор флоу: при смене рана старый сокет закрывается, лента очищается и
 // история нового рана грузится заново (seq у каждого рана свой, поэтому смешивать нельзя).
+// significantVersion растёт на каждой публикации, где было значимое событие: по нему App обновляет состояние
+// флоу, даже если значимое событие оказалось не последним в пачке.
 export function useEventFeed(
   url: string,
   runId: string,
-): { events: AfmEvent[]; connected: boolean; activity: AssistantActivityEntry[] } {
+): { events: AfmEvent[]; arrivals: ArrivalCounts; connected: boolean; activity: AssistantActivityEntry[]; significantVersion: number } {
   const [events, setEvents] = useState<AfmEvent[]>([])
+  // Принятые live-события нарастающим итогом, публикуются вместе с events: по ним считают непросмотренное.
+  const [arrivals, setArrivals] = useState(NO_ARRIVALS)
   const [activity, setActivity] = useState<AssistantActivityEntry[]>([])
   const [connected, setConnected] = useState(false)
+  const [significantVersion, setSignificantVersion] = useState(0)
   const runEpoch = useRunEpoch(runId)
   const [feedEpoch, setFeedEpoch] = useState(runEpoch)
+  // Окно живёт между переподключениями одного рана (смена url) и пересоздаётся при смене рана.
+  const bufferRef = useRef<{ epoch: number; buffer: EventBuffer } | null>(null)
   if (feedEpoch !== runEpoch) {
     setFeedEpoch(runEpoch)
     setEvents([])
+    setArrivals(NO_ARRIVALS)
     setActivity([])
     setConnected(false)
   }
 
   useEffect(() => {
+    if (bufferRef.current?.epoch !== runEpoch) bufferRef.current = { epoch: runEpoch, buffer: new EventBuffer() }
+    const buffer = bufferRef.current.buffer
+    let activityQueue: AssistantActivityEntry[] = []
+    let hasSignificantQueued = false
+    let flushTimer: ReturnType<typeof setTimeout> | undefined
     let cancelledFetch = false
+
+    function stopFlushTimer() {
+      if (flushTimer === undefined) return
+      clearTimeout(flushTimer)
+      flushTimer = undefined
+    }
+
+    function scheduleFlush() {
+      flushTimer ??= setTimeout(flush, FEED_FLUSH_MS)
+    }
+
+    function flushActivity() {
+      if (activityQueue.length === 0) return
+      const batch = activityQueue
+      activityQueue = []
+      setActivity((prev) => prev.concat(batch).slice(-MAX_LIVE_ACTIVITY))
+    }
+
+    // Публикует очередь: один setEvents и один setActivity на flush.
+    function flush() {
+      stopFlushTimer()
+
+      const next = buffer.flush()
+      if (next !== null) {
+        setEvents(next)
+        setArrivals(buffer.arrivals())
+      }
+
+      flushActivity()
+
+      if (hasSignificantQueued) {
+        hasSignificantQueued = false
+        setSignificantVersion((v) => v + 1)
+      }
+    }
 
     // Тянет /api/events и мёржит с уже накопленными live-событиями.
     function syncHistory() {
@@ -46,8 +93,16 @@ export function useEventFeed(
         .then((r) => (r.ok ? r.json() : []))
         .then((raw: unknown) => {
           if (cancelledFetch || !Array.isArray(raw)) return
-          const history = raw.map(toEvent)
-          setEvents((prev) => mergeCapped(history, prev, MAX_EVENTS))
+          // Очередь событий входит в слияние, поэтому flush-таймер не нужен; очередь активности публикуем здесь же.
+          stopFlushTimer()
+          const merged = buffer.merge(raw.map(toEvent))
+          setEvents(merged.events)
+          setArrivals(buffer.arrivals())
+          flushActivity()
+          if (merged.hasNewSignificant || hasSignificantQueued) {
+            hasSignificantQueued = false
+            setSignificantVersion((v) => v + 1)
+          }
         })
         .catch(() => {
           // /api/events недоступен (старая сборка сервера, сетевая ошибка) —
@@ -80,6 +135,7 @@ export function useEventFeed(
 
       socket.onclose = () => {
         if (cancelled) return
+        flush()
         setConnected(false)
         reconnectTimer = setTimeout(connect, reconnectDelay)
         reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS)
@@ -98,30 +154,26 @@ export function useEventFeed(
         // Heartbeat обновляет lastMessageAt (keepalive), но в ленту не попадает.
         if (isHeartbeat(raw)) return
 
-        // Активность помощника не событие ленты: мимо кольца событий и дедупа, в своё ограниченное кольцо.
+        // Активность помощника не событие ленты: мимо окна событий и дедупа, в своё ограниченное кольцо.
         if (isActivityMessage(raw)) {
           const entry = parseAssistantActivity(raw.data)
-          if (entry !== null) setActivity((prev) => [...prev, entry].slice(-MAX_LIVE_ACTIVITY))
+          if (entry !== null) {
+            activityQueue.push(entry)
+            scheduleFlush()
+          }
           return
         }
 
         // Единственная точка приведения типа для данных входящего сообщения.
         const event = toEvent(raw)
-        setEvents((prev) => {
-          // Схлопываем подряд идущие одинаковые смены статуса одной стадии: бэкенд фиксирует переход один
-          // раз, но повторы не должны засорять ленту.
-          const last = prev[prev.length - 1]
-          if (last !== undefined && isSameStatusEvent(last, event)) return prev
+        if (!buffer.push(event)) return
 
-          // Дедупим контент только CONTENT_DEDUPE_ON_INGEST; dialog использует именованные поля, а повторы
-          // agent_action/script_output сохраняем.
-          if (isDialogContentEvent(event) || CONTENT_DEDUPE_ON_INGEST.has(event.type)) {
-            const key = feedDedupeKey(event)
-            if (prev.some((e) => feedDedupeKey(e) === key)) return prev
-          }
-
-          return [...prev, event].slice(-MAX_EVENTS)
-        })
+        if (SIGNIFICANT_EVENT_TYPES.has(event.type)) {
+          hasSignificantQueued = true
+          flush()
+        } else {
+          scheduleFlush()
+        }
       }
     }
 
@@ -139,13 +191,15 @@ export function useEventFeed(
     return () => {
       cancelledFetch = true
       cancelled = true
+      stopFlushTimer()
+      buffer.discardPending()
       if (reconnectTimer !== undefined) clearTimeout(reconnectTimer)
       if (watchdogTimer !== undefined) clearInterval(watchdogTimer)
       socket?.close()
     }
   }, [url, runEpoch])
 
-  return { events, connected, activity }
+  return { events, arrivals, connected, activity, significantVersion }
 }
 
 function isHeartbeat(raw: unknown): boolean {
@@ -156,63 +210,8 @@ function isActivityMessage(raw: unknown): raw is { type: string; data?: unknown 
   return isRecord(raw) && raw.type === ACTIVITY_EVENT_TYPE
 }
 
-// Два события — это один и тот же переход статуса стадии (та же стадия, тот же
-// целевой статус). Используется для схлопывания подряд идущих дубликатов в ленте.
-function isSameStatusEvent(a: AfmEvent, b: AfmEvent): boolean {
-  return (
-    a.type === 'stage_status_changed' &&
-    b.type === 'stage_status_changed' &&
-    a.stageId === b.stageId &&
-    statusOf(a) === statusOf(b)
-  )
-}
-
-// dedupeKey — стабильный ключ дедупликации между историей из /api/events и live-событиями WebSocket.
-function dedupeKey(e: AfmEvent): string {
-  if (e.seq !== undefined) return `seq:${e.seq}|${e.type}`
-  return `${e.type}|${e.stageId}|${JSON.stringify(e.payload)}`
-}
-
-// isDialogContentEvent — событие принадлежит «семейству диалога»: dialog_question, dialog_answer, а также
-// auto_answered ТОЛЬКО когда это настоящий авто-ответ на вопрос.
-function isDialogContentEvent(e: AfmEvent): boolean {
-  if (e.type === 'dialog_question' || e.type === 'dialog_answer') return true
-  if (e.type !== 'auto_answered') return false
-  const p = e.payload
-  return typeof p === 'object' && p !== null && (p as { dialog?: unknown }).dialog === true
-}
-
-// dialogContentKey зеркалит серверный ключ из именованных полей; текст различает повторно использованные
-// phase/id, порядок JSON-ключей не важен.
-function dialogContentKey(e: AfmEvent): string {
-  const p = e.payload
-  const obj = typeof p === 'object' && p !== null ? (p as Record<string, unknown>) : {}
-  const field = (v: unknown): string => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v))
-  return `${e.type}|${e.stageId}|${field(obj.phase)}|${field(obj.id)}|${field(obj.title)}|${field(obj.question_title)}|${field(obj.answer)}`
-}
-
-// feedDedupeKey — единый дедуп-ключ для ленты, используемый И ингест-путём, И mergeCapped: семейство
-// диалога → контент-ключ из именованных полей, всё остальное → прежний dedupeKey.
-function feedDedupeKey(e: AfmEvent): string {
-  return isDialogContentEvent(e) ? dialogContentKey(e) : dedupeKey(e)
-}
-
-// mergeCapped сливает историю из /api/events с уже накопленными live-событиями. Раньше было наоборот —
-// [...deduped, ...live], где deduped = history без live-ключей.
-export function mergeCapped(history: AfmEvent[], live: AfmEvent[], cap: number): AfmEvent[] {
-  const historyKeys = new Set(history.map(feedDedupeKey))
-  const liveOnly = live.filter((e) => !historyKeys.has(feedDedupeKey(e)))
-  return [...history, ...liveOnly].slice(-cap)
-}
-
-function statusOf(event: AfmEvent): string {
-  const data = event.payload
-  if (typeof data === 'string') return data
-  if (isRecord(data) && typeof data.status === 'string') return data.status
-  return ''
-}
-
-function toEvent(raw: unknown): AfmEvent {
+// Переиспользуется per-stage лентой при разборе своего фетча — единая точка приведения типа.
+export function toEvent(raw: unknown): AfmEvent {
   const obj = isRecord(raw) ? raw : {}
 
   // Берём timestamp из payload истории; для live WS используем время приёма.
@@ -231,7 +230,3 @@ function toEvent(raw: unknown): AfmEvent {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object'
 }
-
-// dedupeKey/toEvent переиспользуются per-stage лентой при разборе своего собственного фетча — единая точка
-// приведения типа и дедуп-ключа для истории и live-потока, не дублируется.
-export { dedupeKey, toEvent }
