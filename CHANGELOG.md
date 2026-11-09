@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-09
+
+### Fix:
+
+- Keep custom answers enabled when a dialog history question omits `allow_custom`
+  or sets it to `null`. An explicit `false` still restricts answers to the options.
+
 ## 2026-11-07
 
 ### Improvement:

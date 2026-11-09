@@ -1149,6 +1149,41 @@ func TestDialogGetNoDialogFile(t *testing.T) {
 	}
 }
 
+func TestBuildDialogEntries_AllowCustomDefaultsInHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		want  bool
+	}{
+		{"omitted", "", true},
+		{"null", `,"allow_custom":null`, true},
+		{"false", `,"allow_custom":false`, false},
+		{"true", `,"allow_custom":true`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			raw := `{"id":"q1","question":"Choose?","options":["A","B"]` + tc.field + `}`
+			if err := os.WriteFile(filepath.Join(dir, "planning.q1.question.json"), []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, withHistory := range []bool{false, true} {
+				if withHistory {
+					if err := os.WriteFile(mcp.DialogPath(dir, "planning"), []byte(raw+"\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				entries := buildDialogEntries(dir, true)
+				if len(entries) != 1 || entries[0].ID != "q1" || entries[0].Answer != nil {
+					t.Fatalf("history=%v: unexpected entries: %+v", withHistory, entries)
+				}
+				if entries[0].AllowCustom != tc.want {
+					t.Errorf("history=%v: allow_custom=%v, want %v", withHistory, entries[0].AllowCustom, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildDialogEntries_SerializeShowsOnlyCurrent(t *testing.T) {
 	dir := t.TempDir()
 	for _, id := range []string{"q1", "q2", "q3"} {
