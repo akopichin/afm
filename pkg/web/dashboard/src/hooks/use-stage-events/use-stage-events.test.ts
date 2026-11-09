@@ -399,7 +399,7 @@ describe('useStageEvents', () => {
       )
       const live = [...liveNoSeq(3003, 3193), live_('paused'), live_('running'), ...liveNoSeq(3194, 5000)]
       const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
-      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(5000))
+      await waitFor(() => expect(nOf(result.current[0])).toBe(2999))
       expect(result.current).toHaveLength(2000)
       const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
       expect(order).toEqual([2999, 3000, ...Array.from({ length: 5000 - 3003 + 1 }, (_, i) => 3003 + i)])
