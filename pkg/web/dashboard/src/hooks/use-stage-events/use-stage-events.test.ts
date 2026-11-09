@@ -384,10 +384,12 @@ describe('useStageEvents', () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([...rawNoSeq(1004, 2964), rawStatus, ...rawNoSeq(2965, 3000)])))
       const live = [...liveNoSeq(3002, 3193), liveStatus, ...liveNoSeq(3194, 5000)]
       const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
-      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(5000))
+      // Live-only events are present before history arrives; wait for the merged result.
+      await waitFor(() => {
+        const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+        expect(order).toEqual([3000, ...Array.from({ length: 5000 - 3002 + 1 }, (_, i) => 3002 + i)])
+      })
       expect(result.current).toHaveLength(2000)
-      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
-      expect(order).toEqual([3000, ...Array.from({ length: 5000 - 3002 + 1 }, (_, i) => 3002 + i)])
     })
 
     it('F18: two shared status events do not displace live-only events from the tail', async () => {
@@ -399,10 +401,12 @@ describe('useStageEvents', () => {
       )
       const live = [...liveNoSeq(3003, 3193), live_('paused'), live_('running'), ...liveNoSeq(3194, 5000)]
       const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
-      await waitFor(() => expect(nOf(result.current[0])).toBe(2999))
+      // Live-only events are present before history arrives; wait for the merged result.
+      await waitFor(() => {
+        const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+        expect(order).toEqual([2999, 3000, ...Array.from({ length: 5000 - 3003 + 1 }, (_, i) => 3003 + i)])
+      })
       expect(result.current).toHaveLength(2000)
-      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
-      expect(order).toEqual([2999, 3000, ...Array.from({ length: 5000 - 3003 + 1 }, (_, i) => 3003 + i)])
     })
 
     it('F19: a single genuine action anchor keeps older live actions before history', async () => {

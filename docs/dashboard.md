@@ -490,13 +490,23 @@ Every stage that has started shows how long it has been going.
   spent no time yet shows `0s`. The figure for an active stage ticks every second.
 - **Cost tab** — a **Time** column with the same figures, plus a summary of
   **Run elapsed**, **Stage work**, **Stage waiting** and **Stage paused**.
-  Expand a row to see its **Time breakdown**.
+  Expand a row to see its **Time breakdown**. When a stage spent time waiting for
+  you or paused, the time carries a quiet note, such as `42m 31s (28m 35s idle)`.
+  The time still includes the idle part. Hover or focus the note to see
+  *Idle includes approval/reply waits and pauses.*
 
 Time is counted from the stage's **first start** and includes retries, waiting and
 pauses. Time before the first start (waiting for dependencies, a run that has not
 reached the stage yet) is not counted. It stops when the stage is `done` or
 `failed`, or when the run ends. **Retry** on a failed stage counts the time it
 spends waiting to be scheduled again, and the earlier time stays.
+
+The idle note is **Approval & replies** plus **Paused** from the breakdown below.
+Helper waits, backoff and scheduling are not idle. It is absent when that sum is
+zero or the stage time is unknown (`—`). It is per stage and is not the run-level
+**Idle** metric in the header. That metric counts the time when at least one stage
+is waiting for a human, so with parallel stages it is not the sum of the stages'
+idle notes.
 
 The breakdown splits the time into three groups:
 

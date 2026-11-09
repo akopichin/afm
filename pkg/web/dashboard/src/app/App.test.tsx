@@ -1411,6 +1411,56 @@ describe('App', () => {
     expect(screen.getByText('Run elapsed').parentElement).toHaveTextContent('1m 30s')
   })
 
+  test('Cost idle caption ticks with an open approval wait, freezes when stale and settles when finished', async () => {
+    vi.useFakeTimers()
+    const start = '2026-10-30T20:00:00Z'
+    vi.setSystemTime(new Date(start))
+    let stale = false
+    let finished = false
+    mockFetchForStatus(() => {
+      if (stale) throw new Error('offline')
+      return {
+        flow_name: 'timing', started_at: start, run_status: finished ? 'finished' : 'running',
+        ended_at: finished ? '2026-10-30T20:01:30Z' : null,
+        elapsed_accumulated_ms: finished ? 90000 : 0, elapsed_since: finished ? null : start,
+        accounting: null,
+        stages: [
+          { ...stageView('s1', 'Waiting stage', finished ? 'done' : 'running'), timing: {
+            started: true, complete: true, work_ms: 0, approval_ms: finished ? 90000 : 0,
+            helpers_ms: 0, backoff_ms: 0, scheduling_ms: 0, paused_ms: 0,
+            ...(finished ? {} : { open: { kind: 'approval', since: start } }),
+          } },
+        ],
+      }
+    })
+    render(<App />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+    const row = () => within(screen.getByRole('table')).getByText('s1').closest('tr')
+    const costTime = () => row()?.querySelector('.cost-col-time')
+    const idle = () => costTime()?.querySelector('.cost-idle')?.textContent
+    const railTime = () => document.querySelector('[data-stage-id="s1"] .stage-time')?.textContent
+    await act(async () => { await vi.advanceTimersByTimeAsync(61000) })
+    expect(idle()).toBe('(1m 01s idle)')
+    expect(costTime()?.querySelector('.cost-time-value')?.textContent).toBe('1m 01s')
+    expect(railTime()).toBe('1m 01s')
+    stale = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    const frozen = idle()
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(idle()).toBe(frozen)
+    stale = false
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(idle()).not.toBe(frozen)
+    finished = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(idle()).toBe('(1m 30s idle)')
+    expect(railTime()).toBe('1m 30s')
+    await act(async () => { await vi.advanceTimersByTimeAsync(61000) })
+    expect(idle()).toBe('(1m 30s idle)')
+    expect(costTime()?.querySelector('.cost-time-value')?.textContent).toBe(railTime())
+  })
+
   test('Elapsed stays at the persisted end time while the completed dashboard is open', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-25T10:00:10Z'))

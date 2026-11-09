@@ -559,6 +559,75 @@ describe('CostPanel — stage time', () => {
   })
 })
 
+describe('CostPanel — idle caption in stage rows', () => {
+  const IDLE_HINT = 'Idle includes approval/reply waits and pauses.'
+  const noWaits = { work: 60000, approval: 0, helpers: 0, backoff: 0, scheduling: 0, paused: 0 }
+  const withMs = (ms: Partial<typeof noWaits>): Stage => ({
+    ...makeStage('s'), timing: { started: true, complete: true, ms: { ...noWaits, ...ms } },
+  })
+  const timeCell = (id: string) => screen.getByText(id).closest('tr')?.querySelector('.cost-col-time')
+  const renderStages = (stages: Stage[], accounting: AccountingState = ACCOUNTING_UNSUPPORTED) =>
+    render(<CostPanel stages={stages} accounting={accounting} coverageIssues={[]} />)
+
+  test('shows the main time followed by the idle share', () => {
+    renderStages([withMs({ approval: 8000 })])
+    expect(timeCell('s')).toHaveTextContent('1m 08s (0m 08s idle)')
+    expect(timeCell('s')?.querySelector('.cost-time-value')).toHaveTextContent(/^1m 08s$/)
+  })
+
+  test('idle is approval plus paused', () => {
+    renderStages([withMs({ approval: 3000, paused: 5000 })])
+    expect(timeCell('s')).toHaveTextContent('1m 08s (0m 08s idle)')
+  })
+
+  test('helpers, backoff and scheduling alone give no caption', () => {
+    renderStages([withMs({ helpers: 2000, backoff: 1000, scheduling: 4000 })])
+    expect(timeCell('s')).toHaveTextContent(/^1m 07s$/)
+  })
+
+  test('a mix counts only approval and paused', () => {
+    renderStages([withMs({ approval: 3000, helpers: 2000, backoff: 1000, scheduling: 4000, paused: 5000 })])
+    expect(timeCell('s')).toHaveTextContent('1m 15s (0m 08s idle)')
+  })
+
+  test.each([
+    ['zero idle', withMs({})],
+    ['timing without started', { ...makeStage('s'), timing: { started: false, complete: true } } as Stage],
+    ['incomplete timing', { ...makeStage('s'), timing: { started: true, complete: false } } as Stage],
+    ['an old server without timing', { ...makeStage('s'), timing: undefined } as Stage],
+  ])('no caption for %s', (_name, stage) => {
+    renderStages([stage])
+    expect(timeCell('s')?.textContent).not.toContain('idle')
+    expect(timeCell('s')?.querySelector('.cost-idle')).toBeNull()
+  })
+
+  test.each([ACCOUNTING_UNSUPPORTED, ACCOUNTING_OK_DATA])('works with and without usage: %j', (accounting) => {
+    renderStages([withMs({ approval: 8000 })], accounting)
+    expect(timeCell('s')).toHaveTextContent('1m 08s (0m 08s idle)')
+  })
+
+  test('Total and Run overhead carry no caption and the breakdown is unchanged', () => {
+    const stages = [{ ...withMs({ approval: 8000 }), cost: makeCost() }]
+    render(<CostPanel stages={stages} runCost={makeCost()} runOverheadCost={makeCost()} accounting={ACCOUNTING_OK_DATA} coverageIssues={[]} />)
+    expect(screen.getByText('Total').closest('tr')).not.toHaveTextContent('idle')
+    expect(screen.getByText('Run overhead').closest('tr')).not.toHaveTextContent('idle')
+    fireEvent.click(screen.getByRole('button', { name: 's' }))
+    const detail = screen.getByRole('region', { name: 's' })
+    expect(detail).toHaveTextContent('Approval & replies0m 08s')
+    expect(detail).toHaveTextContent('1m 08s total')
+    expect(detail).not.toHaveTextContent('idle')
+  })
+
+  test('the caption is focusable and described by the hint outside any cell text', () => {
+    renderStages([withMs({ approval: 8000 })])
+    const caption = timeCell('s')?.querySelector<HTMLElement>('.cost-idle')
+    expect(caption).toHaveAttribute('tabindex', '0')
+    expect(caption).toHaveAccessibleDescription(IDLE_HINT)
+    expect(caption).toHaveAttribute('data-tooltip', IDLE_HINT)
+    expect(document.querySelector('.cost-table')).not.toHaveTextContent(IDLE_HINT)
+  })
+})
+
 describe('CostPanel — Models & agents entry', () => {
   test('no entry without the analytics capability', () => {
     render(<CostPanel stages={[makeStage('s1', makeCost(), 'Build')]} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
