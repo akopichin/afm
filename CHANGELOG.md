@@ -12,6 +12,8 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Fix:
 
+- Keep custom answers enabled when a dialog history question omits `allow_custom`
+  or sets it to `null`. An explicit `false` still restricts answers to the options.
 - **Jump to latest** counts events arriving below your reading position even when the stage's event list is capped.
 
 ## 2026-11-07

@@ -62,6 +62,10 @@ Under the hood the commands use the same files as before:
 The prompt keeps a short fallback for an agent whose `afm` command is unavailable:
 it can write these files by hand, and afm reads them as usual.
 
+In question files and `<phase>.dialog.jsonl` history, an omitted or `null`
+`allow_custom` allows a free-text answer. Only an explicit `false` disables the
+custom-answer field in the dashboard.
+
 When launching `claude`, the flags
 `--print --output-format stream-json --verbose --dangerously-skip-permissions` are
 always added (`--verbose` is required for stream-json in Claude Code 2.1.x). If an
