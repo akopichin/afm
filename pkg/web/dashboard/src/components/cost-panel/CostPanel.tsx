@@ -29,6 +29,8 @@ type CostRow = {
   overhead?: boolean
 }
 
+const IDLE_HINT = 'Idle includes approval/reply waits and pauses.'
+
 function formatTokens(n: number): string {
   return n.toLocaleString('en-US')
 }
@@ -40,6 +42,7 @@ function formatCacheHit(ratio: number | null): string {
 export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, coverageIssues, accounting, onOpenDetails, usageCounts }: CostPanelProps): ReactElement {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const idBase = useId()
+  const idleHintId = `${idBase}-idle-hint`
   const usage = accounting.supported && accounting.hasData
   const money = usage && accounting.showMoney
   const unavailable = accounting.supported && accounting.health === 'unavailable'
@@ -72,6 +75,8 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
     // Position-derived DOM IDs also work for stage IDs containing spaces.
     const regionId = `${idBase}-region-${index}`
     const labelId = `${idBase}-label-${index}`
+    // Idle is human waits and pauses only; helper, backoff and scheduling waits are not idle.
+    const idleSec = row.time !== null ? row.time.approvalSec + row.time.pausedSec : 0
     return (
       <Fragment key={row.key}>
         <tr className={`cost-row${row.overhead ? ' cost-row-overhead' : ''}`}>
@@ -86,7 +91,17 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
             {row.cost !== undefined && row.cost.models.length > 0 && <span className="cost-row-meta">{row.cost.models.join(', ')}</span>}
             {row.incomplete && <span className="cost-row-meta">Incomplete time</span>}
           </td>
-          <td className="cost-col-time">{formatStageDuration(row.time?.timeSec ?? null)}</td>
+          <td className="cost-col-time">
+            <span className="cost-time-value">{formatStageDuration(row.time?.timeSec ?? null)}</span>
+            {idleSec > 0 && (
+              <>
+                {' '}
+                <span className="cost-idle" tabIndex={0} aria-describedby={idleHintId} data-tooltip={IDLE_HINT}>
+                  ({formatStageDuration(idleSec)} idle)
+                </span>
+              </>
+            )}
+          </td>
           {usage && <td className="cost-col-tokens">{row.cost ? formatTokens(row.cost.totalTokens) : '—'}</td>}
           {money && <td className="cost-col-cost">{row.cost?.displayCost ?? '—'}</td>}
         </tr>
@@ -164,6 +179,7 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
         </p>
         {!usage && <p className="empty-hint">{unavailable ? 'Cost unavailable this run' : 'No usage data'}</p>}
         {usage && runCost !== undefined && <UsageBreakdown cost={runCost} />}
+        <span id={idleHintId} hidden>{IDLE_HINT}</span>
       </div>
     </div>
   )

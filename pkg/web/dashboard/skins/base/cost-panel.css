@@ -319,6 +319,43 @@
   font-variant-numeric: tabular-nums;
 }
 .cost-table thead .cost-col-time { font-family: inherit; font-size: 12px; }
+/* Value and idle caption never break inside; the caption moves to its own line when the cell is narrow. */
+.cost-table .cost-col-time:has(.cost-idle) { white-space: normal; }
+.cost-time-value, .cost-idle { white-space: nowrap; }
+.cost-idle {
+  position: relative;
+  color: var(--text-muted);
+  font: 11px var(--font-ui);
+  cursor: help;
+}
+.cost-idle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+/* Hint on hover and keyboard focus, right-aligned so it stays inside .cost-table-wrap. */
+.cost-idle::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
+  text-align: left;
+  box-shadow: var(--shadow-overlay);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+  z-index: 20;
+}
+.cost-idle:hover::after, .cost-idle:focus-visible::after { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) {
+  .cost-idle::after { transition: none; }
+}
 .cost-row-static { display: block; margin-left: 18px; }
 .cost-total-caption { display: block; margin-top: 4px; color: var(--text-muted); font: 11px var(--font-ui); }
 .cost-detail-row > td { background: transparent; padding: 0 12px 20px; }

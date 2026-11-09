@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Cost tab shows how much of each stage's time was idle, for example `42m 31s (28m 35s idle)`: approval/reply waits plus pauses. The time itself still includes it, and a tooltip explains the note.
 - Dashboard stays responsive and keeps a flat memory profile on long runs: live events are applied in batches, the Feed shows the latest 150 rows with **Show earlier**, tool-call series render their calls only when expanded, and the Team Activity tab renders only while selected.
 - Add the `scripts/dashboard-load/` fixture (fake agent, no LLM) to measure dashboard memory and render cost on tens of thousands of events.
 
