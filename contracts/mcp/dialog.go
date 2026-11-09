@@ -120,7 +120,8 @@ func ReadDialog(path string) ([]Entry, error) {
 			e.FromOptions = a.FromOptions
 			e.AutoAnswered = a.AutoAnswered
 		} else {
-			var q Question
+			// Missing and null values keep the same default as question files.
+			q := Question{AllowCustom: true}
 			if err := json.Unmarshal([]byte(line), &q); err != nil {
 				continue
 			}

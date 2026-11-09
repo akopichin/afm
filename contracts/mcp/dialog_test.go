@@ -69,6 +69,38 @@ func TestReadOpenQuestion(t *testing.T) {
 	}
 }
 
+func TestReadDialog_AllowCustomDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"omitted", `{"id":"q1","question":"Choose?","options":["A","B"]}`, true},
+		{"null", `{"id":"q1","question":"Choose?","options":["A","B"],"allow_custom":null}`, true},
+		{"false", `{"id":"q1","question":"Choose?","options":["A","B"],"allow_custom":false}`, false},
+		{"true", `{"id":"q1","question":"Choose?","options":["A","B"],"allow_custom":true}`, true},
+		{"no_options", `{"id":"q1","question":"Your answer?"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "planning.dialog.jsonl")
+			previous := `{"id":"q0","question":"Previous?","options":["A"],"allow_custom":false}`
+			if err := os.WriteFile(path, []byte(previous+"\n"+tc.raw+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := mcp.ReadDialog(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 2 || entries[1].ID != testQ1 {
+				t.Fatalf("unexpected entries: %+v", entries)
+			}
+			if entries[0].AllowCustom || entries[1].AllowCustom != tc.want {
+				t.Fatalf("allow_custom: previous=%v, current=%v; want false, %v", entries[0].AllowCustom, entries[1].AllowCustom, tc.want)
+			}
+		})
+	}
+}
+
 func TestFindEntry(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "d.jsonl")
