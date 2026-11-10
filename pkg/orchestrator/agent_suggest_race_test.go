@@ -21,6 +21,7 @@ import (
 type naturalCompletionRaceRunner struct {
 	t       testing.TB
 	calls   int
+	started chan struct{}
 	proceed chan struct{} // test closes this only after Revise() has returned,
 	// Block completion until Revise has durably changed status and saved feedback.
 	secondCallFeedback string // captured feedback.md content on the reconciliation restart
@@ -35,6 +36,7 @@ func (r *naturalCompletionRaceRunner) RunAgent(_ context.Context, _, _, _, logFi
 	r.calls++
 	stageDir := filepath.Dir(logFile)
 	if r.calls == 1 {
+		close(r.started)
 		orchestrator.AwaitReleaseForTest(r.t, r.proceed)
 		// Natural completion: the agent finished its work on its own, with no idea that Revise had already fire
 		// EvRevise and send a signal into interruptChans that nobody will ever read.
@@ -69,7 +71,7 @@ func TestAgentSuggest_NaturalCompletionRaceReconciles(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	stateFile := filepath.Join(runDir, "state.json")
 
-	runner := &naturalCompletionRaceRunner{t: t, proceed: make(chan struct{})}
+	runner := &naturalCompletionRaceRunner{t: t, started: make(chan struct{}), proceed: make(chan struct{})}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir:  runDir,
 		Stages:  stages,
@@ -83,6 +85,12 @@ func TestAgentSuggest_NaturalCompletionRaceReconciles(t *testing.T) {
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "impl", state.StatusRunning, 10*time.Second)
+	// Running is committed before the agent starts; this race requires a live first invocation.
+	select {
+	case <-runner.started:
+	case <-ctx.Done():
+		t.Fatal("first agent invocation did not start")
+	}
 
 	// Fires EvRevise and durably saves feedback.md BEFORE this call returns.
 	if _, _, err := orch.Revise(ctx, "impl", "please add extra logging"); err != nil {

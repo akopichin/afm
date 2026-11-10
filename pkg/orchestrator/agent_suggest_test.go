@@ -20,6 +20,7 @@ import (
 // feedback на втором вызове.
 type blockingThenFeedbackRunner struct {
 	calls   int
+	started chan struct{}
 	orch    *orchestrator.Orchestrator // выставляется тестом после New(), до Run()
 	stageID string
 }
@@ -40,6 +41,7 @@ func (r *blockingThenFeedbackRunner) RunAgent(ctx context.Context, _, _, _, logF
 			<-ctx.Done()
 			return context.Canceled
 		}
+		close(r.started)
 		select {
 		case <-ch:
 			return executor.ErrUserInterrupted
@@ -76,7 +78,7 @@ func TestAgentSuggest_InterruptRestartsWithFeedback(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	stateFile := filepath.Join(runDir, "state.json")
 
-	runner := &blockingThenFeedbackRunner{stageID: "impl"}
+	runner := &blockingThenFeedbackRunner{stageID: "impl", started: make(chan struct{})}
 	cfg := config.Default()
 
 	orch := orchestrator.New(orchestrator.Options{
@@ -93,6 +95,12 @@ func TestAgentSuggest_InterruptRestartsWithFeedback(t *testing.T) {
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "impl", state.StatusRunning, 10*time.Second)
+	// Running precedes RunAgent, so wait until the first invocation has its interrupt channel.
+	select {
+	case <-runner.started:
+	case <-ctx.Done():
+		t.Fatal("first agent invocation did not start")
+	}
 
 	// planning уже должно было пройти (agents: [planning, implementation]),
 	// implementation блокируется в blockingThenFeedbackRunner.RunAgent.
