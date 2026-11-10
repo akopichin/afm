@@ -41,7 +41,9 @@ func (r *blockingThenFeedbackRunner) RunAgent(ctx context.Context, _, _, _, logF
 			<-ctx.Done()
 			return context.Canceled
 		}
-		close(r.started)
+		if r.started != nil {
+			close(r.started)
+		}
 		select {
 		case <-ch:
 			return executor.ErrUserInterrupted

@@ -30,7 +30,7 @@ func TestButton_DeliversPromptViaRevise(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	stateFile := filepath.Join(runDir, "state.json")
 
-	runner := &blockingThenFeedbackRunner{stageID: "impl"}
+	runner := &blockingThenFeedbackRunner{stageID: "impl", started: make(chan struct{})}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir:  runDir,
 		Stages:  stages,
@@ -45,6 +45,11 @@ func TestButton_DeliversPromptViaRevise(t *testing.T) {
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
 	waitForStatus(t, stateFile, "impl", state.StatusRunning, 10*time.Second)
+	select {
+	case <-runner.started:
+	case <-ctx.Done():
+		t.Fatal("first agent invocation did not start")
+	}
 
 	if err := orch.Button(ctx, "impl", "Run linter"); err != nil {
 		t.Fatalf("Button: %v", err)
