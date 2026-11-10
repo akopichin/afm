@@ -140,8 +140,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	}
 
 	cmd := o.stageCommand(s)
-	// Interactive stages always need the claude stream-json flags (incl. --verbose,
-	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
+	// Interactive stages need the stream protocol even when the command is a Claude-compatible wrapper.
 	cfg := o.baseStageExecutorConfig(s, phase, cmd, executor.ResolveArgs(o.opts.Config.Client.ExtraArgs))
 	cfg.SessionID = sessionID
 	cfg.Resume = resume

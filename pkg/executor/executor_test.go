@@ -658,7 +658,7 @@ func TestDefaultClaudeArgsContainsVerbose(t *testing.T) {
 	}
 }
 
-func TestResolveArgsDedupsVerbose(t *testing.T) {
+func TestResolveArgsPreservesExtraVerbose(t *testing.T) {
 	got := executor.ResolveArgs([]string{"--verbose", "--model", "foo"})
 	count := 0
 	for _, a := range got {
@@ -666,8 +666,8 @@ func TestResolveArgsDedupsVerbose(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 {
-		t.Errorf("--verbose count=%d, want 1; args=%v", count, got)
+	if count != 2 {
+		t.Errorf("--verbose count=%d, want the default and the supplied option; args=%v", count, got)
 	}
 	if !argContains(got, "--model") || !argContains(got, "foo") {
 		t.Errorf("user args lost: %v", got)

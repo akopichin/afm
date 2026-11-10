@@ -109,6 +109,19 @@ docker:
   #            auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" } }
 ```
 
+For the default `client.command: claude`, `client.extra_args` extends the standard
+`--print --output-format stream-json --verbose --dangerously-skip-permissions`
+arguments. For example, `extra_args: [--model, sonnet]` keeps streaming and file
+write permissions on non-interactive stages and the Assistant as well as on
+interactive stages. You do not need to repeat the standard arguments. Keep the
+stream output format enabled: afm uses it to display agent activity.
+
+Argument order and repeated values are preserved, including
+`[--model, sonnet, --fallback-model, sonnet]` and repeated `--add-dir` options.
+For non-interactive stages using another client command, a non-empty `extra_args`
+list still supplies the whole argument list. Such commands must emit the expected
+stream format themselves.
+
 A recipe of `type: cursor` runs the local `cursor-agent` CLI from the Docker image: it
 needs no `url` (a value is ignored), its `auth.to` is `env:CURSOR_API_KEY` and `model`
 defaults to `auto`. See [Docker mode](docker.md#non-claude-agents-in-docker-autoshim).

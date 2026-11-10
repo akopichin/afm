@@ -219,28 +219,22 @@ func DefaultClaudeArgs() []string {
 	return []string{"--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"}
 }
 
-// ResolveArgs prepends DefaultClaudeArgs to extra and drops exact duplicates.
+// ResolveArgs prepends the protocol flags once. User arguments stay intact: repeated values and flags
+// can belong to different options, so deduplicating individual tokens corrupts argv.
 func ResolveArgs(extra []string) []string {
-	merged := append(append([]string{}, DefaultClaudeArgs()...), extra...)
-	seen := make(map[string]bool, len(merged))
-	out := make([]string, 0, len(merged))
-	for _, a := range merged {
-		if seen[a] {
-			continue
-		}
-		seen[a] = true
-		out = append(out, a)
+	defaults := DefaultClaudeArgs()
+	if len(extra) >= len(defaults) && slices.Equal(extra[:len(defaults)], defaults) {
+		return slices.Clone(extra)
 	}
-	return out
+	return append(defaults, extra...)
 }
 
 // modelArgFlags — единственные флаги client.extra_args, которые наследует helper: выбор модели и уровня
 // рассуждения. Остальное (--resume, --mcp-config, пути, чужие флаги) принадлежит агенту стадии.
 var modelArgFlags = []string{"--model", "--fallback-model", "--effort"}
 
-// HelperModelArgs оставляет в extra только пары --model/--fallback-model/--effort в обеих формах записи
-// (`--model X` и `--model=X`). Дубли не удаляются: ResolveArgs сломал бы пары `--model X --fallback-model X`.
-// Флаг без значения отбрасывается.
+// HelperModelArgs leaves only complete model/effort options, preserving both --flag value and --flag=value.
+// Other arguments belong to the author's session and must not reach a helper.
 func HelperModelArgs(extra []string) []string {
 	var out []string
 	for i := 0; i < len(extra); i++ {
@@ -297,8 +291,10 @@ func New(cfg Config) *Executor {
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = 30 * time.Minute
 	}
-	// For claude-compatible commands, prepend default stream-json flags if no custom args set.
-	if len(cfg.ExtraArgs) == 0 {
+	// Claude's extra options must not disable the stream protocol. Other commands may use a custom argv.
+	if isClaudeCommand(cfg.Command) {
+		cfg.ExtraArgs = ResolveArgs(cfg.ExtraArgs)
+	} else if len(cfg.ExtraArgs) == 0 {
 		cfg.ExtraArgs = DefaultClaudeArgs()
 	}
 	return &Executor{cfg: cfg}

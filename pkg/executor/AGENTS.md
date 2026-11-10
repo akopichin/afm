@@ -30,6 +30,8 @@
   иначе id наблюдений после рестарта повторятся.
 - `Config.Dir` — CWD агента; абсолютный `Config.StageDir` передаётся как
   `AFM_STAGE_DIR`. Эти пути независимы.
+- Для команды `claude` дополнительные аргументы сохраняют обязательные stream-json флаги.
+  Не дедуплицируй отдельные токены argv: одинаковые значения могут принадлежать разным опциям.
 - Verify и helper запуски используют свежую изолированную сессию без stage
   dialog-env и managed browser. Memory/JSON-fix тоже не наследуют `AFM_STAGE_DIR`.
 - Сохраняй общий фильтр cross-agent transport secrets, включая shell-verify.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-10
+
+### Fix:
+
+- Preserve Claude's streaming and permission flags when `client.extra_args` adds
+  options such as `--model`, including on non-interactive stages and the Assistant.
+  Keep repeated argument values and options intact instead of deduplicating argv
+  tokens, so `--model sonnet --fallback-model sonnet` remains valid.
+
 ## 2026-11-09
 
 ### Fix:
