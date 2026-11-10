@@ -3,6 +3,15 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-10
+
+### Fix:
+
+- Preserve Claude streaming and permission flags when `client.extra_args` adds
+  options such as `--model`, including non-interactive stages and the Assistant.
+  Keep repeated argument values and options intact, including
+  `--model sonnet --fallback-model sonnet`.
+
 ## 2026-11-09
 
 ### Improvement:
