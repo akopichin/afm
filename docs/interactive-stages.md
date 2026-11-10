@@ -64,7 +64,9 @@ it can write these files by hand, and afm reads them as usual.
 
 In question files and `<phase>.dialog.jsonl` history, an omitted or `null`
 `allow_custom` allows a free-text answer. Only an explicit `false` disables the
-custom-answer field in the dashboard.
+custom-answer field and inline question feedback in the dashboard. Feedback is
+submitted as a free-text answer, so these questions must be answered with one of
+their listed options. Existing comment drafts remain available to view or copy.
 
 When launching `claude`, the flags
 `--print --output-format stream-json --verbose --dangerously-skip-permissions` are

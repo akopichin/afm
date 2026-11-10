@@ -181,7 +181,7 @@ describe('DialogChannel', () => {
     await waitFor(() => expect(container.querySelector('#dialog-pending.dialog-flash')).not.toBeNull())
   })
 
-  test('free-input field is disabled when allow_custom is false', async () => {
+  test('allow_custom:false disables free text and does not offer line feedback', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
       phase: 'p1',
@@ -197,9 +197,15 @@ describe('DialogChannel', () => {
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     expect(textarea).toBeDisabled()
+    fireEvent.click(screen.getByText('Pick one'))
+    fireEvent.keyDown(screen.getByText('Pick one'), { key: 'Enter' })
+    expect(container.querySelector('[data-line]')).toBeNull()
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Send feedback/ })).toBeNull()
+    expect(screen.getByText(/This question does not accept free-text answers or feedback/)).toBeInTheDocument()
   })
 
-  test('selecting an option and sending posts from_options:true and reloads the dialog', async () => {
+  test.each([true, false])('selecting an option posts from_options:true and reloads (allow_custom:%s)', async (allowCustom) => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -207,7 +213,7 @@ describe('DialogChannel', () => {
       question: 'Pick one',
       answer: null,
       options: ['Alpha', 'Beta'],
-      allow_custom: true,
+      allow_custom: allowCustom,
     }
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -237,6 +243,53 @@ describe('DialogChannel', () => {
       const getCalls = calls.filter((c) => c.method === 'GET' && c.url.endsWith('/dialog'))
       expect(getCalls.length).toBeGreaterThanOrEqual(2)
     })
+  })
+
+  test('restricted question preserves existing drafts without blocking options or posting a custom answer', async () => {
+    const calls: FetchCall[] = []
+    let pending: RawDialogEntry = {
+      id: 'q1', phase: 'p1', question: 'Pick one', answer: null, options: ['Alpha'], allow_custom: true,
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body as string | undefined })
+      if (url.endsWith('/dialog/answer')) return { ok: true } as Response
+      return jsonResponse([pending])
+    })
+    const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+    await screen.findByRole('button', { name: 'Alpha' })
+    fireEvent.change(container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement, { target: { value: 'answer draft' } })
+    fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'feedback draft' } })
+
+    pending = { ...pending, allow_custom: false }
+    rerenderChannel(<div />)
+    rerenderChannel(<DialogChannel stage={makeStage()} />)
+    await screen.findByRole('button', { name: 'Alpha' })
+
+    const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    expect(textarea).toBeDisabled()
+    expect(textarea.value).toBe('answer draft')
+    expect(screen.queryByRole('button', { name: /Send feedback/ })).toBeNull()
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+    expect(screen.getByText('1 unsent comment - this question only accepts the listed options')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+    expect(screen.getByText('feedback draft')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(calls.filter((c) => c.method === 'POST')).toEqual([])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
+    await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1))
+    expect(JSON.parse(calls.find((c) => c.method === 'POST')?.body ?? '{}')).toEqual({
+      id: 'q1', phase: 'p1', answer: 'Alpha', from_options: true,
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer →' })).not.toBeDisabled())
+    expect(screen.getByText('feedback draft')).toBeInTheDocument()
+    expect(textarea.value).toBe('answer draft')
   })
 
   test('Send answer → без выбора не показывает success-морф (нет класса ok)', async () => {

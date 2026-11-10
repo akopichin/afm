@@ -3,6 +3,14 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-11
+
+### Fix:
+
+- Respect a question's explicit `allow_custom: false` for inline feedback as well
+  as free-text answers, avoiding an HTTP 400 from **Send feedback**. Keep existing
+  comment drafts available to copy and the listed answer options usable.
+
 ## 2026-11-10
 
 ### Fix:
