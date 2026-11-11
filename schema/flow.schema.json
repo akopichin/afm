@@ -148,6 +148,11 @@
       "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
       "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
     },
+    "loopEvery": {
+      "type": "string",
+      "description": "A Go time.ParseDuration string, e.g. \"30s\", \"5m\", \"1h30m\". afm additionally requires at least 1s.",
+      "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+    },
     "verifyRunStep": {
       "type": "object",
       "additionalProperties": false,
@@ -385,7 +390,7 @@
           "description": "Explicit false opts this stage out of the managed Chrome DevTools (afm_chrome) capability. Omitted inherits the global browser policy."
         },
         "assistants": {
-          "description": "Helper profiles (collaboration.profiles) auto-attached at the start of this stage's execution phase, the same way a manual dashboard Attach click would: a profile name, an object with profile plus optional title/instruction/mode/trigger/skills/skills_dir, or a list mixing both forms.",
+          "description": "Helper profiles (collaboration.profiles) auto-attached at the start of this stage's execution phase, the same way a manual dashboard Attach click would: a profile name, an object with profile plus optional title/instruction/mode/trigger/skills/skills_dir/loop, or a list mixing both forms.",
           "oneOf": [
             { "type": "string", "minLength": 1, "description": "Profile name." },
             { "$ref": "#/definitions/stageAssistant" },
@@ -542,7 +547,22 @@
           "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion. on_message: waits for messages addressed to it and answers each in its own turn."
         },
         "skills": { "$ref": "#/definitions/skillNames" },
-        "skills_dir": { "$ref": "#/definitions/skillsDir" }
+        "skills_dir": { "$ref": "#/definitions/skillsDir" },
+        "loop": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["every", "prompt"],
+          "description": "Wakes the helper with this prompt on a fixed interval while the stage runs. Requires trigger: on_message.",
+          "properties": {
+            "every": { "$ref": "#/definitions/loopEvery", "description": "Interval between ticks, at least 1s." },
+            "prompt": { "type": "string", "minLength": 1, "description": "Prompt delivered to the helper on every tick." }
+          }
+        }
+      },
+      "if": { "required": ["loop"] },
+      "then": {
+        "required": ["trigger"],
+        "properties": { "trigger": { "const": "on_message" } }
       }
     },
     "lifecycleHook": {
