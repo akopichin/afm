@@ -11,6 +11,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Fix:
 
+- Keep long stage feeds filled to the latest row after buffered output replaces older history, including when returning from a background tab. Preserve the reading position when older rows expire.
 - Respect a question's explicit `allow_custom: false` for inline feedback as well
   as free-text answers, avoiding an HTTP 400 from **Send feedback**. Keep existing
   comment drafts available to copy and the listed answer options usable.

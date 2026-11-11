@@ -7,8 +7,6 @@ import { readingElement } from '../../hooks/use-feed-focus/reading-anchor'
 // Список строк ленты на react-virtuoso. Единственный владелец скролла: scrollTop напрямую никто не пишет, все
 // перемещения идут через scrollToIndex списка с поколением запроса, остаток правит scrollBy.
 
-// База firstItemIndex: запас вниз, чтобы индекс не стал отрицательным при вытеснении с головы.
-const BASE_INDEX = 1_000_000
 const VIEWPORT_MARGIN_PX = 400
 const GESTURE_WINDOW_MS = 500
 const SETTLE_DELAYS_MS = [150, 1300]
@@ -80,14 +78,6 @@ export const VirtualFeedList = forwardRef<FeedListHandle, VirtualFeedListProps>(
   const scroller = useRef<HTMLElement | null>(null)
   const keys = useMemo(() => rows.map((row) => row.key), [rows])
   const tail = rows.length === 0 ? '' : rowSignature(rows[rows.length - 1] as VirtualFeedRow)
-
-  // Голова: вытеснение строк с начала — это сдвиг firstItemIndex, остальное решает якорь.
-  const [head, setHead] = useState({ base: BASE_INDEX, keys })
-  let firstItemIndex = head.base
-  if (head.keys !== keys) {
-    firstItemIndex = head.base + (headShift(head.keys, keys) ?? 0)
-    setHead({ base: firstItemIndex, keys })
-  }
 
   const [initial] = useState(() => {
     const index = start === null ? -1 : keys.indexOf(start.key)
@@ -199,8 +189,12 @@ export const VirtualFeedList = forwardRef<FeedListHandle, VirtualFeedListProps>(
         if (own !== generation.current || el === null || el.clientHeight === 0) return
         // Якорь перечитывается после поправки: следующее вытеснение не должно опираться на уже снятую строку.
         captureAnchors()
-        if (!exact || !anchor.element.isConnected) return
-        const delta = anchor.element.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+        if (!exact) return
+        // Виртуализатор мог пересоздать DOM якоря во время перехода: ключ строки переживает её элемент.
+        const target = anchor.element.isConnected ? anchor.element : el.querySelector<HTMLElement>(`[data-virtual-row-key="${CSS.escape(key)}"]`)
+        if (target === null) return
+        const top = target.getBoundingClientRect().top + (target === anchor.element ? 0 : anchor.rowOffset)
+        const delta = top - el.getBoundingClientRect().top - anchor.top
         if (Math.abs(delta) > RESIDUAL_TOLERANCE_PX) {
           markRequest()
           virtuoso.current?.scrollBy({ top: delta, behavior: 'auto' })
@@ -276,9 +270,8 @@ export const VirtualFeedList = forwardRef<FeedListHandle, VirtualFeedListProps>(
     },
   }), [scrollToLatest, cancelCorrections, cancelDeferredRestore, markRequest])
 
-  // Смена состава: голову держит firstItemIndex, слияние/перенумерацию — якорь. Следующий за вытеснением
-  // append якорь не трогает: у чистой головы headShift не null. Эффект идёт в каждом коммите: удержание гаснет в коммите
-  // своего раскрытия, даже если состав не сменился (отчёт, Raw), и не достаётся следующему жесту.
+  // Якорь держит и вытеснение головы: сдвиг firstItemIndex сбрасывает измерения хвоста при capped append.
+  // Чистое дописывание строк не меняет позицию читателя; удержание снимается в коммите своего раскрытия.
   const previousKeys = useRef(keys)
   useLayoutEffect(() => {
     const previous = previousKeys.current
@@ -292,7 +285,7 @@ export const VirtualFeedList = forwardRef<FeedListHandle, VirtualFeedListProps>(
     if (previous === keys || following) return
     // Раскрытие и свёртывание — действие читателя, а не автоматика: его строка встаёт на место сразу.
     if (pinned !== null) restoreAnchor(pinned, previous)
-    else if (headShift(previous, keys) === null) restoreWhenIdle(() => anchors.current.first, previous)
+    else if (headShift(previous, keys) !== 0) restoreWhenIdle(() => anchors.current.first, previous)
   })
 
   // В follow лента стоит у низа: после новой строки, роста последней строки и появления footer.
@@ -450,10 +443,9 @@ export const VirtualFeedList = forwardRef<FeedListHandle, VirtualFeedListProps>(
         data={rows}
         context={context}
         components={COMPONENTS}
-        firstItemIndex={firstItemIndex}
         initialTopMostItemIndex={initial}
         computeItemKey={(_, row) => row.key}
-        itemContent={(index, row) => renderRow(row, index === firstItemIndex)}
+        itemContent={(index, row) => renderRow(row, index === 0)}
         // Хвост ведёт только followTail: собственный followOutput списка двигал бы его и во время жеста пользователя.
         followOutput={false}
         atBottomThreshold={40}

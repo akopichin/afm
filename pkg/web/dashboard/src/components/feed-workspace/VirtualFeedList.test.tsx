@@ -224,6 +224,33 @@ describe('VirtualFeedList anchor and follow', () => {
     expect(lastScroll()).toEqual({ index: 4, align: 'start', offset: 10, behavior: 'auto' })
   })
 
+  it('keeps the reading row in place when a capped append removes the head, including after sizes settle', async () => {
+    layout.offset = 110
+    const view = mount(rowsOf(30))
+    await readAnchor(view.scroller)
+    const reading = view.scroller.querySelector('[data-virtual-row-key="seq:6"]') as HTMLElement
+    const top = reading.getBoundingClientRect().top
+    vi.useFakeTimers()
+    listCalls.move = (location) => {
+      const { index, offset } = location as { index: number; offset?: number }
+      layout.offset = index * 20 + (offset ?? 0)
+      moveScroller(view.scroller, layout.offset)
+    }
+    view.update(rowsOf(32).slice(2))
+    expect(Math.abs(reading.getBoundingClientRect().top - top)).toBeLessThanOrEqual(2)
+    vi.advanceTimersByTime(1400)
+    expect(Math.abs(reading.getBoundingClientRect().top - top)).toBeLessThanOrEqual(2)
+  })
+
+  it('moves an evicted reading row to the next surviving row after a batch replaces the head', async () => {
+    layout.offset = 110
+    const view = mount(rowsOf(30))
+    await readAnchor(view.scroller)
+    resetListCalls()
+    view.update(rowsOf(38).slice(8))
+    expect(lastScroll()).toEqual({ index: 0, align: 'start', offset: -0, behavior: 'auto' })
+  })
+
   it('corrects the residual shift once the sizes settle', async () => {
     layout.offset = 110
     const rows = rowsOf(30)
@@ -234,6 +261,21 @@ describe('VirtualFeedList anchor and follow', () => {
     // The row now sits 20px higher than before, at the same scroll offset.
     vi.advanceTimersByTime(160)
     expect(scrollBy).toHaveBeenCalledWith({ top: -20, behavior: 'auto' })
+  })
+
+  it('corrects a capped append even when the virtualizer remounts the reading row during the jump', async () => {
+    layout.offset = 110
+    const view = mount(rowsOf(30))
+    await readAnchor(view.scroller)
+    const oldRow = view.scroller.querySelector('[data-virtual-row-key="seq:6"]') as HTMLElement
+    vi.useFakeTimers()
+    view.update(rowsOf(32).slice(2), {
+      renderRow: (row, isFirst) => <RowFrame key="remounted" row={row} isFirst={isFirst}>{row.key}</RowFrame>,
+    })
+    expect(oldRow.isConnected).toBe(false)
+    expect(view.scroller.querySelector('[data-virtual-row-key="seq:6"]')).not.toBeNull()
+    vi.advanceTimersByTime(160)
+    expect(scrollBy).toHaveBeenCalledWith({ top: -40, behavior: 'auto' })
   })
 
   it.each([
