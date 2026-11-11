@@ -218,11 +218,12 @@ afm stage ask --option "A" --option "B" <<'EOF'
 Your question?
 EOF
    Put ALL context in the text: descriptions, trade-offs, examples. Use markdown freely.
-   Options are optional; add --allow-custom=false only when the user must pick one of them.
+   Options are optional. The user can always send a free-text answer or feedback, including when you list options. Do not disable free text.
    It prints {"id":"qN","wait":"afm stage wait-answer qN"}. Asking the same question again returns the same id, so repeating the command is safe.
 2. Wait: run the printed wait command with the Bash tool timeout set to at least 120 seconds (e.g. 150000 ms):
    afm stage wait-answer qN
    Exit 0 prints the answer as JSON {"id","answer","from_options"}: continue with it.
+   from_options=true means a listed option was selected; false means free text or feedback. Feedback answers the current question and resumes you, but is not implicit approval or an override. Process it and ask a follow-up if the required explicit decision is still missing.
    Exit 75 prints {"status":"waiting"}: the user has not answered yet. This is EXPECTED and is NOT a signal to stop. Run the EXACT SAME command again, as many times as it takes.
 3. A mistake in your call exits 1 with {"error","message"} on stderr (message names the field). Fix the call as the message says and run it again. Do NOT switch to writing files by hand because of such an error.
    error question_pending means an earlier question is still open: wait for its answer first, then ask the next one.

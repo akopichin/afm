@@ -39,9 +39,7 @@ func RenderQuestion(c QuestionCard) View {
 		}
 	}
 	if canAnswer {
-		if c.AllowCustom {
-			rows = append(rows, []Button{btn("Свой ответ", questionIntent(c, IntentCustomAnswer))})
-		}
+		rows = append(rows, []Button{btn("Свой ответ", questionIntent(c, IntentCustomAnswer))})
 	}
 	if c.RunKey != "" {
 		rows = append(rows, []Button{btn("Обновить вопрос", questionIntent(c, IntentRefresh))})

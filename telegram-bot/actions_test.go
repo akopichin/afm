@@ -28,6 +28,7 @@ type afmFixture struct {
 	options               []string
 	plan                  string
 	answerPosts           int
+	answerCode            int
 	approvalPosts         int
 	sendIDs               []string
 	sendBodies            []map[string]any
@@ -65,6 +66,11 @@ func newAFMFixture(t *testing.T) (*afmFixture, *httptest.Server, int) {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.answerBodies = append(f.answerBodies, body)
+			if f.answerCode != 0 {
+				w.WriteHeader(f.answerCode)
+				_, _ = w.Write([]byte(`{"error":"rejected"}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"status":"answered"}`))
 		case "/api/stages/impl/plan":
 			_, _ = w.Write([]byte(f.plan))
@@ -177,6 +183,31 @@ func TestActionQuestionRejectsReorderedOptions(t *testing.T) {
 		t.Fatalf("stale answer posted %d times", got)
 	}
 }
+func TestActionQuestionUnknownOptionTakesStalePath(t *testing.T) {
+	f, srv, port := newAFMFixture(t)
+	defer srv.Close()
+	service, _, _ := testService(t, port)
+	key := service.selected(17)
+	if err := service.setUser(17, func(u *UserSession) {
+		u.Composer = &ComposerContext{Mode: "question", RunKey: key, StageID: "impl"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	q := questionIntent(QuestionCard{RunKey: key, StageID: "impl", QuestionID: "q-1", QuestionPhase: "execute", QuestionDigest: questionDigestFrom("Pick one", []string{"A", "B"}, true), StageUpdatedAt: time.Date(2026, 10, 20, 6, 1, 0, 0, time.UTC)}, IntentAnswerQuestion)
+	q.OptionValue = "C"
+	if err := service.HandleIntent(context.Background(), 17, q); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	got := f.answerPosts
+	f.mu.Unlock()
+	if got != 0 {
+		t.Fatalf("unknown option posted %d times", got)
+	}
+	if c := service.user(17).Composer; c == nil || c.Draft != "C" {
+		t.Fatalf("stale path did not keep draft: %+v", c)
+	}
+}
 func questionDigestFrom(text string, options []string, custom bool) string {
 	return questionDigest(dialogEntry(text, options, custom))
 }
@@ -280,6 +311,47 @@ func TestActionQuestionAcceptsDisplayedOption(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.answerPosts != 1 {
 		t.Fatalf("answer posts %d", f.answerPosts)
+	}
+}
+func TestActionCustomAnswerOnLegacyQuestionReachesAFM(t *testing.T) {
+	f, srv, port := newAFMFixture(t)
+	defer srv.Close()
+	service, _, _ := testService(t, port)
+	f.mu.Lock()
+	f.dialogEntries = []map[string]any{{"id": "q-1", "phase": "execute", "question": "Pick one", "options": []string{"A", "B"}, "allow_custom": false}}
+	f.mu.Unlock()
+	in := Intent{Kind: IntentCustomAnswer, RunKey: service.selected(17), StageID: "impl", QuestionID: "q-1", QuestionPhase: "execute", QuestionDigest: questionDigestFrom("Pick one", []string{"A", "B"}, false), StageUpdatedAt: time.Date(2026, 10, 20, 6, 1, 0, 0, time.UTC)}
+	if err := service.answerQuestion(context.Background(), 17, in, "my own", false); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.answerPosts != 1 || f.answerBodies[0]["answer"] != "my own" {
+		t.Fatalf("answer posts %d bodies %v", f.answerPosts, f.answerBodies)
+	}
+	if fromOptions, ok := f.answerBodies[0]["from_options"].(bool); !ok || fromOptions {
+		t.Fatalf("from_options %v", f.answerBodies[0]["from_options"])
+	}
+}
+func TestActionCustomAnswerRejectedByAFMKeepsDraft(t *testing.T) {
+	f, srv, port := newAFMFixture(t)
+	defer srv.Close()
+	service, _, _ := testService(t, port)
+	f.mu.Lock()
+	f.answerCode = http.StatusBadRequest
+	f.mu.Unlock()
+	key := service.selected(17)
+	in := Intent{Kind: IntentCustomAnswer, RunKey: key, StageID: "impl", QuestionID: "q-1", QuestionPhase: "execute", QuestionDigest: questionDigestFrom("Pick one", []string{"A", "B"}, true), StageUpdatedAt: time.Date(2026, 10, 20, 6, 1, 0, 0, time.UTC)}
+	if err := service.setUser(17, func(u *UserSession) {
+		u.Composer = &ComposerContext{Mode: "question", RunKey: key, StageID: "impl"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.answerQuestion(context.Background(), 17, in, "my own", false); err != nil {
+		t.Fatal(err)
+	}
+	if c := service.user(17).Composer; c == nil || c.Draft != "my own" {
+		t.Fatalf("draft lost: %+v", c)
 	}
 }
 func TestComposerReplyAndInterruptSurviveRestart(t *testing.T) {

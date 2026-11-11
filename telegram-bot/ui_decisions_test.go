@@ -12,7 +12,7 @@ func TestRenderQuestion(t *testing.T) {
 		t.Fatal(got)
 	}
 	stamp := time.Date(2026, 10, 20, 7, 0, 0, 0, time.UTC)
-	card := QuestionCard{State: DataReady, RunKey: "r", StageID: "s", Prompt: "Save?", QuestionPhase: "planning", QuestionID: "q", QuestionDigest: "digest", StageUpdatedAt: stamp, Options: []QuestionOption{{Label: "Yes", Value: "save-draft"}}, AllowCustom: true, CanAnswer: true}
+	card := QuestionCard{State: DataReady, RunKey: "r", StageID: "s", Prompt: "Save?", QuestionPhase: "planning", QuestionID: "q", QuestionDigest: "digest", StageUpdatedAt: stamp, Options: []QuestionOption{{Label: "Yes", Value: "save-draft"}}, CanAnswer: true}
 	v := RenderQuestion(card)
 	in, ok := findIntent(v, IntentAnswerQuestion)
 	if !ok || in.OptionValue != "save-draft" || in.QuestionDigest != "digest" || in.QuestionPhase != "planning" || in.QuestionID != "q" || in.StageUpdatedAt != stamp || in.RunKey != "r" {
@@ -32,6 +32,17 @@ func TestRenderQuestion(t *testing.T) {
 	}
 }
 
+func TestRenderQuestionOffersCustomAnswerOnlyWhenAnswerable(t *testing.T) {
+	card := QuestionCard{State: DataReady, RunKey: "r", StageID: "s", Prompt: "Save?", QuestionID: "q", QuestionDigest: "digest", Options: []QuestionOption{{Label: "Yes", Value: "yes"}}, CanAnswer: true}
+	if _, ok := findIntent(RenderQuestion(card), IntentCustomAnswer); !ok {
+		t.Fatal("custom answer button missing")
+	}
+	card.CanAnswer = false
+	if _, ok := findIntent(RenderQuestion(card), IntentCustomAnswer); ok {
+		t.Fatal("custom answer offered on non-answerable question")
+	}
+}
+
 func TestRenderQuestionPreservesLongUnicodeAndDistinctOptions(t *testing.T) {
 	prompt := strings.Repeat("Как поступить? 🧭", 330) + " конец вопроса"
 	prefix := strings.Repeat("одинаковое значение😀", 220)
@@ -39,7 +50,7 @@ func TestRenderQuestionPreservesLongUnicodeAndDistinctOptions(t *testing.T) {
 		{Label: "Одинаковое длинное имя", Value: prefix + " вариант А"},
 		{Label: "Одинаковое длинное имя", Value: prefix + " вариант Б"},
 	}
-	card := QuestionCard{State: DataReady, RunKey: "r", StageID: "s", Prompt: prompt, QuestionID: "q", QuestionDigest: "d", Options: options, CanAnswer: true, AllowCustom: true}
+	card := QuestionCard{State: DataReady, RunKey: "r", StageID: "s", Prompt: prompt, QuestionID: "q", QuestionDigest: "d", Options: options, CanAnswer: true}
 	view := RenderQuestion(card)
 	want := "Вопрос · r\n" + prompt + "\n1. Одинаковое длинное имя\nЗначение: " + options[0].Value + "\n2. Одинаковое длинное имя\nЗначение: " + options[1].Value
 	assertTextParts(t, view, want)

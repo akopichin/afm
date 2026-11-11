@@ -5,6 +5,10 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-11
 
+### Improvement:
+
+- Any pending agent question now accepts a free-text answer in the dashboard and the Telegram bot, and inline line feedback in the dashboard, including saved questions with `allow_custom: false` and questions with listed options. `from_options` still marks a clicked option, and feedback is not a plan approval. Uses afm-engine v1.0.2.
+
 ### Fix:
 
 - Respect a question's explicit `allow_custom: false` for inline feedback as well

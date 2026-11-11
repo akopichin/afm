@@ -656,10 +656,10 @@ item or table row. A wide table scrolls within the plan on a narrow screen.
 Keyboard: the plan body is navigable (↑/↓ move between commentable lines, Enter
 opens the form). The `## Assumptions` and `## Acceptance Criteria` headings stay
 in the document without separate collapse controls. The same line commenting
-works on an agent's **question** in the Communication channel when the question
-allows free-text answers. For questions restricted to listed options, inline
-feedback is unavailable; existing comment drafts can still be viewed, copied or
-discarded without blocking the option buttons.
+works on an agent's **question** in the Communication channel, for every pending
+question including ones with listed options. **Send feedback** answers the question
+and resumes the agent; it does not approve a plan or choose an option. Comment
+drafts left from an earlier question can be copied or discarded.
 
 ## Writing to a stage from its Feed
 

@@ -113,8 +113,6 @@ func (s *Service) answerQuestion(ctx context.Context, user int64, in Intent, ans
 		if !matched {
 			return s.staleQuestion(ctx, user, in, answer)
 		}
-	} else if !q.AllowCustom {
-		return s.staleQuestion(ctx, user, in, answer)
 	}
 	pendingID, err := s.beginPendingAction(ctx, PendingAction{OwnerUserID: user, RunKey: in.RunKey, StageID: in.StageID, Kind: in.Kind, QuestionID: q.ID, QuestionPhase: q.Phase, QuestionDigest: questionDigest(q), Answer: answer})
 	if err != nil {

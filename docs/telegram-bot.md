@@ -98,9 +98,8 @@ message, or select several recipients before composing. You can also mention
 reachable agents by `@alias` in a message. A stage's **Plan and actions** card
 shows numbered parts of the plan; its buttons approve the current plan or
 request a revision. A revision needs a separate confirmation after you enter
-feedback. A question card offers the available answers and, when AFM allows it,
-a custom answer. Stage controls offer **Pause** and **Continue** when that stage
-is eligible. **Add agent** uses an available AFM assistant profile and asks for
+feedback. A question card offers the available answers and always a custom answer.
+Stage controls offer **Pause** and **Continue** when that stage is eligible. **Add agent** uses an available AFM assistant profile and asks for
 an instruction; a first message is optional. These actions require the
 corresponding AFM capability and an active run.
 

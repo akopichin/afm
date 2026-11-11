@@ -217,7 +217,6 @@ type QuestionCard struct {
 	QuestionDigest string
 	StageUpdatedAt time.Time
 	Options        []QuestionOption
-	AllowCustom    bool
 	Answered       bool
 	CanAnswer      bool
 	Error          string

@@ -421,8 +421,8 @@ func answerBody(id, answer string, fromOptions bool) string {
 	return fmt.Sprintf(`{"id":%q,"phase":"planning","answer":%q,"from_options":%t}`, id, answer, fromOptions)
 }
 
-// The question with fixed options reaches the dashboard with them, refusals about it match, and the accepted
-// answers of the two doors leave the same files, notices and status.
+// The question with fixed options reaches the dashboard with them, a claimed choice outside them is refused
+// the same way, and a free-text answer to the same question is accepted through both doors.
 func TestEngineParity_OptionQuestionAnswers(t *testing.T) {
 	runsLog := filepath.Join(t.TempDir(), "runs.log")
 	t.Setenv("AFM_IT_RUNS_LOG", runsLog)
@@ -440,42 +440,87 @@ func TestEngineParity_OptionQuestionAnswers(t *testing.T) {
 
 	refusals := []struct {
 		name, id, answer string
+		fromOptions      bool
 	}{
-		{"an answer outside the options", "q1", "oracle"},
-		{"a later question before the current one", "q2", "redis"},
+		{"a claimed choice outside the options", "q1", "oracle", true},
+		{"a later question before the current one", "q2", "redis", false},
 	}
 	for _, tc := range refusals {
-		wantSameRefusal(t, tc.name, env.post(fmt.Sprintf(dialogAnswerFmt, "ask-http"), answerBody(tc.id, tc.answer, false)),
-			stages.Answer("ask-http", "planning", tc.id, tc.answer, false))
+		wantSameRefusal(t, tc.name, env.post(fmt.Sprintf(dialogAnswerFmt, "ask-http"), answerBody(tc.id, tc.answer, tc.fromOptions)),
+			stages.Answer("ask-http", "planning", tc.id, tc.answer, tc.fromOptions))
 	}
 	if _, err := os.Stat(filepath.Join(env.runDir, "ask-http", "planning.q1.answer.json")); !os.IsNotExist(err) {
 		t.Fatalf("a refused answer left a file behind: %v", err)
 	}
 
-	env.wantOK(t, "answer q1", fmt.Sprintf(dialogAnswerFmt, "ask-http"), answerBody("q1", "postgres", true))
-	if err := stages.Answer("ask-engine", "planning", "q1", "postgres", true); err != nil {
-		t.Fatalf("engine answer q1: %v", err)
+	env.wantOK(t, "free text q1", fmt.Sprintf(dialogAnswerFmt, "ask-http"), answerBody("q1", "oracle", false))
+	if err := stages.Answer("ask-engine", "planning", "q1", "oracle", false); err != nil {
+		t.Fatalf("engine free text q1: %v", err)
 	}
 	env.wantOK(t, "answer q2", fmt.Sprintf(dialogAnswerFmt, "ask-http"), answerBody("q2", "redis", false))
 	if err := stages.Answer("ask-engine", "planning", "q2", "redis", false); err != nil {
 		t.Fatalf("engine answer q2: %v", err)
 	}
-	env.waitStatus(t, "ask-http", state.StatusAwaitingApproval)
-	env.waitStatus(t, "ask-engine", state.StatusAwaitingApproval)
-
-	for _, q := range []string{"q1", "q2"} {
-		file := "planning." + q + ".answer.json"
-		viaHTTP, errHTTP := os.ReadFile(filepath.Join(env.runDir, "ask-http", file))
-		viaEngine, errEngine := os.ReadFile(filepath.Join(env.runDir, "ask-engine", file))
-		if errHTTP != nil || errEngine != nil || string(viaHTTP) != string(viaEngine) {
-			t.Errorf("%s: HTTP wrote %q (%v), the engine %q (%v)", file, viaHTTP, errHTTP, viaEngine, errEngine)
-		}
-	}
-	wantSameFootprint(t, "answers", env.footprint(t, runsLog, "ask-http"), env.footprint(t, runsLog, "ask-engine"))
+	env.wantAnswersAlike(t, runsLog, "ask", map[string]string{"q1": `{"answer":"oracle","from_options":false,"id":"q1"}`, "q2": `{"answer":"redis","from_options":false,"id":"q2"}`})
 
 	// An answered question cannot be answered again.
 	wantSameRefusal(t, "a duplicate answer", env.post(fmt.Sprintf(dialogAnswerFmt, "ask-http"), answerBody("q2", "memcached", false)),
 		stages.Answer("ask-http", "planning", "q2", "memcached", false))
+}
+
+// A chosen option stays a choice, and the same text typed by hand stays free text; neither completes the
+// approval of the stage.
+func TestEngineParity_OptionChoiceVersusTypedText(t *testing.T) {
+	cases := []struct {
+		name, answer string
+		fromOptions  bool
+	}{
+		{"chosen_option", "postgres", true},
+		{"typed_option_label", "mysql", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			runsLog := filepath.Join(t.TempDir(), "runs.log")
+			t.Setenv("AFM_IT_RUNS_LOG", runsLog)
+			env := newParityEnv(t, pairStages("pick", func(id string) flow.Stage { return parityAgent(t, id, "dialog_options_agent.sh") })...)
+			env.waitStatus(t, "pick-http", state.StatusAwaitingUserInput)
+			env.waitStatus(t, "pick-engine", state.StatusAwaitingUserInput)
+			stages := env.run.Stages()
+
+			env.wantOK(t, "answer q1", fmt.Sprintf(dialogAnswerFmt, "pick-http"), answerBody("q1", c.answer, c.fromOptions))
+			if err := stages.Answer("pick-engine", "planning", "q1", c.answer, c.fromOptions); err != nil {
+				t.Fatalf("engine answer q1: %v", err)
+			}
+			// q2 is still open, so the stage keeps waiting for the user.
+			env.waitStatus(t, "pick-http", state.StatusAwaitingUserInput)
+			env.wantOK(t, "answer q2", fmt.Sprintf(dialogAnswerFmt, "pick-http"), answerBody("q2", "redis", false))
+			if err := stages.Answer("pick-engine", "planning", "q2", "redis", false); err != nil {
+				t.Fatalf("engine answer q2: %v", err)
+			}
+			env.wantAnswersAlike(t, runsLog, "pick", map[string]string{
+				"q1": fmt.Sprintf(`{"answer":%q,"from_options":%t,"id":"q1"}`, c.answer, c.fromOptions),
+				"q2": `{"answer":"redis","from_options":false,"id":"q2"}`,
+			})
+		})
+	}
+}
+
+// wantAnswersAlike checks that both stages of the pair hold the expected answer files, ended in
+// awaiting_approval (an answer never approves) and left the same footprint.
+func (e *parityEnv) wantAnswersAlike(t *testing.T, runsLog, prefix string, wantFiles map[string]string) {
+	t.Helper()
+	e.waitStatus(t, prefix+"-http", state.StatusAwaitingApproval)
+	e.waitStatus(t, prefix+"-engine", state.StatusAwaitingApproval)
+	for q, want := range wantFiles {
+		file := "planning." + q + ".answer.json"
+		for _, door := range []string{"-http", "-engine"} {
+			got, err := os.ReadFile(filepath.Join(e.runDir, prefix+door, file))
+			if err != nil || string(got) != want {
+				t.Errorf("%s%s/%s = %q (%v), want %q", prefix, door, file, got, err, want)
+			}
+		}
+	}
+	wantSameFootprint(t, "answers", e.footprint(t, runsLog, prefix+"-http"), e.footprint(t, runsLog, prefix+"-engine"))
 }
 
 // While the flow is paused for review, an answer is refused the same way through both doors and writes

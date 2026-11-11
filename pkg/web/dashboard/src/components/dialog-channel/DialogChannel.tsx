@@ -35,7 +35,6 @@ type DialogEntry = {
   question?: string
   answer?: string | null
   id?: string
-  allow_custom?: boolean
   options?: string[]
   text?: string
   auto_answered?: boolean
@@ -70,6 +69,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   // submitting блокирует повторную отправку; submitError показывает отказ POST вместо ложного Sent.
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  // submittedIdentityRef — стадия и вопрос, которые сейчас показаны; сверяем с ним ответ запоздалого POST.
+  const submittedIdentityRef = useRef('')
   const [flash, setFlash] = useState(false)
 
   // Автоскролл канала к хвосту при появлении новых сообщений/вопросов, пока пользователь сам не уехал
@@ -145,6 +146,12 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   }, [stage?.id, applyDialog])
 
   const pending = useMemo(() => findPending(entries), [entries])
+  submittedIdentityRef.current = `${stage?.id}|${questionKey(pending)}`
+  // Ошибка и отметка Sent относятся к конкретному вопросу и не переносятся на другой.
+  useEffect(() => {
+    setSubmitError(null)
+    setClickedSend(false)
+  }, [stage?.id, questionKey(pending)])
   // Свободный ответ — запись вопроса без строки: ключ (стадия, фаза, id вопроса) отделяет его от других вопросов.
   const questionScope: Extract<DocumentScope, { kind: 'question' }> | null =
     pending === null ? null : { kind: 'question', phase: pending.phase ?? '', questionId: pending.id ?? '' }
@@ -273,54 +280,54 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (selectedOption !== null) {
       answer = selectedOption
       fromOptions = true
-    } else if (question.allow_custom === true && trimmed !== '') {
+    } else if (trimmed !== '') {
       answer = trimmed
     } else {
       return
     }
 
-    if (submitting) return // не даём второму клику отправить дубликат (→ 409)
-    // acknowledge привязан к рану и снимает только отправленную ревизию текста.
     const sent = fromOptions || answerEntry === undefined ? [] : [{ key: answerEntry.key, revision: answerEntry.revision }]
-    setSubmitting(true)
-    setSubmitError(null)
-    try {
-      await answerDialog(stage.id, question.phase ?? '', question.id, answer, fromOptions)
-      acknowledge(sent)
-      setClickedSend(true)
-      window.setTimeout(() => setClickedSend(false), 1200)
-      await reload()
-    } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : 'failed to send answer')
-      if (e instanceof FlowApiError && e.code === 'answer_out_of_order') {
-        await reload() // stale view — resync to the real current question
-      }
-    } finally {
-      setSubmitting(false)
-    }
+    await submitAnswer(stage.id, question, answer, fromOptions, sent, 'failed to send answer')
   }
 
-  // Feedback тоже является свободным ответом и подчиняется allow_custom.
+  // Feedback — тоже свободный ответ: AFM принимает его на любой вопрос, поэтому локального запрета нет.
   async function sendFeedback(comments: DocumentComment[]) {
     if (stage === null) return
     const question = pending
-    if (question === null || question.id === undefined || question.allow_custom !== true) return
+    if (question === null || question.id === undefined) return
 
     const feedback = buildFeedback(comments, question.question ?? '')
     if (feedback === '') return
 
-    if (submitting) return
     const sent = comments.map(({ key, revision }) => ({ key, revision }))
+    await submitAnswer(stage.id, question, feedback, false, sent, 'failed to send feedback')
+  }
+
+  // Общий путь отправки. Успех и ошибку показываем, только если панель всё ещё на том же вопросе той же
+  // стадии, что и при отправке: запоздалый ответ чужого вопроса не должен отметить текущий как Sent.
+  async function submitAnswer(
+    stageId: string,
+    question: DialogEntry,
+    answer: string,
+    fromOptions: boolean,
+    sent: { key: string; revision: number }[],
+    failureText: string,
+  ) {
+    if (submitting) return // не даём второму клику отправить дубликат (→ 409)
+    const identity = `${stageId}|${questionKey(question)}`
+    const isCurrent = () => identity === submittedIdentityRef.current
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await answerDialog(stage.id, question.phase ?? '', question.id, feedback, false)
-      acknowledge(sent)
-      setClickedSend(true)
-      window.setTimeout(() => setClickedSend(false), 1200)
+      await answerDialog(stageId, question.phase ?? '', question.id ?? '', answer, fromOptions)
+      acknowledge(sent) // acknowledge привязан к рану и снимает только отправленные ревизии
+      if (isCurrent()) {
+        setClickedSend(true)
+        window.setTimeout(() => setClickedSend(false), 1200)
+      }
       await reload()
     } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : 'failed to send feedback')
+      if (isCurrent()) setSubmitError(e instanceof Error ? e.message : failureText)
       if (e instanceof FlowApiError && e.code === 'answer_out_of_order') {
         await reload() // stale view — resync to the real current question
       }
@@ -351,26 +358,14 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     setSelectedOption(null)
   }
 
-  // Вопрос с вариантами без свободного ответа не открывает редакторы комментариев.
-  function renderPending(doc: LineCommentDocumentApi | null): ReactNode {
+  // Тело вопроса приходит из LineCommentedDocument, поэтому комментарии к строкам доступны для любого вопроса.
+  function renderPending(doc: LineCommentDocumentApi): ReactNode {
     if (pending === null) return null
-    const hasFeedback = doc !== null && doc.commentCount > 0
-    const editingComment = doc !== null && doc.activeCommentLine !== null
+    const hasFeedback = doc.commentCount > 0
+    const editingComment = doc.activeCommentLine !== null
     return (
       <>
-        {doc === null ? (
-          <>
-            <div className="dialog-question">
-              <MarkdownRenderer source={pending.question ?? ''} />
-            </div>
-            <StaleComments
-              entries={allComments.filter(({ anchor }) => anchor.kind === 'question' && anchor.stageId === stageId
-                && anchor.phase === (pending.phase ?? '') && anchor.questionId === (pending.id ?? '') && anchor.line !== null)}
-              source="this question"
-              unsentReason="this question only accepts the listed options"
-            />
-          </>
-        ) : doc.body}
+        {doc.body}
 
         {!hasFeedback && (
           <>
@@ -407,7 +402,6 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               className="dialog-custom"
               placeholder="Or type your own answer…"
               value={customText}
-              disabled={pending.allow_custom !== true}
               onChange={onCustomInput}
               // M3: скрепка на основном поле ответа — прикрепить ссылку на файл проекта + вставленные
               // скриншоты уже работают через use-image-paste.
@@ -424,9 +418,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
         <div className="dialog-actions">
           <span className="dialog-hint">
-            {pending.allow_custom === true
-              ? 'The agent is waiting for your answer.'
-              : 'Choose one of the listed options. This question does not accept free-text answers or feedback.'}
+            The agent is waiting for your answer.
           </span>
           <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
             CANCEL STAGE
@@ -481,19 +473,17 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
             {pending !== null && (
               <div id="dialog-pending" className={`dialog-pending${flash ? ' dialog-flash' : ''}`}>
-                {pending.allow_custom === true ? (
-                  <LineCommentedDocument
-                    key={`${stageId}::${pending.phase ?? ''}::${pending.id ?? ''}::${pending.question ?? ''}`}
-                    text={pending.question ?? ''}
-                    specialSections={false}
-                    stageId={stageId}
-                    scope={{ kind: 'question', phase: pending.phase ?? '', questionId: pending.id ?? '' }}
-                    beforeOpen={releaseStick}
-                    bodyClassName="dialog-question line-commented"
-                  >
-                    {(doc) => renderPending(doc)}
-                  </LineCommentedDocument>
-                ) : renderPending(null)}
+                <LineCommentedDocument
+                  key={`${stageId}::${pending.phase ?? ''}::${pending.id ?? ''}::${pending.question ?? ''}`}
+                  text={pending.question ?? ''}
+                  specialSections={false}
+                  stageId={stageId}
+                  scope={{ kind: 'question', phase: pending.phase ?? '', questionId: pending.id ?? '' }}
+                  beforeOpen={releaseStick}
+                  bodyClassName="dialog-question line-commented"
+                >
+                  {(doc) => renderPending(doc)}
+                </LineCommentedDocument>
               </div>
             )}
 

@@ -750,8 +750,10 @@ func TestCommandContract_DialogAnswer_Rejections(t *testing.T) {
 		{name: "review_paused", question: openQuestion, review: reviewStatePaused, body: `{"id":"q1","phase":"planning","answer":"x"}`, wantCode: 409, wantCT: contentTypeFlow, wantBody: flowPausedBody},
 		{name: "review_resuming", question: openQuestion, review: "resuming", body: `{"id":"q1","phase":"planning","answer":"x"}`, wantCode: 409, wantCT: contentTypeFlow, wantBody: flowPausedBody},
 		{name: "question_not_found", body: `{"id":"q9","phase":"planning","answer":"x"}`, wantCode: 404, wantCT: contentTypeText, wantBody: textBody("question not found")},
-		{name: "custom_denied_without_options", question: `{"id":"q1","question":"?","allow_custom":false}`, body: `{"id":"q1","phase":"planning","answer":"x"}`, wantCode: 400, wantCT: contentTypeText, wantBody: textBody("question has no options but allow_custom=false")},
-		{name: "custom_denied_not_in_options", question: `{"id":"q1","question":"?","options":["A"],"allow_custom":false}`, body: `{"id":"q1","phase":"planning","answer":"C"}`, wantCode: 400, wantCT: contentTypeText, wantBody: textBody("answer not in allowed options")},
+		{name: "unknown_option_allow_custom_true", question: `{"id":"q1","question":"?","options":["A"],"allow_custom":true}`, body: `{"id":"q1","phase":"planning","answer":"C","from_options":true}`, wantCode: 400, wantCT: contentTypeText, wantBody: textBody("answer not in allowed options")},
+		{name: "option_claim_without_options_allow_custom_true", question: `{"id":"q1","question":"?","allow_custom":true}`, body: `{"id":"q1","phase":"planning","answer":"x","from_options":true}`, wantCode: 400, wantCT: contentTypeText, wantBody: textBody("answer not in allowed options")},
+		{name: "unknown_option_allow_custom_false", question: `{"id":"q1","question":"?","options":["A"],"allow_custom":false}`, body: `{"id":"q1","phase":"planning","answer":"C","from_options":true}`, wantCode: 400, wantCT: contentTypeText, wantBody: textBody("answer not in allowed options")},
+		{name: "option_claim_without_options_allow_custom_false", question: `{"id":"q1","question":"?","allow_custom":false}`, body: `{"id":"q1","phase":"planning","answer":"x","from_options":true}`, wantCode: 400, wantCT: contentTypeText, wantBody: textBody("answer not in allowed options")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -777,6 +779,50 @@ func TestCommandContract_DialogAnswer_Rejections(t *testing.T) {
 			}
 			if got := drainEvents(env.events, bus.EventDialogAnswer); len(got) != 0 {
 				t.Errorf("no dialog_answer event expected, got %+v", got)
+			}
+		})
+	}
+}
+
+// The answer text is free on every question; only a claimed option choice must name a real option.
+func TestCommandContract_DialogAnswer_FreeText(t *testing.T) {
+	cases := []struct{ name, question, fromOptionsField string }{
+		{"legacy_false_with_options", `{"id":"q1","question":"?","options":["A","B"],"allow_custom":false}`, `,"from_options":false`},
+		{"legacy_false_without_options", `{"id":"q1","question":"?","allow_custom":false}`, `,"from_options":false`},
+		{"legacy_false_field_absent", `{"id":"q1","question":"?","options":["A","B"],"allow_custom":false}`, ``},
+		{"no_allow_custom_field", `{"id":"q1","question":"?"}`, ``},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var calls []notifyCall
+			env := newContractEnv(t, contractOpts{status: state.StatusAwaitingUserInput, secondary: recordingSecondary(&calls, nil)})
+			writeQuestion(t, env.stageDir(), "planning", "q1", c.question)
+
+			body := `{"id":"q1","phase":"planning","answer":"my own"` + c.fromOptionsField + `}`
+			wantResponse(t, env.postStage(t, "dialog/answer", body), http.StatusOK, contentTypeJSON, `{"status":"ok"}`+"\n")
+
+			raw, err := os.ReadFile(answerPath(env, "planning", "q1"))
+			if err != nil || string(raw) != `{"answer":"my own","from_options":false,"id":"q1"}` {
+				t.Errorf("answer.json = %s, err=%v", raw, err)
+			}
+			if want := (notifyCall{testStageID, "planning", "q1", "my own", false}); len(calls) != 1 || calls[0] != want {
+				t.Errorf("NotifyAnswer calls = %+v, want %+v", calls, want)
+			}
+			entries, err := mcp.ReadDialog(dialogPath(env, "planning"))
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("dialog entries = %+v, err=%v", entries, err)
+			}
+			if e := entries[0]; e.Answer == nil || *e.Answer != "my own" || e.FromOptions {
+				t.Errorf("dialog entry = %+v", e)
+			}
+			want := `{"id":"q1","phase":"planning","title":"my own"}`
+			evs := drainEvents(env.events, bus.EventDialogAnswer)
+			if len(evs) != 1 || contractJSON(t, evs[0].Data) != want {
+				t.Fatalf("dialog_answer events = %+v", evs)
+			}
+			notices := readNotices(t, env.runDir)
+			if len(notices) != 1 || notices[0]["type"] != "dialog_answer" || contractJSON(t, notices[0]["data"]) != want {
+				t.Fatalf("notices = %v", notices)
 			}
 		})
 	}

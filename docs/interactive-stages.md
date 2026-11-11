@@ -24,8 +24,8 @@ afm stage wait-answer q1
 ```
 
 - **`afm stage ask`** reads the question text (markdown) from stdin. Each
-  `--option` adds an answer option; `--allow-custom=false` requires the user to pick
-  one of them (a custom answer is allowed by default). afm picks the next question
+  `--option` adds an answer option; `--allow-custom=false` is accepted for compatibility
+  and does not disable free-text answers. afm picks the next question
   id itself (`q1`, `q2`, …), checks the question and creates the question file, so
   the agent does not write dialog files by hand. Asking the same question again
   returns the same id, so repeating the command is safe. While an earlier question
@@ -62,11 +62,14 @@ Under the hood the commands use the same files as before:
 The prompt keeps a short fallback for an agent whose `afm` command is unavailable:
 it can write these files by hand, and afm reads them as usual.
 
-In question files and `<phase>.dialog.jsonl` history, an omitted or `null`
-`allow_custom` allows a free-text answer. Only an explicit `false` disables the
-custom-answer field and inline question feedback in the dashboard. Feedback is
-submitted as a free-text answer, so these questions must be answered with one of
-their listed options. Existing comment drafts remain available to view or copy.
+A user can always answer any pending question with free text or inline line
+feedback, whether or not it lists options. The `allow_custom` field is kept in
+question files and `<phase>.dialog.jsonl` history for compatibility, but its value
+(including an explicit `false` in older files) no longer disables free text or
+feedback. The answer's `from_options` is `true` only when the user clicked a listed
+option and `false` for typed text and feedback. Feedback answers the question and
+resumes the agent; it is neither a plan approval nor an override that requires an
+exact option.
 
 When launching `claude`, the flags
 `--print --output-format stream-json --verbose --dangerously-skip-permissions` are

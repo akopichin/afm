@@ -562,7 +562,6 @@ func (s *Service) showQuestionTarget(ctx context.Context, user int64, key RunKey
 			card.QuestionID = q.ID
 			card.QuestionPhase = q.Phase
 			card.QuestionDigest = questionDigest(q)
-			card.AllowCustom = q.AllowCustom
 			card.CanAnswer = !terminal(status)
 			for _, o := range q.Options {
 				card.Options = append(card.Options, QuestionOption{Label: o, Value: o})
