@@ -654,7 +654,7 @@
   bottom: 10px;
   margin-left: auto;
   margin-right: 8px;
-  /* В .feed-scroll кнопка — flex-элемент: без align-self родительский align-items:stretch растягивал её по
+  /* Кнопка — flex-элемент: без align-self родительский align-items:stretch растягивал её по
      ширине, и border-radius:50% давал овал вместо круга. */
   flex: none;
   align-self: flex-end;
@@ -685,6 +685,8 @@
 /* В диалоге снизу залипает action-бар — приподнимаем иконку над ним, чтобы не садилась на строку
    SEND/«AGENT IS WAITING». В ленте/логе такого бара нет (raised не ставится). */
 .jump-latest-raised { bottom: 74px; }
+/* Поверх списка в его рамке (лента стадии): абсолютная позиция вместо sticky внутри скроллера. */
+.jump-latest--overlay { position: absolute; right: 16px; bottom: 30px; margin: 0; z-index: 1; }
 /* Сколько событий пришло ниже, пока лента отпущена от низа. */
 .jump-latest-count {
   position: absolute;

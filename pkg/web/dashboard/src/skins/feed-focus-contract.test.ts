@@ -113,13 +113,26 @@ describe('feed focus contract — Focus and waiting-item buttons', () => {
 })
 
 describe('feed focus contract — insets and layout guards', () => {
-  const FEED_PARTS = ['.feed-scroll', '.feed-filter-row', '.feed-composer']
+  // The scroller carries no padding (the virtual list measures rows): the inset sits on the rows.
+  const FEED_PARTS = ['.feed-vrow', '.feed-filter-row', '.feed-composer']
   const insetOf = (css: string, selector: string): number =>
     inlinePx(declared(css, selector, 'padding') ?? declared(css, selector, 'padding-inline') ?? '')
 
   it('the Feed, filters and composer sit 20px from the window edge on wide screens', () => {
     const body = inlinePx(declared(layoutCss, '.workspace-body', 'padding') ?? '')
     for (const selector of FEED_PARTS) expect(body + insetOf(feedWorkspaceCss, selector), selector).toBe(20)
+  })
+
+  it('keeps the virtual scroller free of padding, gap and flex layout, with browser scroll anchoring off', () => {
+    expect(declared(feedWorkspaceCss, '.feed-scroll', 'padding')).toBeUndefined()
+    expect(declared(feedWorkspaceCss, '.feed-scroll', 'gap')).toBeUndefined()
+    expect(declared(feedWorkspaceCss, '.feed-scroll', 'display')).toBeUndefined()
+    expect(declared(feedWorkspaceCss, '.feed-scroll', 'overflow-anchor')).toBe('none')
+  })
+
+  it('keeps the 18px gap before every conversation bubble, even though conversation rows are flow rows', () => {
+    expect(declared(feedWorkspaceCss, '.feed-vrow--conversation', 'padding-top')).toBe('18px')
+    expect(declared(feedWorkspaceCss, '.feed-vrow--flow:not(.feed-vrow--start):not(.feed-vrow--conversation)', 'padding-top')).toBe('0')
   })
 
   it('and 16px on a phone', () => {
@@ -140,5 +153,11 @@ describe('feed focus contract — insets and layout guards', () => {
       expect(rule.body, where).not.toMatch(/--(?:rail|people|run-conversations)-width\s*:/)
       if (!rule.selectors.every((s) => s.endsWith(' svg'))) expect(valueOf(rule.body, 'height'), where).toBeUndefined()
     }
+  })
+
+  it('keeps the jump-to-latest icon 16px / 30px from the corner', () => {
+    const overlay = '.jump-latest--overlay'
+    expect(declared(layoutCss, overlay, 'right')).toBe('16px')
+    expect(declared(layoutCss, overlay, 'bottom')).toBe('30px')
   })
 })

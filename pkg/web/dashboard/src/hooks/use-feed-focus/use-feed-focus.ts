@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { isEditableElement } from '../use-is-editing/use-is-editing'
-import { anchorForLeaving, captureReadingAnchor, holdAnchor, restoreReadingAnchor, type HeldAnchor, type ReadingAnchor } from './reading-anchor'
 
 export type FeedFocusOptions = {
   // available — on screen is the Feed, or the Plan / Question view, of a stage (not a helper, not another view).
@@ -39,19 +38,8 @@ export function useFeedFocus({ available, blocked }: FeedFocusOptions): FeedFocu
   const current = useRef({ active, available, blocked })
   current.current = { active, available, blocked }
 
-  // The message in view is noted before the layout changes and put back right after it, before the next paint.
-  const pending = useRef<ReadingAnchor | null>(null)
-  const held = useRef<HeldAnchor | null>(null)
-  const change = useCallback((next: boolean) => {
-    pending.current = next ? captureReadingAnchor() : anchorForLeaving(held.current)
-    setActive(next)
-  }, [])
-  useLayoutEffect(() => {
-    const anchor = pending.current
-    pending.current = null
-    if (anchor !== null) restoreReadingAnchor(anchor)
-    held.current = active && anchor !== null ? holdAnchor(anchor) : null
-  }, [active])
+  // The Feed list keeps the reader's place itself when the layout changes (it watches its own size).
+  const change = useCallback((next: boolean) => setActive(next), [])
 
   useEffect(() => {
     // On window while bubbling: mention and attachment menus, modals and drawers handle the key first.

@@ -7,7 +7,7 @@
 name: dashboard-load
 description: "Synthetic long-run load for measuring dashboard memory and render cost"
 
-max_parallel: 2
+max_parallel: 3
 
 # Agents start in the fixture directory, where fake_agent.py and the gates/ directory live.
 root_dir: "."
@@ -19,8 +19,29 @@ stages:
     agents: [auto]
     command: ./fake_agent.py
 
+  - id: witness
+    name: "Witness (idle mesh recipient)"
+    description: "Stays alive until the stop gate; the second recipient that opens extra conversation threads."
+    agents: [auto]
+    command: ./fake_witness.py
+
   - id: peer
     name: "Peer (stage switching)"
     description: "Short stage to switch to and back from the loaded one."
     script: |
       for i in $(seq 1 50); do echo "peer line $i"; done
+
+  # A script stage cannot carry verify, so the long group and the large report are separate stages.
+  - id: history
+    name: "History (long script group)"
+    description: "One script group of LOAD_HISTORY_LINES lines."
+    script: |
+      for i in $(seq 1 "${LOAD_HISTORY_LINES:-1500}"); do echo "history line $i"; done
+
+  - id: history-report
+    name: "History report (verify)"
+    description: "Instant fake agent whose AI verify step (a fake verifier) writes a report of at least 100 KB."
+    agents: [auto]
+    command: ./fake_report_agent.py
+    verify:
+      command: ./fake_verifier.py

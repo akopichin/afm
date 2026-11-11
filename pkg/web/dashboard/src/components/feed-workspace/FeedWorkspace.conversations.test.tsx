@@ -157,11 +157,27 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(time('m3').querySelector('.message-time-gap')).toHaveTextContent('+7s')
     expect(time('m2')).toHaveAttribute('title', expect.stringMatching(/Oct 19, 2026, 19:00:09 \(host time\).*first event \(\+0s\)/))
     expect(time('m3')).toHaveAttribute('tabindex', '0')
-    expect(document.querySelectorAll('.feed-conversation')).toHaveLength(2)
+    expect(document.querySelectorAll('.feed-vrow--conversation')).toHaveLength(3)
 
     fireEvent.click(screen.getByRole('button', { name: /^Conversations/ }))
-    expect(document.querySelectorAll('.feed-conversation')).toHaveLength(1)
+    expect(document.querySelectorAll('.feed-vrow--conversation')).toHaveLength(3)
     expect(time('m2').querySelector('.message-time-gap')).toHaveTextContent('+7s')
+  })
+
+  it('keeps the Raw section of an agent result open when its row is unmounted by a filter and shown again', async () => {
+    const body = '{"schema_version":1,"kind":"result","verdict":"pass","summary":"Done."}'
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [msg('r1', 2, { body })], threads: [withUser], next_cursor: 2, has_more: false })
+    render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps()} />)
+    await waitFor(() => expect(row('r1')).not.toBeNull())
+    // Raw is not mounted while closed.
+    expect(within(row('r1')).queryByText(body)).toBeNull()
+    fireEvent.click(within(row('r1')).getByText('Raw'))
+    expect(await within(row('r1')).findByText(body)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Author's work/ }))
+    expect(row('r1')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }))
+    expect(within(row('r1')).getByText(body)).toBeInTheDocument()
   })
 
   it('filters: Conversations hides the author\'s work, Author\'s work keeps only what is addressed to you', async () => {
@@ -563,7 +579,8 @@ describe('conversation motion', () => {
     expect(document.querySelector('.is-new-agent-message')).toBeNull()
   })
 
-  it.each([false, true])('jumps to a quote respecting reduced motion=%s', async (reduced) => {
+  // The list moves its own scroller instantly, so reduced motion changes nothing; the DOM is never asked to scroll.
+  it.each([false, true])('jumps to a quote through the list, without smooth scrolling, reduced motion=%s', async (reduced) => {
     const hooks = await import('../../hooks/use-mesh')
     vi.spyOn(hooks, 'useStageConversation').mockReturnValue({ messages, threads: { 'mt-1': withUser, 'mt-old': legacy }, arrived: 0 })
     vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages: [], nextCursor: 0, hasMore: false })
@@ -572,6 +589,7 @@ describe('conversation motion', () => {
     vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scroll)
     await act(async () => { render(<FeedWorkspace events={[]} stageId="impl" mesh={meshProps()} />) })
     fireEvent.click(within(row('m2')).getByRole('button', { name: /Replying to QA reviewer/ }))
-    expect(scroll).toHaveBeenCalledWith({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
+    expect(row('m1')).toHaveClass('is-jump-target')
+    expect(scroll).not.toHaveBeenCalled()
   })
 })

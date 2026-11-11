@@ -522,6 +522,15 @@ export function formatEventGap(tsMs: number, prevTsMs: number): string {
   return `${Math.floor(diffSec / 86400)}d`
 }
 
+// itemKeyBase — ключ события без суффикса повтора: у live-события без seq это номер приёма, а не позиция, которая
+// сдвигается при вытеснении головы ленты.
+function itemKeyBase(event: AfmEvent, dedupeId: string | undefined): string {
+  if (event.seq !== undefined) return `seq:${event.seq}`
+  if (dedupeId !== undefined) return dedupeId
+  if (event.receipt !== undefined) return `live:${event.receipt}`
+  return `${event.timestamp}|${event.type}|${event.stageId}`
+}
+
 // toFeedItems — события → FeedItem[] с уникальными стабильными ключами.
 export function toFeedItems(events: AfmEvent[], unknownPrefix?: string): FeedItem[] {
   const counts = new Map<string, number>()
@@ -531,7 +540,7 @@ export function toFeedItems(events: AfmEvent[], unknownPrefix?: string): FeedIte
     const m = mapEvent(event, unknownPrefix)
     if (m === null) return // ask_user/user_answered — не рендерим (см. mapEvent)
 
-    const base = event.seq !== undefined ? `seq:${event.seq}` : (m.dedupeId ?? `${event.timestamp}|${event.type}|${event.stageId}`)
+    const base = itemKeyBase(event, m.dedupeId)
     const n = counts.get(base) ?? 0
     counts.set(base, n + 1)
     const key = n === 0 ? base : `${base}#${n}`
@@ -673,52 +682,4 @@ export function feedFilterCounts(items: FeedItem[], messages: MeshMessage[]): Re
   const count = (filter: FeedFilter) =>
     buildFeedTimeline(items, messages, filter).reduce((n, e) => n + (e.kind === 'group' ? e.group.items.length : e.messages.length), 0)
   return { all: count('all'), conversations: count('conversations'), author: count('author') }
-}
-
-// Сколько строк ленты (и вызовов внутри раскрытой tool-серии) монтируется сразу и добавляется за один «Show earlier».
-export const FEED_WINDOW_STEP = 150
-
-export type FeedWindow = {
-  entries: FeedTimelineEntry[]
-  // hidden — сколько строк выше окна; start — индекс первой показанной строки в rowKeys.
-  hidden: number
-  start: number
-  rowKeys: string[]
-}
-
-// feedRows — строки записи: обычный item или серия tool-вызовов — одна строка; сообщение беседы — одна строка.
-function feedRows(entry: FeedTimelineEntry): { key: string; items?: FeedItem[] }[] {
-  if (entry.kind === 'conversation') return entry.messages.map((m) => ({ key: m.id }))
-  return groupToolRuns(entry.group.items).map((row) =>
-    row.kind === 'tools' ? { key: row.key, items: row.items } : { key: row.item.key, items: [row.item] },
-  )
-}
-
-// windowFeedTimeline оставляет хвост ленты: со строки startKey (вытеснена лимитом событий — с первой доступной),
-// а без startKey — последние limit строк. Окно считает строки, поэтому запись на границе показывается только хвостом, а её заголовок остаётся.
-export function windowFeedTimeline(timeline: FeedTimelineEntry[], startKey: string | null, limit: number): FeedWindow {
-  const rows = timeline.map(feedRows)
-  const rowKeys = rows.flatMap((entryRows) => entryRows.map((row) => row.key))
-  const start = startKey === null ? Math.max(0, rowKeys.length - limit) : Math.max(0, rowKeys.indexOf(startKey))
-  if (start === 0) return { entries: timeline, hidden: 0, start, rowKeys }
-
-  const entries: FeedTimelineEntry[] = []
-  let skip = start
-  timeline.forEach((entry, index) => {
-    const entryRows = rows[index] ?? []
-    if (skip >= entryRows.length) {
-      skip -= entryRows.length
-      return
-    }
-    if (skip === 0) {
-      entries.push(entry)
-    } else if (entry.kind === 'conversation') {
-      entries.push({ ...entry, messages: entry.messages.slice(skip) })
-    } else {
-      const items = entryRows.slice(skip).flatMap((row) => row.items ?? [])
-      entries.push({ ...entry, group: { ...entry.group, items } })
-    }
-    skip = 0
-  })
-  return { entries, hidden: start, start, rowKeys }
 }

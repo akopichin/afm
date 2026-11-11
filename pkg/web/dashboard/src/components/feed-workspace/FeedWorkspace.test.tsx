@@ -2,7 +2,9 @@ import { render, screen, fireEvent, act, waitFor, within } from '@testing-librar
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
 import { FeedWorkspace, FeedGroupView, feedItemSignature } from './FeedWorkspace'
-import type { FeedGroup, FeedItem } from './feed-view-model'
+import { groupFeedItems, toFeedItems, type FeedGroup, type FeedItem } from './feed-view-model'
+import { ReportToggle } from './feed-rows'
+import { createReportCache } from './report-cache'
 import * as verifyReportClient from '../../api/verify-report-client'
 import * as meshClient from '../../api/mesh-client'
 import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
@@ -13,14 +15,19 @@ import type { SideAgentEvent } from '../../types/side-agent'
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string): AfmEvent =>
   ({ type, payload, stageId, timestamp }) as AfmEvent
 
-// Tool call rows are mounted only while their group is open: the browser's toggle event follows opening.
-function openToolGroups(root: ParentNode = document): void {
+// A FeedGroupView series (a <details>) mounts its calls once the browser's toggle event follows opening.
+function openDetails(root: ParentNode = document): void {
   root.querySelectorAll('details').forEach((details) => {
     act(() => {
       details.open = true
       details.dispatchEvent(new Event('toggle'))
     })
   })
+}
+
+// A series' calls are rows of the list only while it is open: its summary button opens it.
+function openToolGroups(root: ParentNode = document): void {
+  root.querySelectorAll<HTMLElement>('button.feed-tool-summary[aria-expanded="false"]').forEach((button) => fireEvent.click(button))
 }
 
 describe('FeedWorkspace', () => {
@@ -36,11 +43,12 @@ describe('FeedWorkspace', () => {
     ]
     const { container } = render(<FeedWorkspace events={events} stageId={null} />)
     openToolGroups(container)
-    const groups = container.querySelectorAll('.feed-group')
-    expect(groups).toHaveLength(2)
+    // The agent's series is a summary row and a call row; the user's framed group is one row.
+    const groups = [...container.querySelectorAll('.feed-group')]
+    expect(groups.map((group) => group.getAttribute('data-actor'))).toEqual(['agent', 'agent', 'user'])
     expect(groups[0]).toHaveClass('feed-left')
     expect(groups[0]?.querySelector('.feed-stage-badge')).toBeNull()
-    expect(groups[1]).toHaveClass('feed-right')
+    expect(groups[2]).toHaveClass('feed-right')
     expect(container.textContent).toContain('read_file x.ts')
     expect(container.textContent).toContain('reply to user')
   })
@@ -105,19 +113,24 @@ describe('FeedWorkspace', () => {
     it('renders consecutive tool calls as ONE collapsed group under the agent message', () => {
       const events = [ev('agent_action', { tool: 'text', detail: 'Working on it' }, 's1', at(0)), ...tools]
       const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
-      const groups = container.querySelectorAll('details.feed-tool-group')
-      expect(groups).toHaveLength(1)
-      expect(groups[0]).not.toHaveAttribute('open')
-      expect(groups[0]?.querySelector('summary')).toHaveTextContent('3 tool calls · read, edit')
+      const summaries = container.querySelectorAll('button.feed-tool-summary')
+      expect(summaries).toHaveLength(1)
+      expect(summaries[0]).toHaveAttribute('aria-expanded', 'false')
+      expect(summaries[0]).toHaveTextContent('3 tool calls · read, edit')
+      // A closed series has no call rows at all.
+      expect(container.querySelectorAll('.feed-tool-rows .feed-item')).toHaveLength(0)
       openToolGroups(container)
-      expect(groups[0]?.querySelectorAll('.feed-tool-rows .feed-item')).toHaveLength(3)
-      const rows = groups[0]?.closest('.feed-rows')
-      expect(rows?.querySelector('.feed-item-markdown')).toHaveTextContent('Working on it')
+      expect(summaries[0]).toHaveAttribute('aria-expanded', 'true')
+      expect(container.querySelectorAll('.feed-tool-rows .feed-item')).toHaveLength(3)
+      // The agent's message is the row before the series.
+      const rowKeys = [...container.querySelectorAll('[data-virtual-row-key]')]
+      expect(rowKeys[0]).toHaveTextContent('Working on it')
+      expect(rowKeys[1]?.querySelector('button.feed-tool-summary')).not.toBeNull()
     })
 
     it('shows each call as "<Tool> <detail>" and says "1 tool call" for a single call', () => {
       const { container } = render(<FeedWorkspace events={tools.slice(0, 1)} stageId="s1" />)
-      expect(container.querySelector('summary')).toHaveTextContent(/^1 tool call · read$/)
+      expect(container.querySelector('button.feed-tool-summary')).toHaveTextContent(/^1 tool call · read$/)
       openToolGroups(container)
       const row = container.querySelector('.feed-tool-rows .feed-item')
       expect(row?.querySelector('.feed-tool-name')).toHaveTextContent('Read')
@@ -132,18 +145,32 @@ describe('FeedWorkspace', () => {
     it('a message between tool calls splits them into two groups', () => {
       const events = [tools[0], ev('agent_action', { tool: 'text', detail: 'Next' }, 's1', at(2)), tools[2]] as AfmEvent[]
       const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
-      expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+      expect(container.querySelectorAll('button.feed-tool-summary')).toHaveLength(2)
     })
 
-    it('toggles from the keyboard-reachable summary and keeps the group open when a call is appended', () => {
+    it('opens from the summary button and keeps the series open when a call is appended', () => {
       const { container, rerender } = render(<FeedWorkspace events={tools.slice(0, 2)} stageId="s1" />)
-      const details = container.querySelector('details') as HTMLDetailsElement
-      details.open = true
+      const summary = container.querySelector('button.feed-tool-summary') as HTMLElement
+      fireEvent.click(summary)
+      expect(summary).toHaveAttribute('aria-expanded', 'true')
       rerender(<FeedWorkspace events={tools} stageId="s1" />)
-      expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(1)
-      expect(container.querySelector('details')).toBe(details)
-      expect(details.open).toBe(true)
-      expect(details.querySelector('summary')).toHaveTextContent('3 tool calls')
+      expect(container.querySelectorAll('button.feed-tool-summary')).toHaveLength(1)
+      expect(container.querySelector('button.feed-tool-summary')).toBe(summary)
+      expect(summary).toHaveAttribute('aria-expanded', 'true')
+      expect(summary).toHaveTextContent('3 tool calls')
+      expect(container.querySelectorAll('.feed-tool-rows .feed-item')).toHaveLength(3)
+    })
+
+    it('opens and closes the series from the keyboard through the button', () => {
+      const { container } = render(<FeedWorkspace events={tools} stageId="s1" />)
+      const summary = container.querySelector('button.feed-tool-summary') as HTMLButtonElement
+      expect(summary.tagName).toBe('BUTTON')
+      summary.focus()
+      fireEvent.click(summary)
+      expect(summary).toHaveAttribute('aria-expanded', 'true')
+      fireEvent.click(summary)
+      expect(summary).toHaveAttribute('aria-expanded', 'false')
+      expect(container.querySelectorAll('.feed-tool-rows .feed-item')).toHaveLength(0)
     })
   })
 
@@ -151,12 +178,12 @@ describe('FeedWorkspace', () => {
     const at = (n: number) => `2026-07-10T10:00:0${n}Z`
     const tool = (n: number, stageId = 's1') => ev('agent_action', { tool: 'Read', detail: `src/${n}.ts` }, stageId, at(n))
     const text = (n: number) => ev('agent_action', { tool: 'text', detail: `Message ${n}` }, 's1', at(n))
-    const counts = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('summary .feed-tool-count')]
+    const counts = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('.feed-tool-summary .feed-tool-count')]
     const bumping = (container: HTMLElement) => container.querySelectorAll('.feed-tool-count--bump')
 
     it('keeps the summary text and does not animate the first render', () => {
       const { container } = render(<FeedWorkspace events={[tool(1), tool(2), tool(3)]} stageId="s1" />)
-      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls · read')
+      expect(container.querySelector('.feed-tool-summary')).toHaveTextContent('3 tool calls · read')
       expect(counts(container)[0]).toHaveTextContent(/^3$/)
       expect(bumping(container)).toHaveLength(0)
     })
@@ -164,11 +191,11 @@ describe('FeedWorkspace', () => {
     it('bumps the number when a call joins a shown run, and stops when the animation ends', () => {
       const { container, rerender } = render(<FeedWorkspace events={[tool(1), tool(2)]} stageId="s1" />)
       rerender(<FeedWorkspace events={[tool(1), tool(2), tool(3)]} stageId="s1" />)
-      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls · read')
+      expect(container.querySelector('.feed-tool-summary')).toHaveTextContent('3 tool calls · read')
       expect(bumping(container)).toHaveLength(1)
       fireEvent.animationEnd(bumping(container)[0] as HTMLElement)
       expect(bumping(container)).toHaveLength(0)
-      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls · read')
+      expect(container.querySelector('.feed-tool-summary')).toHaveTextContent('3 tool calls · read')
     })
 
     it('restarts the animation on every further call', () => {
@@ -188,7 +215,7 @@ describe('FeedWorkspace', () => {
       expect(bumping(container)).toHaveLength(0)
       // A message splits the feed: the second run is new, the first is unchanged.
       rerender(<FeedWorkspace events={[tool(1), tool(2), text(3), tool(4)]} stageId="s1" />)
-      expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+      expect(container.querySelectorAll('.feed-tool-summary')).toHaveLength(2)
       expect(bumping(container)).toHaveLength(0)
       // The run only loses calls.
       rerender(<FeedWorkspace events={[tool(1)]} stageId="s1" />)
@@ -198,7 +225,7 @@ describe('FeedWorkspace', () => {
     it('treats another stage as a fresh baseline even when its run is longer', () => {
       const { container, rerender } = render(<FeedWorkspace events={[tool(1), tool(2)]} stageId="s1" />)
       rerender(<FeedWorkspace events={[tool(1), tool(2), tool(3)]} stageId="s2" />)
-      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls')
+      expect(container.querySelector('.feed-tool-summary')).toHaveTextContent('3 tool calls')
       expect(bumping(container)).toHaveLength(0)
     })
 
@@ -220,19 +247,19 @@ describe('FeedWorkspace', () => {
         const feed = (events: AfmEvent[]) => <FeedWorkspace events={events} stageId="s1" mesh={mesh} />
         const { container, rerender } = render(feed([tool(1), tool(3)]))
         await screen.findByText('Quiet question')
-        expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+        expect(container.querySelectorAll('.feed-tool-summary')).toHaveLength(2)
 
         fireEvent.click(screen.getByRole('button', { name: /^Author's work/ }))
-        expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(1)
-        expect(container.querySelector('summary')).toHaveTextContent('2 tool calls')
+        expect(container.querySelectorAll('.feed-tool-summary')).toHaveLength(1)
+        expect(container.querySelector('.feed-tool-summary')).toHaveTextContent('2 tool calls')
         expect(bumping(container)).toHaveLength(0)
 
         rerender(feed([tool(1), tool(3), tool(4)]))
-        expect(container.querySelector('summary')).toHaveTextContent('3 tool calls')
+        expect(container.querySelector('.feed-tool-summary')).toHaveTextContent('3 tool calls')
         expect(bumping(container)).toHaveLength(1)
 
         fireEvent.click(screen.getByRole('button', { name: /^All activity/ }))
-        expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+        expect(container.querySelectorAll('.feed-tool-summary')).toHaveLength(2)
         expect(bumping(container)).toHaveLength(0)
       })
     })
@@ -416,15 +443,16 @@ describe('FeedWorkspace', () => {
         ev('agent_action', { tool: 'text', detail: 'Third thought' }, 's1', '2026-07-10T10:00:04Z'),
       ]
       const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+      // Rows: thought, series (the same group, no author row of its own), thought, thought.
       const groups = Array.from(container.querySelectorAll('.feed-group[data-actor="agent"]'))
-      expect(groups).toHaveLength(3)
-      for (const group of groups) {
-        expect(group.querySelectorAll('.feed-author-row')).toHaveLength(1)
-        expect(group.querySelector(':scope > .mesh-avatar')).toBeInTheDocument()
-      }
-      expect(groups[0]?.querySelectorAll('details')).toHaveLength(1)
-      expect(groups[1]?.querySelectorAll('details')).toHaveLength(0)
-      expect(groups.map((g) => g.querySelector('.feed-item-markdown')?.textContent?.trim())).toEqual(['First thought', 'Second thought', 'Third thought'])
+      expect(groups).toHaveLength(4)
+      const authored = groups.filter((group) => group.querySelector('.feed-author-row') !== null)
+      expect(authored).toHaveLength(3)
+      for (const group of authored) expect(group.querySelector(':scope > .mesh-avatar')).toBeInTheDocument()
+      expect(groups[1]?.querySelector('button.feed-tool-summary')).not.toBeNull()
+      expect(groups[1]?.querySelector('.feed-author-row')).toBeNull()
+      expect(container.querySelectorAll('details')).toHaveLength(0)
+      expect(groups.map((g) => g.querySelector('.feed-item-markdown')?.textContent?.trim() ?? null)).toEqual(['First thought', null, 'Second thought', 'Third thought'])
     })
 
     it('imagePolicy="none" renders [AFM image: …] as literal markdown text, not an <img>', () => {
@@ -483,7 +511,8 @@ describe('FeedWorkspace', () => {
     const onOpenDialog = vi.fn()
     render(<FeedWorkspace events={events} stageId="s1" onOpenDialog={onOpenDialog} />)
     openToolGroups()
-    expect(screen.queryByRole('button', { name: /read_file/ })).not.toBeInTheDocument()
+    // The series button is the only button: the call line itself does not open a dialog.
+    expect(screen.queryByRole('button', { name: /read_file x\.ts/ })).not.toBeInTheDocument()
     expect(screen.getByText('read_file').closest('.feed-item')?.tagName).toBe('DIV')
   })
 
@@ -742,7 +771,7 @@ describe('FeedWorkspace', () => {
       const { container } = render(
         <FeedGroupView group={groupOf(rows)} showStageBadges={false} onReplyToThought={vi.fn()} onOpenDialog={vi.fn()} />,
       )
-      openToolGroups(container)
+      openDetails(container)
       const children = Array.from(container.querySelector('.feed-rows')?.children ?? [])
       expect(children.length).toBeGreaterThanOrEqual(4)
       // A tool run is a container: its summary and every call row are the items.
@@ -808,7 +837,7 @@ describe('FeedWorkspace', () => {
       const onReply = vi.fn()
       const tool = thoughtItem({ kind: 'tool', markdown: false, mono: true, text: 'Bash: ls' })
       render(<FeedGroupView group={groupOf([tool])} showStageBadges={false} onReplyToThought={onReply} />)
-      openToolGroups()
+      openDetails()
       expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
       fireEvent.click(screen.getByText('Bash'))
       expect(onReply).not.toHaveBeenCalled()
@@ -1020,19 +1049,44 @@ describe('FeedWorkspace', () => {
 })
 
 
+// atScroll — the feed scroller with a fixed layout (jsdom has none), scrolled to scrollTop. The list is virtualized by
+// a mock viewport, so the offsets stay inside the first rows' overscan: scrolled further, its rows would be unmounted.
+function atScroll(container: HTMLElement, scrollTop: number, scrollHeight = 1000): HTMLElement {
+  const scroll = container.querySelector('.feed-scroll') as HTMLElement
+  Object.defineProperties(scroll, { scrollHeight: { value: scrollHeight, configurable: true }, clientHeight: { value: 200, configurable: true } })
+  scroll.scrollTop = scrollTop
+  return scroll
+}
+
+// atBottom — the feed scrolled to the end of its 500px of content.
+const atBottom = (container: HTMLElement): HTMLElement => atScroll(container, 300, 500)
+
+// scrollUp — a reader's wheel gesture that leaves the feed 500px above its end.
+function scrollUp(container: HTMLElement): HTMLElement {
+  // The reader stood at the end before the gesture: the list direction comes from where the scroller moved.
+  const scroll = atScroll(container, 800)
+  fireEvent.scroll(scroll)
+  scroll.scrollTop = 300
+  act(() => {
+    fireEvent.wheel(scroll, { deltaY: -100 })
+    fireEvent.scroll(scroll)
+  })
+  return scroll
+}
+
 it('starts tool calls collapsed and leaves the reading position alone when expanded', () => {
   const events = [ev('agent_action', { tool: 'read_file', detail: 'long source text' }, 's1', '2026-01-01T00:00:00Z')]
   const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
-  const details = container.querySelector('details') as HTMLDetailsElement
-  expect(details.open).toBe(false)
-  const scroll = container.querySelector('.feed-scroll') as HTMLElement
-  Object.defineProperties(scroll, { scrollHeight: { value: 1000, configurable: true }, clientHeight: { value: 200, configurable: true } })
-  scroll.scrollTop = 800
+  const summary = container.querySelector('button.feed-tool-summary') as HTMLElement
+  expect(summary).toHaveAttribute('aria-expanded', 'false')
+  const scroll = atBottom(container)
   fireEvent.scroll(scroll)
-  fireEvent.click(details.querySelector('summary') as HTMLElement)
-  expect(details.open).toBe(true)
+  fireEvent.click(summary)
+  expect(summary).toHaveAttribute('aria-expanded', 'true')
+  // Opening is a reading action: the feed lets go of the bottom and says so.
+  expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument()
   rerender(<FeedWorkspace events={[...events, ev('agent_action', { tool: 'text', detail: 'new message' }, 's1', '2026-01-01T00:00:01Z')]} stageId="s1" />)
-  expect(scroll.scrollTop).toBe(800)
+  expect(scroll.scrollTop).toBe(300)
 })
 
 it('never gives a closed tool result a delayed entrance animation', () => {
@@ -1040,73 +1094,75 @@ it('never gives a closed tool result a delayed entrance animation', () => {
   try {
     const initial = ev('agent_action', { tool: 'text', detail: 'baseline' }, 's1', '2026-01-01T00:00:00Z')
     const tool = ev('agent_action', { tool: 'read_file', detail: 'later.txt' }, 's1', '2026-01-01T00:00:01Z')
-    const { rerender } = render(<FeedWorkspace events={[initial]} stageId="s1" />)
+    const { rerender, container } = render(<FeedWorkspace events={[initial]} stageId="s1" />)
     rerender(<FeedWorkspace events={[initial, tool]} stageId="s1" />)
-    const details = document.querySelector('details')!
-    expect(details).not.toHaveAttribute('open')
-    expect(details.querySelector('.feed-item--enter')).toBeNull()
+    const summary = container.querySelector('button.feed-tool-summary') as HTMLElement
+    expect(summary).toHaveAttribute('aria-expanded', 'false')
+    expect(container.querySelector('.feed-tool-group .feed-item--enter')).toBeNull()
     act(() => vi.advanceTimersByTime(2400))
-    fireEvent.click(details.querySelector('summary')!)
-    expect(details.querySelector('.feed-item--enter')).toBeNull()
+    fireEvent.click(summary)
+    expect(container.querySelector('.feed-tool-rows .feed-item')).not.toBeNull()
+    expect(container.querySelector('.feed-tool-rows .feed-item--enter')).toBeNull()
   } finally { vi.useRealTimers() }
 })
 
 describe('reading position around an expanded tool group', () => {
-  // atScroll — the feed scroller with a fixed layout (jsdom has none), scrolled to scrollTop.
-  function atScroll(container: HTMLElement, scrollTop: number): HTMLElement {
-    const scroll = container.querySelector('.feed-scroll') as HTMLElement
-    Object.defineProperties(scroll, { scrollHeight: { value: 1000, configurable: true }, clientHeight: { value: 200, configurable: true } })
-    scroll.scrollTop = scrollTop
-    fireEvent.scroll(scroll)
-    return scroll
-  }
-
-  // toggle — a summary click, plus the toggle event the browser fires after it.
-  async function toggle(details: HTMLDetailsElement): Promise<void> {
-    fireEvent.click(details.querySelector('summary') as HTMLElement)
-    await act(async () => {
-      details.dispatchEvent(new Event('toggle'))
-    })
-  }
-
   const call = (detail: string, second: number): AfmEvent =>
     ev('agent_action', { tool: 'Bash', detail }, 's1', `2026-01-01T00:00:0${second}Z`)
+  const summaryOf = (container: HTMLElement) => container.querySelector('button.feed-tool-summary') as HTMLElement
 
   it('follows new events again after the group is collapsed at the bottom', async () => {
     const events = [call('step 1', 0)]
     const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
-    const scroll = atScroll(container, 800)
-    const details = container.querySelector('details') as HTMLDetailsElement
+    atBottom(container)
 
-    await toggle(details)
-    expect(details.open).toBe(true)
-    await toggle(details)
-    expect(details.open).toBe(false)
+    fireEvent.click(summaryOf(container))
+    expect(summaryOf(container)).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: /Jump to latest/ })).toBeInTheDocument()
+    fireEvent.click(summaryOf(container))
+    expect(summaryOf(container)).toHaveAttribute('aria-expanded', 'false')
+    // The collapse is judged after the layout: the list stands at its end on the next frame, with no scroll event.
+    await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())))
+    expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull()
 
     rerender(<FeedWorkspace events={[...events, call('step 2', 1)]} stageId="s1" />)
-    await waitFor(() => expect(scroll.scrollTop).toBe(1000))
     expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull()
   })
 
-  it('keeps the reading position when the group is collapsed away from the bottom', async () => {
+  it('judges a collapse after the layout: the list stands 331px from the end at the click and at the end later, with no scroll event', async () => {
     const events = [call('step 1', 0)]
     const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
-    const scroll = atScroll(container, 300)
-    const details = container.querySelector('details') as HTMLDetailsElement
-
-    await toggle(details)
-    await toggle(details)
-
+    // Expanded content stands 331px below the viewport.
+    const scroll = atScroll(container, 800, 1331)
+    fireEvent.click(summaryOf(container))
+    fireEvent.click(summaryOf(container))
+    expect(screen.getByRole('button', { name: /Jump to latest/ })).toBeInTheDocument()
     rerender(<FeedWorkspace events={[...events, call('step 2', 1)]} stageId="s1" />)
-    await act(async () => { await Promise.resolve() })
-    expect(scroll.scrollTop).toBe(300)
+    // The collapsed content ends at the bottom; the scroller does not move, so nothing is scrolled.
+    Object.defineProperty(scroll, 'scrollHeight', { value: 1000, configurable: true })
+    await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())))
+    expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull()
   })
 
-  it('counts the events that arrived below a released feed on the jump button', async () => {
+  it('keeps the reading position when the group is collapsed away from the bottom', () => {
+    const events = [call('step 1', 0)]
+    const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
+    const scroll = scrollUp(container)
+    expect(screen.getByRole('button', { name: /Jump to latest/ })).toBeInTheDocument()
+
+    fireEvent.click(summaryOf(container))
+    fireEvent.click(summaryOf(container))
+
+    rerender(<FeedWorkspace events={[...events, call('step 2', 1)]} stageId="s1" />)
+    expect(scroll.scrollTop).toBe(300)
+    expect(screen.getByRole('button', { name: /Jump to latest/ })).toBeInTheDocument()
+  })
+
+  it('counts the events that arrived below a released feed on the jump button', () => {
     const events = [call('step 1', 0)]
     const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" arrivals={1} />)
-    atScroll(container, 800)
-    await toggle(container.querySelector('details') as HTMLDetailsElement)
+    atBottom(container)
+    fireEvent.click(summaryOf(container))
     expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeTruthy()
 
     rerender(<FeedWorkspace events={[...events, call('step 2', 1), call('step 3', 2)]} stageId="s1" arrivals={3} />)
@@ -1115,5 +1171,51 @@ describe('reading position around an expanded tool group', () => {
 
     fireEvent.click(jump)
     expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull()
+  })
+})
+
+describe('FeedGroupView — a long expanded tool series outside the virtual feed', () => {
+  const calls = (count: number): AfmEvent[] =>
+    Array.from({ length: count }, (_, i) => ({ type: 'agent_action', payload: { tool: 'Read', detail: `file${i}` }, stageId: 's1', timestamp: '2026-07-10T10:00:00Z', seq: i + 1 }) as AfmEvent)
+  const rowsOf = (container: HTMLElement) => container.querySelectorAll('.feed-tool-rows .feed-item')
+
+  it('mounts only the last 150 calls, and Show earlier adds the rest', () => {
+    const [group] = groupFeedItems(toFeedItems(calls(160)))
+    const { container } = render(<FeedGroupView group={group as FeedGroup} showStageBadges={false} />)
+    openDetails(container)
+    expect(rowsOf(container)).toHaveLength(150)
+    expect(rowsOf(container)[149]).toHaveTextContent('file159')
+    expect(rowsOf(container)[0]).toHaveTextContent('file10')
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier (10)' }))
+    expect(rowsOf(container)).toHaveLength(160)
+    expect(screen.queryByRole('button', { name: /Show earlier/ })).toBeNull()
+  })
+
+  it('a short series has no Show earlier, and closing it starts the window over', () => {
+    const [group] = groupFeedItems(toFeedItems(calls(151)))
+    const { container } = render(<FeedGroupView group={group as FeedGroup} showStageBadges={false} />)
+    openDetails(container)
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier (1)' }))
+    expect(rowsOf(container)).toHaveLength(151)
+    const details = container.querySelector('details') as HTMLDetailsElement
+    act(() => {
+      details.open = false
+      details.dispatchEvent(new Event('toggle'))
+    })
+    openDetails(container)
+    expect(rowsOf(container)).toHaveLength(150)
+  })
+})
+
+describe('ReportToggle — a report too big for the cache', () => {
+  it('is shown from the viewer itself and fetched once, not in a loop', async () => {
+    const big = 'x'.repeat(2_500_000)
+    const fetchReport = vi.fn(() => Promise.resolve(big))
+    const cache = createReportCache(fetchReport)
+    const { container } = render(<ReportToggle stageId="s1" verificationId="v1" open onToggle={() => {}} cache={cache} />)
+    await waitFor(() => expect(container.querySelector('.verify-report-body')).not.toBeNull())
+    expect(container.querySelector('.verify-report-body')?.textContent?.trim()).toHaveLength(2_500_000)
+    expect(cache.peek('s1', 'v1')).toBeUndefined()
+    expect(fetchReport).toHaveBeenCalledTimes(1)
   })
 })

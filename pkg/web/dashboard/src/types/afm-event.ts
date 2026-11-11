@@ -43,6 +43,9 @@ export type AfmEvent = {
   stageId: string
   timestamp: string
   seq?: number
+  // receipt — порядковый номер приёма live-события без seq и timestamp: по нему ключ строки не зависит от соседей.
+  // Только на клиенте, на сервер не уходит.
+  receipt?: number
 }
 
 // Значимые типы событий — канал обновления состояния: по ним корневая композиция

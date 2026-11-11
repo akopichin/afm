@@ -1,0 +1,14 @@
+# Copy to <fixture>/.afm/config.yaml. Profile load-worker backs gate "worker" (see README.md).
+docker:
+  enabled: false
+browser:
+  enabled: false
+server:
+  open_browser: false
+collaboration:
+  enabled: true
+  profiles:
+    load-worker:
+      title: Load worker
+      command: ./fake_worker.py
+      instructions: Fixture helper; waits for a gate, then answers.

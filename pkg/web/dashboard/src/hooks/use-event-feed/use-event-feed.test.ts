@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { mergeCapped } from './event-buffer'
-import { FEED_FLUSH_MS, useEventFeed } from './use-event-feed'
+import { FEED_FLUSH_MS, toEvent, useEventFeed } from './use-event-feed'
 import type { AfmEvent } from '../../types'
 
 // Минимальный fake WebSocket для тестирования подписки и backoff-реконнекта.
@@ -1380,5 +1380,21 @@ describe('useEventFeed', () => {
       expect(result.current.connected).toBe(true)
       expect(FakeWebSocket.instances).toHaveLength(1)
     })
+  })
+})
+
+describe('toEvent receipts', () => {
+  const action = { type: 'agent_action', stage_id: 's1', data: { tool: 'Read', detail: 'f' } }
+
+  test('two live events without seq get distinct receipts', () => {
+    const [a, b] = [toEvent(action), toEvent(action)]
+    expect(a.receipt).toBeDefined()
+    expect(b.receipt).toBeDefined()
+    expect(a.receipt).not.toBe(b.receipt)
+  })
+
+  test('a history event and an event with seq get none', () => {
+    expect(toEvent({ ...action, timestamp: '2026-01-01T10:00:00Z' })).not.toHaveProperty('receipt')
+    expect(toEvent({ ...action, seq: 4 })).not.toHaveProperty('receipt')
   })
 })

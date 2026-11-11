@@ -210,13 +210,18 @@ function isActivityMessage(raw: unknown): raw is { type: string; data?: unknown 
   return isRecord(raw) && raw.type === ACTIVITY_EVENT_TYPE
 }
 
+let nextReceipt = 0
+
 // Переиспользуется per-stage лентой при разборе своего фетча — единая точка приведения типа.
 export function toEvent(raw: unknown): AfmEvent {
   const obj = isRecord(raw) ? raw : {}
 
   // Берём timestamp из payload истории; для live WS используем время приёма.
+  const live = typeof obj.timestamp !== 'string'
   const timestamp = typeof obj.timestamp === 'string' ? obj.timestamp : new Date().toISOString()
   const seq = typeof obj.seq === 'number' ? obj.seq : undefined
+  // Событие без seq и с одним временем приёма иначе не отличить от соседа: номер приёма даёт ему постоянный ключ.
+  const receipt = live && seq === undefined ? nextReceipt++ : undefined
 
   return {
     type: typeof obj.type === 'string' ? obj.type : '',
@@ -224,6 +229,7 @@ export function toEvent(raw: unknown): AfmEvent {
     stageId: typeof obj.stage_id === 'string' ? obj.stage_id : '',
     timestamp,
     seq,
+    ...(receipt === undefined ? {} : { receipt }),
   }
 }
 

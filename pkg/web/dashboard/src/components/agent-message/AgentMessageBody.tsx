@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import { MarkdownRenderer } from '../plan-panel'
 import { parseAgentResultBody, verdictLabel } from '../../lib/agent-result'
 import { renderPlainMarkdownCached } from '../plan-panel/markdown'
@@ -14,6 +14,9 @@ type AgentMessageBodyProps = {
   // autoResult — afm posted this message as the agent's turn result (auto_result); it woke nobody.
   autoResult?: boolean
   mentionHandles?: readonly string[]
+  // raw — the "Raw" section opened and closed by the caller, so it survives the row being unmounted (the
+  // virtualized feed). Without it the section keeps its own state.
+  raw?: { open: boolean; onToggle: (open: boolean) => void }
 }
 
 export const TURN_RESULT_TOOLTIP = "afm posted the agent's turn result as a reply; it does not wake the recipient"
@@ -23,7 +26,10 @@ export const TURN_RESULT_TOOLTIP = "afm posted the agent's turn result as a repl
 // conversations. An agent's body that is its pasted v1 JSON result object shows as its
 // summary with a small verdict chip; the original text stays one click away ("Raw"). A turn result afm posted
 // for the agent carries a small "turn result" tag.
-export function AgentMessageBody({ body, fromAgent, markdown = false, autoResult = false, mentionHandles }: AgentMessageBodyProps): ReactElement {
+export function AgentMessageBody({ body, fromAgent, markdown = false, autoResult = false, mentionHandles, raw }: AgentMessageBodyProps): ReactElement {
+  const [ownRawOpen, setOwnRawOpen] = useState(false)
+  const rawOpen = raw?.open ?? ownRawOpen
+  const toggleRaw = raw?.onToggle ?? setOwnRawOpen
   const result = fromAgent ? parseAgentResultBody(body) : null
   const text = result?.summary ?? body
   return (
@@ -42,9 +48,9 @@ export function AgentMessageBody({ body, fromAgent, markdown = false, autoResult
         <div className="md" dangerouslySetInnerHTML={{ __html: highlightMentions(renderPlainMarkdownCached(text), mentionHandles) }} />
       ) : <MarkdownRenderer source={text} /> : text}
       {result !== null && (
-        <details className="agent-result-raw">
+        <details className="agent-result-raw" open={rawOpen} onToggle={(event) => { if (event.currentTarget.open !== rawOpen) toggleRaw(event.currentTarget.open) }}>
           <summary>Raw</summary>
-          <pre>{body}</pre>
+          {rawOpen && <pre>{body}</pre>}
         </details>
       )}
     </>

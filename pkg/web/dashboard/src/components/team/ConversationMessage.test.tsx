@@ -42,6 +42,19 @@ describe('ConversationMessage', () => {
     expect(onReply).toHaveBeenCalledOnce()
   })
 
+  test('rootTag div renders the bubble without an <li>, so a list item around it is not nested in a div', () => {
+    const { container } = render(<ConversationMessage message={answer} participants={participants} presentation="feed" rootTag="div" />)
+    expect(container.querySelector('li')).toBeNull()
+    expect(container.firstElementChild).toHaveAttribute('data-message-id', 'm2')
+  })
+
+  test('the Raw section of an agent result is kept by the caller when it passes its state', () => {
+    const body = '{"schema_version":1,"kind":"result","verdict":"pass","summary":"Done."}'
+    const onToggle = vi.fn()
+    renderMessage({ message: { ...answer, body }, raw: { open: true, onToggle } })
+    expect(screen.getByText(body)).toBeInTheDocument()
+  })
+
   test('feed cards only mark a request as waiting when the caller confirms it is unanswered', () => {
     const { rerender } = renderMessage({ presentation: 'feed', waitingForYou: true })
     expect(document.querySelector('.feed-message')).toHaveClass('is-waiting-for-you')

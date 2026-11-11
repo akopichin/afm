@@ -3,6 +3,14 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-10
+
+### Improvement:
+
+- The Feed and the Team **Activity** tab are virtualized: only rows near the viewport are rendered, the whole client-side history scrolls continuously and **Show earlier** is gone from the Feed. Browser find (Ctrl/Cmd+F) and text selection reach only the rendered rows.
+- Tool-call series, verify reports and **Raw** bodies keep their open state when you scroll away and back; clicking a quote outside the loaded history shows a notice instead of loading more rows.
+- The `scripts/dashboard-load/` fixture covers the virtualized lists: tool series, conversations, JSON result, delayed image, long history, a verify report and a controllable helper.
+
 ## 2026-11-09
 
 ### Improvement:

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { AfmEvent } from '../../types'
 import type { FeedItem } from './feed-view-model'
-import { toFeedItems, groupFeedItems, groupToolRuns, toolCall, toolRunSummary, formatEventGap, buildFeedTimeline, windowFeedTimeline, FEED_WINDOW_STEP } from './feed-view-model'
+import { toFeedItems, groupFeedItems, groupToolRuns, toolCall, toolRunSummary, formatEventGap, buildFeedTimeline } from './feed-view-model'
 import type { MeshMessage } from '../../api/mesh-client'
 import { resetUnknownCommandLabels } from '../../lib/executor-label'
 
@@ -989,80 +989,5 @@ describe('groupToolRuns / toolRunSummary', () => {
     expect(summary(['Read'])).toEqual({ count: 1, label: 'tool call', names: 'read' })
     expect(summary(['Read', 'Edit', 'Read'])).toEqual({ count: 3, label: 'tool calls', names: 'read, edit' })
     expect(summary(['A', 'B', 'C', 'D', 'E'])).toEqual({ count: 5, label: 'tool calls', names: 'a, b, c, d…' })
-  })
-})
-
-describe('windowFeedTimeline — the window counts rows, not timeline entries', () => {
-  const at = (n: number) => new Date(Date.UTC(2026, 6, 10, 10, 0, 0) + n * 1000).toISOString()
-  const board = (n: number) => ev('mesh_board', { key: `k${n}`, status: 'ready', author: 'a' }, 's1', at(n), n)
-  const text = (n: number) => ev('agent_action', { tool: 'text', detail: `t${n}` }, 's1', at(n), n)
-  const tool = (n: number) => ev('agent_action', { tool: 'Read', detail: `d${n}` }, 's1', at(n), n)
-  const msg = (id: string, n: number): MeshMessage => ({ id, thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['stage:s1'], kind: 'message', body: id, seq: n, created_at: at(n) })
-  const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i)
-  const rowCount = (entries: ReturnType<typeof buildFeedTimeline>) =>
-    entries.reduce((n, e) => n + (e.kind === 'conversation' ? e.messages.length : groupToolRuns(e.group.items).length), 0)
-
-  it('returns a short timeline untouched', () => {
-    const timeline = buildFeedTimeline(toFeedItems([text(1), text(2)]), [], 'all')
-    const win = windowFeedTimeline(timeline, null, FEED_WINDOW_STEP)
-    expect(win.entries).toBe(timeline)
-    expect(win.hidden).toBe(0)
-  })
-
-  it('one group of 400 board rows keeps its header and only its last 150 rows', () => {
-    const timeline = buildFeedTimeline(toFeedItems(range(1, 401).map(board)), [], 'all')
-    expect(timeline).toHaveLength(1)
-    const win = windowFeedTimeline(timeline, null, 150)
-    expect(win.hidden).toBe(250)
-    expect(win.entries).toHaveLength(1)
-    const entry = win.entries[0]
-    if (entry?.kind !== 'group') throw new Error('group expected')
-    expect(entry.key).toBe(timeline[0]?.key)
-    expect(entry.group.items).toHaveLength(150)
-    expect(entry.group.items.at(-1)?.key).toBe('seq:400')
-  })
-
-  it('counts a tool series as one row and a conversation message as one row each', () => {
-    const items = toFeedItems([text(1), tool(2), tool(3), tool(4), text(5)])
-    const timeline = buildFeedTimeline(items, [msg('a', 3), msg('b', 3)], 'all')
-    expect(windowFeedTimeline(timeline, null, 1000).rowKeys).toHaveLength(rowCount(timeline))
-    const win = windowFeedTimeline(timeline, null, 3)
-    expect(rowCount(win.entries)).toBe(3)
-    expect(win.hidden).toBe(win.rowKeys.length - 3)
-  })
-
-  it('starts at the pinned row and does not slide when rows are appended', () => {
-    const before = buildFeedTimeline(toFeedItems([...range(1, 11).map(text)]), [], 'all')
-    const pinned = windowFeedTimeline(before, null, 4)
-    const startKey = pinned.rowKeys[pinned.start] as string
-    const after = buildFeedTimeline(toFeedItems([...range(1, 14).map(text)]), [], 'all')
-    const win = windowFeedTimeline(after, startKey, 4)
-    expect(win.rowKeys[win.start]).toBe(startKey)
-    expect(rowCount(win.entries)).toBe(after.length - win.start)
-  })
-
-  it('starts at the first available row when the pinned row is gone', () => {
-    const timeline = buildFeedTimeline(toFeedItems(range(1, 11).map(text)), [], 'all')
-    const win = windowFeedTimeline(timeline, 'seq:999', 4)
-    expect(win.start).toBe(0)
-    expect(win.hidden).toBe(0)
-  })
-
-  it('a script output group is limited the same way', () => {
-    const out = (n: number) => ev('script_output', { stream: 'stdout', text: `line${n}` }, 's1', at(n), n)
-    const timeline = buildFeedTimeline(toFeedItems(range(1, 301).map(out)), [], 'all')
-    const win = windowFeedTimeline(timeline, null, 150)
-    expect(rowCount(win.entries)).toBe(150)
-  })
-
-  it('an expanded start row shows everything from it in order', () => {
-    const timeline = buildFeedTimeline(toFeedItems(range(1, 301).map(board)), [], 'all')
-    const first = windowFeedTimeline(timeline, null, 150)
-    const earlierKey = first.rowKeys[Math.max(0, first.start - 150)] as string
-    const win = windowFeedTimeline(timeline, earlierKey, 150)
-    expect(win.hidden).toBe(0)
-    const entry = win.entries[0]
-    if (entry?.kind !== 'group') throw new Error('group expected')
-    expect(entry.group.items.map((i) => i.key)).toEqual(range(1, 301).map((n) => `seq:${n}`))
   })
 })

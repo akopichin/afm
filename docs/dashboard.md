@@ -82,12 +82,24 @@ right. The selected stage's Feed can also show a People panel on wide screens.
   reading position, and the **Jump to latest** button shows how many events
   arrived below. Collapsing the series near the bottom, scrolling back down or
   pressing **Jump to latest** follows new events again.
-- **Long runs** — the Feed renders only the latest 150 rows; earlier ones load in
-  steps of 150 with **Show earlier (N)** at the top, and clicking a quote jumps to
-  its message by loading the needed part. An `N tool calls` series shows its calls
-  only while expanded (long series also page with **Show earlier**). The Team
-  **Activity** tab renders only while it is selected. To check dashboard memory on a
-  long run, use the `scripts/dashboard-load/` fixture (fake agent, no LLM; see its README).
+- **Long runs** — the Feed and the Team **Activity** tab are virtualized: only the
+  rows near the viewport are in the page, so a long run stays smooth and the
+  whole client-side history scrolls continuously, with no **Show earlier**
+  button. An `N tool calls` series is one summary button; its calls appear
+  when you expand it, and the series stays expanded (and an opened verify
+  report or **Raw** body stays open) after you scroll away and back. Clicking a
+  quote scrolls to its message; if the message is outside the loaded history, a
+  "Message is outside the loaded history" notice appears instead. Because
+  off-screen rows are not in the page, browser find (**Ctrl/Cmd+F**) and text
+  selection reach only the mounted rows. The Activity tab renders only while it
+  is selected. To check dashboard memory and scroll behaviour on a long run,
+  use the `scripts/dashboard-load/` fixture (fake agents, no LLM; see its
+  README).
+  Known limitations: while events stream in and the list holds a long
+  conversation before them, a focused tool-series button can lose keyboard
+  focus to the Feed when old rows are evicted; and after **Jump to latest**
+  from far above the end under a very high event rate (about 40–50 per
+  second) the view can briefly trail the bottom until it catches up.
 - **Stage header** — a compact row above the selected stage's view shows its name
   and current status. When applicable it shows a reply count, **People**,
   **Retry** for a failed stage, and **Pause** or **Continue**. **People** shows

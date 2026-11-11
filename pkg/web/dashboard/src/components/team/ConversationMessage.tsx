@@ -33,6 +33,12 @@ export type ConversationMessageProps = {
   presentation?: 'feed'
   delivery?: string
   waitingForYou?: boolean
+  // rootTag — the bubble is an <li> of its own list by default; a virtualized feed row is already the list item.
+  rootTag?: 'li' | 'div'
+  // raw — the open state of the body's "Raw" section, kept by the caller (see AgentMessageBody).
+  raw?: { open: boolean; onToggle: (open: boolean) => void }
+  // jumpTarget — the reader has just jumped here from a quote: the message is outlined once.
+  jumpTarget?: boolean
 }
 
 // roleLabel — a log post author's role in words; wire values (main_agent, assistant, a mesh kind) are not for people.
@@ -50,7 +56,7 @@ function roleLabel(role: string): string {
 // ConversationMessage — the ONE bubble of a conversation message, in Team and in the stage feed: avatar,
 // author, the agent's command, "→ recipients", time, then the text; a reply quotes the start of the message it
 // answers ("Replying to …").
-export function ConversationMessage({ message, previousCreatedAt, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null, isNew = false, presentation, delivery, waitingForYou = false }: ConversationMessageProps): ReactElement {
+export function ConversationMessage({ message, previousCreatedAt, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null, isNew = false, presentation, delivery, waitingForYou = false, rootTag: Root = 'li', raw, jumpTarget = false }: ConversationMessageProps): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const sender = participants.find((p) => p.id === message.sender_id)
   const kind = sender?.kind ?? (message.sender_id === 'user' ? 'user' : '')
@@ -104,7 +110,7 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
               )}
             </blockquote>
           )}
-          <AgentMessageBody body={message.body} fromAgent={!fromYou} markdown={markdown} autoResult={message.auto_result === true} mentionHandles={feed ? [...handles.values()] : undefined} />
+          <AgentMessageBody body={message.body} fromAgent={!fromYou} markdown={markdown} autoResult={message.auto_result === true} mentionHandles={feed ? [...handles.values()] : undefined} raw={raw} />
           {evidence !== undefined && evidence.length > 0 && (
             <ul className="conversation-evidence" aria-label="Evidence">
               {evidence.map((e) => (
@@ -116,8 +122,8 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
     </>
   )
   return (
-    <li
-      className={`team-conversation-message${feed ? ' feed-message' : ''}${fromYou ? ' from-you' : ''}${replyActive ? ' is-reply-target' : ''}${isNew ? ' is-new-agent-message' : ''}${feed && waitingForYou ? ' is-waiting-for-you' : ''}`}
+    <Root
+      className={`team-conversation-message${feed ? ' feed-message' : ''}${fromYou ? ' from-you' : ''}${replyActive ? ' is-reply-target' : ''}${jumpTarget ? ' is-jump-target' : ''}${isNew ? ' is-new-agent-message' : ''}${feed && waitingForYou ? ' is-waiting-for-you' : ''}`}
       data-sender={message.sender_id}
       data-message-id={message.id}
     >
@@ -135,6 +141,6 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
           </div>
         )}
       </div>
-    </li>
+    </Root>
   )
 }

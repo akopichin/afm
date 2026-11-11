@@ -1,13 +1,14 @@
 import type { ReactElement } from 'react'
 
 // Плавающая круглая иконка-кнопка «вниз, к последнему» — единый вид для ленты, лога и диалога. onClick
-// прокручивает контейнер к низу; unseen — сколько новых событий пришло ниже видимой части.
-export function JumpToLatestButton({ onClick, raised = false, unseen = 0 }: { onClick: () => void; raised?: boolean; unseen?: number }): ReactElement {
+// прокручивает контейнер к низу; unseen — сколько новых событий пришло ниже видимой части; overlay — кнопка
+// лежит поверх списка в его рамке, а не липнет внутри скроллера.
+export function JumpToLatestButton({ onClick, raised = false, unseen = 0, overlay = false }: { onClick: () => void; raised?: boolean; unseen?: number; overlay?: boolean }): ReactElement {
   const label = unseen > 0 ? `Jump to latest, ${unseen} new` : 'Jump to latest'
   return (
     <button
       type="button"
-      className={`jump-latest${raised ? ' jump-latest-raised' : ''}`}
+      className={`jump-latest${raised ? ' jump-latest-raised' : ''}${overlay ? ' jump-latest--overlay' : ''}`}
       onClick={onClick}
       aria-label={label}
       title={label}

@@ -1,16 +1,31 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, test } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, test, vi } from 'vitest'
 import { AgentMessageBody, TURN_RESULT_TOOLTIP } from './AgentMessageBody'
 
 const RESULT = '{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"Two tests fail."}'
 
 describe('AgentMessageBody', () => {
-  test("an agent's pasted result object shows its summary and a verdict chip; the raw text stays reachable", () => {
+  test("an agent's pasted result object shows its summary and a verdict chip; the raw text stays reachable", async () => {
     render(<AgentMessageBody body={RESULT} fromAgent />)
     expect(screen.getByText('Two tests fail.')).toBeInTheDocument()
     expect(screen.getByText('Needs changes')).toHaveAttribute('data-verdict', 'needs_changes')
     expect(screen.getByText('Raw')).toBeInTheDocument()
-    expect(screen.getByText(RESULT)).toBeInTheDocument() // inside the collapsed "Raw" details
+    // The raw text is mounted only while "Raw" is open.
+    expect(screen.queryByText(RESULT)).toBeNull()
+    fireEvent.click(screen.getByText('Raw'))
+    expect(await screen.findByText(RESULT)).toBeInTheDocument()
+  })
+
+  test('a Raw section kept by the caller shows its open state and reports the reader\'s toggle', () => {
+    const onToggle = vi.fn()
+    const { rerender } = render(<AgentMessageBody body={RESULT} fromAgent raw={{ open: true, onToggle }} />)
+    expect(screen.getByText(RESULT)).toBeInTheDocument()
+    const details = screen.getByText('Raw').closest('details') as HTMLDetailsElement
+    details.open = false
+    fireEvent(details, new Event('toggle'))
+    expect(onToggle).toHaveBeenCalledWith(false)
+    rerender(<AgentMessageBody body={RESULT} fromAgent raw={{ open: false, onToggle }} />)
+    expect(screen.queryByText(RESULT)).toBeNull()
   })
 
   test('a result without a verdict shows its summary and no verdict chip', () => {

@@ -92,12 +92,7 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
 
 // Строки tool-вызовов монтируются только у открытой группы: браузер шлёт toggle после открытия.
 function openToolGroups(): void {
-  document.querySelectorAll('#feed-content details').forEach((details) => {
-    act(() => {
-      ;(details as HTMLDetailsElement).open = true
-      details.dispatchEvent(new Event('toggle'))
-    })
-  })
+  document.querySelectorAll<HTMLElement>('#feed-content button.feed-tool-summary[aria-expanded="false"]').forEach((summary) => fireEvent.click(summary))
 }
 
 // Переключает воркспейс на вкладку деталей выбранной стадии. Нужна там, где тест проверяет
@@ -1581,13 +1576,13 @@ describe('App', () => {
     })
 
     // Default view — Feed для выбранной s1: только её событие видно (tool-группа ленивая — раскрываем).
-    await waitFor(() => expect(document.querySelector('#feed-content details.feed-tool-group')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('#feed-content button.feed-tool-summary')).not.toBeNull())
     openToolGroups()
     await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file a.ts'))
     expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file b.ts')
 
     fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
-    await waitFor(() => expect(document.querySelector('#feed-content details.feed-tool-group')).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('#feed-content button.feed-tool-summary')).not.toBeNull())
     openToolGroups()
     await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file b.ts'))
     expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file a.ts')

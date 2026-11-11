@@ -110,8 +110,10 @@ describe('ThreadConversation', () => {
     render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
     await waitFor(() => expect(screen.getByText('Could not run the e2e suite.')).toBeInTheDocument())
     expect(screen.getByText('Inconclusive')).toBeInTheDocument()
-    // The raw JSON is only inside the collapsed "Raw" details, never the visible text.
-    expect(screen.getByText(/schema_version/).closest('details')).not.toBeNull()
+    // The raw JSON is only inside the "Raw" details, and is not mounted until it is opened.
+    expect(screen.queryByText(/schema_version/)).toBeNull()
+    fireEvent.click(screen.getByText('Raw'))
+    expect((await screen.findByText(/schema_version/)).closest('details')).not.toBeNull()
   })
 
   test("an agent's turn result afm posted carries the turn result tag", async () => {
