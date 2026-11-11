@@ -273,7 +273,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (selectedOption !== null) {
       answer = selectedOption
       fromOptions = true
-    } else if (trimmed !== '') {
+    } else if (question.allow_custom === true && trimmed !== '') {
       answer = trimmed
     } else {
       return
@@ -300,11 +300,11 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     }
   }
 
-  // При наличии комментариев отправляем их как feedback через /dialog/answer с from_options=false.
+  // Feedback тоже является свободным ответом и подчиняется allow_custom.
   async function sendFeedback(comments: DocumentComment[]) {
     if (stage === null) return
     const question = pending
-    if (question === null || question.id === undefined) return
+    if (question === null || question.id === undefined || question.allow_custom !== true) return
 
     const feedback = buildFeedback(comments, question.question ?? '')
     if (feedback === '') return
@@ -351,15 +351,28 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     setSelectedOption(null)
   }
 
-  // renderPending переключает ответ на feedback при наличии комментариев; открытый редактор строки
-  // блокирует отправку.
-  function renderPending(doc: LineCommentDocumentApi): ReactNode {
+  // Вопрос с вариантами без свободного ответа не открывает редакторы комментариев.
+  function renderPending(doc: LineCommentDocumentApi | null): ReactNode {
     if (pending === null) return null
+    const hasFeedback = doc !== null && doc.commentCount > 0
+    const editingComment = doc !== null && doc.activeCommentLine !== null
     return (
       <>
-        {doc.body}
+        {doc === null ? (
+          <>
+            <div className="dialog-question">
+              <MarkdownRenderer source={pending.question ?? ''} />
+            </div>
+            <StaleComments
+              entries={allComments.filter(({ anchor }) => anchor.kind === 'question' && anchor.stageId === stageId
+                && anchor.phase === (pending.phase ?? '') && anchor.questionId === (pending.id ?? '') && anchor.line !== null)}
+              source="this question"
+              unsentReason="this question only accepts the listed options"
+            />
+          </>
+        ) : doc.body}
 
-        {doc.commentCount === 0 && (
+        {!hasFeedback && (
           <>
             <div className={`dialog-options${selectedOption !== null ? ' dimmed' : ''}`}>
               {(pending.options ?? []).map((option, index) => {
@@ -402,7 +415,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               onSubmit={() => {
                 // codex MEDIUM: Enter is a keyboard-submit path that a
                 // disabled SEND button does not intercept — guard it separately.
-                if (doc.activeCommentLine !== null) return
+                if (editingComment) return
                 void sendAnswer()
               }}
             />
@@ -410,15 +423,19 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
         )}
 
         <div className="dialog-actions">
-          <span className="dialog-hint">The agent is waiting for your answer.</span>
+          <span className="dialog-hint">
+            {pending.allow_custom === true
+              ? 'The agent is waiting for your answer.'
+              : 'Choose one of the listed options. This question does not accept free-text answers or feedback.'}
+          </span>
           <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
             CANCEL STAGE
           </button>
-          {doc.commentCount === 0 ? (
+          {!hasFeedback ? (
             <button
               className={`btn btn-send${clickedSend ? ' ok' : ''}`}
               type="button"
-              disabled={doc.activeCommentLine !== null || submitting}
+              disabled={editingComment || submitting}
               onClick={sendAnswer}
             >
               <span className="btn-ripple" aria-hidden="true" />
@@ -429,7 +446,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
             <button
               className={`btn btn-send${clickedSend ? ' ok' : ''}`}
               type="button"
-              disabled={submitting || doc.activeCommentLine !== null}
+              disabled={submitting || editingComment}
               onClick={() => void sendFeedback(doc.comments)}
             >
               <span className="btn-ripple" aria-hidden="true" />
@@ -464,17 +481,19 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 
             {pending !== null && (
               <div id="dialog-pending" className={`dialog-pending${flash ? ' dialog-flash' : ''}`}>
-                <LineCommentedDocument
-                  key={`${stageId}::${pending.phase ?? ''}::${pending.id ?? ''}::${pending.question ?? ''}`}
-                  text={pending.question ?? ''}
-                  specialSections={false}
-                  stageId={stageId}
-                  scope={{ kind: 'question', phase: pending.phase ?? '', questionId: pending.id ?? '' }}
-                  beforeOpen={releaseStick}
-                  bodyClassName="dialog-question line-commented"
-                >
-                  {(doc) => renderPending(doc)}
-                </LineCommentedDocument>
+                {pending.allow_custom === true ? (
+                  <LineCommentedDocument
+                    key={`${stageId}::${pending.phase ?? ''}::${pending.id ?? ''}::${pending.question ?? ''}`}
+                    text={pending.question ?? ''}
+                    specialSections={false}
+                    stageId={stageId}
+                    scope={{ kind: 'question', phase: pending.phase ?? '', questionId: pending.id ?? '' }}
+                    beforeOpen={releaseStick}
+                    bodyClassName="dialog-question line-commented"
+                  >
+                    {(doc) => renderPending(doc)}
+                  </LineCommentedDocument>
+                ) : renderPending(null)}
               </div>
             )}
 
