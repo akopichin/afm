@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/budget"
 	"gopkg.in/yaml.v3"
 )
 
@@ -98,7 +99,10 @@ func findMapValue(node *yaml.Node, key string) *yaml.Node {
 }
 
 // yamlMergeTag is yaml.v3's tag for the special `<<` merge key.
-const yamlMergeTag = "!!merge"
+const (
+	yamlMergeTag = "!!merge"
+	yamlNullTag  = "!!null"
+)
 
 func findMapValueSeen(node *yaml.Node, key string, seen map[*yaml.Node]bool) *yaml.Node {
 	if node.Kind == yaml.AliasNode {
@@ -178,13 +182,22 @@ type ProfileConfig struct {
 	Delegate bool `yaml:"delegate,omitempty"`
 	// RuntimeContext переопределяет collaboration.runtime_context для этого профиля. nil = наследовать.
 	RuntimeContext *assistants.RuntimeContext `yaml:"runtime_context,omitempty"`
+	// Budget — лимит расхода по умолчанию для помощников этого профиля; nil — не задан.
+	Budget *budget.Spec `yaml:"budget,omitempty"`
 }
 
-// UnmarshalYAML проверяет сырой узел runtime_context до превращения в указатель — как mode выше.
+// UnmarshalYAML проверяет сырые узлы runtime_context и budget до превращения в указатель — как mode выше.
 func (p *ProfileConfig) UnmarshalYAML(node *yaml.Node) error {
 	const field = "collaboration.profiles.*.runtime_context"
 	if err := validateRuntimeContextNode(field, node); err != nil {
 		return err
+	}
+	n, set, err := budget.EffectiveYAMLValue(node, "budget")
+	if err != nil {
+		return err
+	}
+	if set && n.ShortTag() == yamlNullTag {
+		return fmt.Errorf("collaboration.profiles.*.budget must not be null (line %d): give tokens and/or money, or remove the key", n.Line)
 	}
 	type plain ProfileConfig // no methods: decoding it does not recurse into UnmarshalYAML
 	return node.Decode((*plain)(p))

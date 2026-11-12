@@ -12,6 +12,7 @@ import (
 	stagefiles "github.com/akopichin/afm/contracts/activity"
 	"github.com/akopichin/afm/contracts/agentcomm"
 	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/contracts/graph"
 	"github.com/akopichin/afm/contracts/state"
@@ -34,6 +35,7 @@ type AddRunAgentRequest struct {
 	Actor        state.Actor
 	Skills       []string
 	SkillsDir    string
+	Budget       *budget.Spec `json:",omitempty"`
 }
 
 type AddStageDraft struct {
@@ -73,6 +75,7 @@ type AttachAndSendRequest struct {
 	Actor        state.Actor
 	Skills       []string
 	SkillsDir    string
+	Budget       *budget.Spec `json:",omitempty"`
 }
 
 type AttachAndSendResult struct {
@@ -101,6 +104,7 @@ type AttachRequest struct {
 	Actor       state.Actor
 	Skills      []string
 	SkillsDir   string
+	Budget      *budget.Spec `json:",omitempty"`
 }
 
 type BoardPage struct{ Entries []agentcomm.BoardEntry }
@@ -515,4 +519,31 @@ func (e *VerifyExecError) Error() string {
 
 func (e *StageFailedError) Error() string {
 	return fmt.Sprintf("stage %s failed: %s", e.StageID, e.Reason)
+}
+
+// UnmarshalJSON rejects an explicit null budget, which a *budget.Spec field would read as absent.
+func (r *AddRunAgentRequest) UnmarshalJSON(data []byte) error {
+	if err := budget.RejectNullField(data, "Budget"); err != nil {
+		return err
+	}
+	type plain AddRunAgentRequest // no methods: decoding it does not recurse into UnmarshalJSON
+	return json.Unmarshal(data, (*plain)(r))
+}
+
+// UnmarshalJSON rejects an explicit null budget, which a *budget.Spec field would read as absent.
+func (r *AttachAndSendRequest) UnmarshalJSON(data []byte) error {
+	if err := budget.RejectNullField(data, "Budget"); err != nil {
+		return err
+	}
+	type plain AttachAndSendRequest // no methods: decoding it does not recurse into UnmarshalJSON
+	return json.Unmarshal(data, (*plain)(r))
+}
+
+// UnmarshalJSON rejects an explicit null budget, which a *budget.Spec field would read as absent.
+func (r *AttachRequest) UnmarshalJSON(data []byte) error {
+	if err := budget.RejectNullField(data, "Budget"); err != nil {
+		return err
+	}
+	type plain AttachRequest // no methods: decoding it does not recurse into UnmarshalJSON
+	return json.Unmarshal(data, (*plain)(r))
 }

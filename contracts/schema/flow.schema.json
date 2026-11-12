@@ -7,6 +7,7 @@
   "additionalProperties": false,
   "required": ["name", "stages"],
   "properties": {
+    "budget": { "$ref": "#/definitions/budget" },
     "name": {
       "type": "string",
       "description": "Flow name."
@@ -116,6 +117,63 @@
     }
   ],
   "definitions": {
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "anyOf": [
+        {
+          "required": [
+            "tokens"
+          ]
+        },
+        {
+          "required": [
+            "money"
+          ]
+        }
+      ],
+      "description": "Spend limit: at least one of tokens or money, plus an optional stop_policy. The k/m and $ forms are checked for shape here; the range limits (tokens up to 2^53-1, money up to 1e9) are enforced by the parser.",
+      "properties": {
+        "tokens": {
+          "description": "Token limit: a positive integer, or a string like 500k (up to 3 decimals) or 1.5m (up to 6).",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "pattern": "^([0-9]*[1-9][0-9]*(\\.[0-9]{1,3})?[kK]|0+\\.([1-9][0-9]{0,2}|0[1-9][0-9]{0,1}|0{2}[1-9][0-9]{0,0})[kK]|[0-9]*[1-9][0-9]*(\\.[0-9]{1,6})?[mM]|0+\\.([1-9][0-9]{0,5}|0[1-9][0-9]{0,4}|0{2}[1-9][0-9]{0,3}|0{3}[1-9][0-9]{0,2}|0{4}[1-9][0-9]{0,1}|0{5}[1-9][0-9]{0,0})[mM])$"
+            }
+          ]
+        },
+        "money": {
+          "description": "Money limit in USD: a positive number, or a string like 10$ or 0.50$.",
+          "oneOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1000000000
+            },
+            {
+              "type": "string",
+              "pattern": "^([0-9]*[1-9][0-9]*(\\.[0-9]+)?|0+\\.[0-9]*[1-9][0-9]*)\\$$"
+            }
+          ]
+        },
+        "stop_policy": {
+          "type": "string",
+          "enum": [
+            "hard",
+            "medium",
+            "info"
+          ],
+          "description": "What happens at the limit. hard (default) stops the work, medium stops new work but lets the current turn finish, info only reports."
+        }
+      }
+    },
     "skillNames": {
       "description": "Skills the agent must load before the task: one name or a list. Exact repeats are dropped, order is kept, names (including namespaced ones like superpowers:test-driven-development) are used as written. An empty list means none.",
       "oneOf": [
@@ -244,6 +302,7 @@
       "required": ["id"],
       "description": "A single stage. Must have at least one of: a planning agent, `plan`, `interactive: true`, `agents: [auto]`, or `script`.",
       "properties": {
+        "budget": { "$ref": "#/definitions/budget" },
         "id": {
           "type": "string",
           "description": "Unique identifier restricted to [A-Za-z0-9._-] (it is also used in filesystem paths, the managed-browser session URL, and a Chrome profile dir name). Not '.' or '..'.",
@@ -514,6 +573,7 @@
       "required": ["id", "profile", "title"],
       "description": "One run agent of the flow's team.",
       "properties": {
+        "budget": { "$ref": "#/definitions/budget" },
         "id": {
           "type": "string",
           "description": "Declaration key, unique in the team, restricted to [A-Za-z0-9._-]. Identifies the agent across resumes; it is not the agent's @name.",
@@ -533,6 +593,7 @@
       "required": ["profile"],
       "description": "One declared assistant, object form: a profile reference plus optional overrides.",
       "properties": {
+        "budget": { "$ref": "#/definitions/budget" },
         "profile": { "type": "string", "minLength": 1, "description": "Assistant profile id (a key under collaboration.profiles)." },
         "title": { "type": "string", "description": "Short label for this helper task, shown in the dashboard." },
         "instruction": { "type": "string", "description": "Instruction given to the helper agent." },

@@ -23,3 +23,14 @@ func TestDefaultHostPreservesAdmissionStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestOperationErrorStatusSpendCodes(t *testing.T) {
+	for code, status := range map[assistants.ErrorCode]int{
+		assistants.CodeSpendLimitReached: http.StatusConflict,
+		assistants.CodeRatesMissing:      http.StatusUnprocessableEntity,
+	} {
+		if got := OperationErrorStatus(code); got != status {
+			t.Errorf("%s: got %d, want %d", code, got, status)
+		}
+	}
+}

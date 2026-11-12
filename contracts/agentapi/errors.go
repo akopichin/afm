@@ -13,13 +13,13 @@ import (
 
 func OperationErrorStatus(code assistants.ErrorCode) int {
 	switch code {
-	case assistants.CodeStaleRevision, assistants.CodeInvalidStatus, assistants.CodeFlowPaused, assistants.CodeBudgetExceeded, agentcomm.CodeWaitCycle:
+	case assistants.CodeStaleRevision, assistants.CodeInvalidStatus, assistants.CodeFlowPaused, assistants.CodeBudgetExceeded, assistants.CodeSpendLimitReached, agentcomm.CodeWaitCycle:
 		return http.StatusConflict
 	case assistants.CodeFeatureDisabled, assistants.CodeNotFound:
 		return http.StatusNotFound
 	case assistants.CodeRunFinalizing:
 		return http.StatusServiceUnavailable
-	case assistants.CodeCapabilityUnavailable, assistants.CodeDelegationDepthExceeded, assistants.CodeInvalidParent, assistants.CodeAncestorInactive, assistants.CodeExecutorNotPermitted:
+	case assistants.CodeCapabilityUnavailable, assistants.CodeDelegationDepthExceeded, assistants.CodeInvalidParent, assistants.CodeAncestorInactive, assistants.CodeExecutorNotPermitted, assistants.CodeRatesMissing:
 		return http.StatusUnprocessableEntity
 	case assistants.CodeActorNotAllowed:
 		return http.StatusForbidden

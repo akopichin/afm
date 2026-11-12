@@ -41,4 +41,8 @@ const (
 	// CodeInvalidRequest — запрос некорректен по форме: пустые/повторяющиеся адресаты, адресат не в треде,
 	// неполное условие ожидания и т.п. Reason объясняет, что исправить.
 	CodeInvalidRequest ErrorCode = "invalid_request"
+	// CodeSpendLimitReached — денежный лимит бюджета достигнут, новая работа в этой области не допускается.
+	CodeSpendLimitReached ErrorCode = "spend_limit_reached"
+	// CodeRatesMissing — денежный лимит задан, но у модели нет явного тарифа, потратить в рамках лимита нельзя.
+	CodeRatesMissing ErrorCode = "rates_missing"
 )

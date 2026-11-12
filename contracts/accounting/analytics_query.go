@@ -388,12 +388,15 @@ func (s *Selection) Rows(group Group, sortBy SortKey, desc bool) []Row {
 	return rows
 }
 
+// unknownModelLabel is the row label for work without a model.
+const unknownModelLabel = "Unknown"
+
 func (s *Selection) rowIdentity(e *entry, group Group) (key, label string) {
 	if group == GroupAgent {
 		return e.agentID, s.f.agents[e.agentID].Title
 	}
 	if e.model == "" {
-		return UnknownModelKey, "Unknown"
+		return UnknownModelKey, unknownModelLabel
 	}
 	return e.model, s.f.models[e.model].Model
 }

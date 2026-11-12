@@ -8,7 +8,12 @@
 // state ↔ orchestrator. Ни одного вызова модели, ни одного HTTP-эндпоинта.
 package assistants
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/akopichin/afm/contracts/budget"
+)
 
 // TaskID — идентификатор задачи помощника, уникальный в пределах рана.
 type TaskID string
@@ -34,6 +39,8 @@ type Profile struct {
 	// Пусто у профиля из Registry.Get: заполняет admission перед тем, как профиль замораживается в
 	// Task.ProfileSnapshot, чтобы история задачи помнила гарантию того момента, а не текущую.
 	ReadonlyEnforcement ReadonlyEnforcement
+	// Budget — лимит расхода по умолчанию для помощников профиля; nil — не задан.
+	Budget *budget.Spec `json:",omitempty"`
 }
 
 // Capabilities — что разрешено помощнику этого профиля.
@@ -290,3 +297,12 @@ type Continuation struct {
 
 // Proposal's full definition (type/status lifecycle/payload/etc.) lives in proposal.go (T6.4) — this file
 // originally carried a narrow, uncalled placeholder of the same name; proposal.go supersedes it entirely.
+
+// UnmarshalJSON rejects an explicit null budget, which a *budget.Spec field would read as absent.
+func (r *Profile) UnmarshalJSON(data []byte) error {
+	if err := budget.RejectNullField(data, "Budget"); err != nil {
+		return err
+	}
+	type plain Profile // no methods: decoding it does not recurse into UnmarshalJSON
+	return json.Unmarshal(data, (*plain)(r))
+}

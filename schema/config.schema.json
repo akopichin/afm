@@ -63,6 +63,63 @@
     "collaboration": { "$ref": "#/definitions/collaboration" }
   },
   "definitions": {
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "anyOf": [
+        {
+          "required": [
+            "tokens"
+          ]
+        },
+        {
+          "required": [
+            "money"
+          ]
+        }
+      ],
+      "description": "Spend limit: at least one of tokens or money, plus an optional stop_policy. The k/m and $ forms are checked for shape here; the range limits (tokens up to 2^53-1, money up to 1e9) are enforced by the parser.",
+      "properties": {
+        "tokens": {
+          "description": "Token limit: a positive integer, or a string like 500k (up to 3 decimals) or 1.5m (up to 6).",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "pattern": "^([0-9]*[1-9][0-9]*(\\.[0-9]{1,3})?[kK]|0+\\.([1-9][0-9]{0,2}|0[1-9][0-9]{0,1}|0{2}[1-9][0-9]{0,0})[kK]|[0-9]*[1-9][0-9]*(\\.[0-9]{1,6})?[mM]|0+\\.([1-9][0-9]{0,5}|0[1-9][0-9]{0,4}|0{2}[1-9][0-9]{0,3}|0{3}[1-9][0-9]{0,2}|0{4}[1-9][0-9]{0,1}|0{5}[1-9][0-9]{0,0})[mM])$"
+            }
+          ]
+        },
+        "money": {
+          "description": "Money limit in USD: a positive number, or a string like 10$ or 0.50$.",
+          "oneOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1000000000
+            },
+            {
+              "type": "string",
+              "pattern": "^([0-9]*[1-9][0-9]*(\\.[0-9]+)?|0+\\.[0-9]*[1-9][0-9]*)\\$$"
+            }
+          ]
+        },
+        "stop_policy": {
+          "type": "string",
+          "enum": [
+            "hard",
+            "medium",
+            "info"
+          ],
+          "description": "What happens at the limit. hard (default) stops the work, medium stops new work but lets the current turn finish, info only reports."
+        }
+      }
+    },
     "collaboration": {
       "type": "object",
       "additionalProperties": false,
@@ -104,6 +161,7 @@
       "additionalProperties": false,
       "description": "One locally configured assistant role.",
       "properties": {
+        "budget": { "$ref": "#/definitions/budget" },
         "title": { "type": "string", "description": "Title shown in the UI." },
         "command": { "type": "string", "description": "An already-configured command/recipe name to run this profile with (not a new binary/transport). Optional: a profile without a command runs with the executor of the stage it is attached to (or client.command)." },
         "instructions": { "type": "string", "description": "System instructions for this role." },

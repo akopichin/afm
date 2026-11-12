@@ -6,6 +6,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/skills"
 )
 
@@ -31,6 +32,8 @@ type TeamMember struct {
 	// Skills are the skills the agent must load before work; SkillsDir overrides the flow's library.
 	Skills    skills.Names `yaml:"skills,omitempty"`
 	SkillsDir skills.Dir   `yaml:"skills_dir,omitempty"`
+	// Budget limits this agent's spend; nil means no own limit.
+	Budget *budget.Spec `yaml:"budget,omitempty" json:",omitempty"`
 }
 
 // Team is the flow-level team: field, in declaration order (the order the agents are created in).
@@ -61,12 +64,14 @@ func rejectNullKey(doc *yaml.Node, key string, err error) error {
 		return nil
 	}
 	for i := 0; i+1 < len(doc.Content); i += 2 {
-		if doc.Content[i].Value == key && doc.Content[i+1].ShortTag() == "!!null" {
+		if doc.Content[i].Value == key && doc.Content[i+1].ShortTag() == yamlNullTag {
 			return err
 		}
 	}
 	return nil
 }
+
+var errBudgetNull = errors.New("budget must not be null: give tokens and/or money, or remove the key")
 
 var errTeamNotList = errors.New("team must be a list of objects with id, profile, title and instruction")
 
@@ -76,7 +81,10 @@ func (m *TeamMember) unmarshalMapping(value *yaml.Node) error {
 	}
 	seen := make(map[string]bool, len(value.Content)/2)
 	for i := 0; i+1 < len(value.Content); i += 2 {
-		key := value.Content[i].Value
+		var key string // as yaml.v3 decodes it: an alias key is its target, not its anchor name
+		if err := value.Content[i].Decode(&key); err != nil {
+			return fmt.Errorf("team: field name: %w", err)
+		}
 		if seen[key] {
 			return fmt.Errorf("team: duplicate field %q", key)
 		}
@@ -97,6 +105,13 @@ func (m *TeamMember) unmarshalMapping(value *yaml.Node) error {
 			}
 			m.SkillsDir = dir
 			continue
+		case keyBudget:
+			spec, err := parseBudget(value.Content[i+1])
+			if err != nil {
+				return fmt.Errorf("team: budget: %w", err)
+			}
+			m.Budget = spec
+			continue
 		case "id":
 			dst = &m.ID
 		case keyProfile:
@@ -106,7 +121,7 @@ func (m *TeamMember) unmarshalMapping(value *yaml.Node) error {
 		case keyInstruction:
 			dst = &m.Instruction
 		default:
-			return fmt.Errorf("team: unknown field %q; use id, profile, title, instruction, skills, skills_dir", key)
+			return fmt.Errorf("team: unknown field %q; use id, profile, title, instruction, skills, skills_dir, budget", key)
 		}
 		if err := value.Content[i+1].Decode(dst); err != nil {
 			return fmt.Errorf("team: %s: %w", key, err)

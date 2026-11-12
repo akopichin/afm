@@ -22,6 +22,10 @@ type ResolvedRate struct {
 	source string // "builtin" | "config"
 	asOf   string
 	card   RateCard // fully merged; every category needed by observed tokens must be set
+	// explicit: the config card itself sets input, output, cache_read and cache_write; missing lists the
+	// categories it lacks (nil when explicit).
+	explicit bool
+	missing  []string
 }
 
 // builtins is the immutable first-version rate table (USD / 1M tokens).
@@ -55,11 +59,11 @@ func (r *Resolver) Resolve(channel, model string) (ResolvedRate, bool) {
 	}
 	if channel != "" {
 		if c, ok := builtins[chKey]; ok {
-			return ResolvedRate{key: chKey, source: "builtin", asOf: builtinAsOf[chKey], card: c}, true
+			return ResolvedRate{key: chKey, source: "builtin", asOf: builtinAsOf[chKey], card: c, missing: explicitCategories}, true
 		}
 	}
 	if c, ok := builtins[model]; ok {
-		return ResolvedRate{key: model, source: "builtin", asOf: builtinAsOf[model], card: c}, true
+		return ResolvedRate{key: model, source: "builtin", asOf: builtinAsOf[model], card: c, missing: explicitCategories}, true
 	}
 	return ResolvedRate{}, false
 }
@@ -67,9 +71,10 @@ func (r *Resolver) Resolve(channel, model string) (ResolvedRate, bool) {
 // mergeWithBuiltin merges a config-supplied card onto the builtin card for the same key: per category, the
 // config's *Rate wins if set, else the builtin's is used.
 func mergeWithBuiltin(key string, cfgCard RateCard) ResolvedRate {
+	missing := missingExplicitCategories(cfgCard)
 	b, ok := builtins[key]
 	if !ok {
-		return ResolvedRate{key: key, source: "config", card: cfgCard}
+		return ResolvedRate{key: key, source: "config", card: cfgCard, explicit: len(missing) == 0, missing: missing}
 	}
 	merged := RateCard{
 		Input:        firstNonNil(cfgCard.Input, b.Input),
@@ -79,7 +84,22 @@ func mergeWithBuiltin(key string, cfgCard RateCard) ResolvedRate {
 		CacheWrite1h: firstNonNil(cfgCard.CacheWrite1h, b.CacheWrite1h),
 		Output:       firstNonNil(cfgCard.Output, b.Output),
 	}
-	return ResolvedRate{key: key, source: "config", asOf: builtinAsOf[key], card: merged}
+	return ResolvedRate{key: key, source: "config", asOf: builtinAsOf[key], card: merged, explicit: len(missing) == 0, missing: missing}
+}
+
+// explicitCategories are the rates a config card must set itself for money budgets; builtins may only add
+// the TTL-specific cache-write refinements.
+var explicitCategories = []string{"input", "output", "cache_read", "cache_write"}
+
+// missingExplicitCategories lists the explicit categories the config card leaves unset.
+func missingExplicitCategories(c RateCard) []string {
+	var missing []string
+	for i, set := range []bool{c.Input != nil, c.Output != nil, c.CacheRead != nil, c.CacheWrite != nil} {
+		if !set {
+			missing = append(missing, explicitCategories[i])
+		}
+	}
+	return missing
 }
 
 // firstNonNil returns a if set, else b — used to let a config-supplied rate
@@ -137,4 +157,36 @@ func (rr ResolvedRate) cost(t Tokens) float64 {
 		costUSD(t.CacheWrite1h, rr.cacheWriteRate(rr.card.CacheWrite1h)) +
 		costUSD(t.CacheWriteOther, rate(rr.card.CacheWrite)) +
 		costUSD(t.Output, rate(rr.card.Output))
+}
+
+// RateCheckStatus is the outcome of CheckExplicitRates.
+type RateCheckStatus string
+
+const (
+	RateCheckComplete     RateCheckStatus = "complete"
+	RateCheckMissing      RateCheckStatus = "missing"
+	RateCheckModelUnknown RateCheckStatus = "model_unknown"
+)
+
+// RateCheck reports whether money budgets may be enforced for a model: Missing lists the config categories
+// that are not set explicitly.
+type RateCheck struct {
+	Status  RateCheckStatus
+	Key     string
+	Missing []string
+}
+
+// CheckExplicitRates uses the same Resolve as BuildRecord, so preflight and usage records agree on what is explicit.
+func CheckExplicitRates(cfg PricingConfig, hint UsageHint) RateCheck {
+	if hint.Model == "" {
+		return RateCheck{Status: RateCheckModelUnknown}
+	}
+	rr, ok := NewResolver(cfg).Resolve(hint.Channel, hint.Model)
+	if !ok {
+		return RateCheck{Status: RateCheckMissing, Key: hint.Model, Missing: append([]string(nil), explicitCategories...)}
+	}
+	if rr.explicit {
+		return RateCheck{Status: RateCheckComplete, Key: rr.key}
+	}
+	return RateCheck{Status: RateCheckMissing, Key: rr.key, Missing: append([]string(nil), rr.missing...)}
 }

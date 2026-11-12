@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/lifecyclehooks"
 	"github.com/akopichin/afm/contracts/skills"
 	"gopkg.in/yaml.v3"
@@ -141,6 +142,8 @@ type Stage struct {
 	// SkillsDir is this stage's extra skill library; it wins over the flow's and the config's.
 	SkillsDir skills.Dir `yaml:"skills_dir,omitempty"`
 	DependsOn []string   `yaml:"depends_on,omitempty,flow"`
+	// Budget limits this stage's spend, helpers included; nil means the stage declares no limit.
+	Budget *budget.Spec `yaml:"budget,omitempty" json:",omitempty"`
 	// EagerPlanning starts the planning agent immediately without waiting for depends_on stages to finish
 	// (the default before the planning-by-deps gate was introduced).
 	EagerPlanning bool `yaml:"eager_planning,omitempty"`
@@ -341,6 +344,8 @@ type Flow struct {
 	Team Team `yaml:"team,omitempty"`
 	// Repeat restarts the flow in a new run after every successful pass (see RepeatConfig).
 	Repeat RepeatConfig `yaml:"repeat,omitempty"`
+	// Budget limits the whole run's spend; nil means the flow declares no limit.
+	Budget *budget.Spec `yaml:"budget,omitempty" json:",omitempty"`
 	Stages []Stage      `yaml:"stages"`
 }
 
@@ -508,6 +513,9 @@ func ParseFile(path string) (*Flow, error) {
 		if err := rejectNullSkillKeys(root.Content[0]); err != nil {
 			return nil, err
 		}
+		if err := rejectNullBudgetKeys(root.Content[0]); err != nil {
+			return nil, err
+		}
 	}
 	if err := f.validate(); err != nil {
 		return nil, err
@@ -543,7 +551,7 @@ func rejectNullSkillKeys(doc *yaml.Node) error {
 		return err
 	}
 	for i := 0; i+1 < len(doc.Content); i += 2 {
-		if doc.Content[i].Value != "stages" || doc.Content[i+1].Kind != yaml.SequenceNode {
+		if doc.Content[i].Value != keyStages || doc.Content[i+1].Kind != yaml.SequenceNode {
 			continue
 		}
 		for _, stage := range doc.Content[i+1].Content {
@@ -553,6 +561,61 @@ func rejectNullSkillKeys(doc *yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+const (
+	yamlNullTag = "!!null"
+	keyStages   = "stages"
+)
+
+// rejectNullBudgetKeys rejects a bare "budget:" at the flow and stage level, where yaml.v3 would
+// otherwise treat it as an absent key (team members and assistants check their own nodes).
+func rejectNullBudgetKeys(doc *yaml.Node) error {
+	if doc.Kind != yaml.MappingNode {
+		return nil
+	}
+	if err := rejectNullBudget(doc); err != nil {
+		return err
+	}
+	stages, set, err := budget.EffectiveYAMLValue(doc, keyStages)
+	if err != nil {
+		return err
+	}
+	list := resolveAlias(&stages)
+	if !set || list.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for _, stage := range list.Content {
+		if err := rejectNullBudget(stage); err != nil {
+			return fmt.Errorf("stage: %w", err)
+		}
+	}
+	return nil
+}
+
+// rejectNullBudget checks the value yaml.v3 decodes for budget, so a null behind an alias key, a tag or a
+// << merge counts, and a direct key still overrides a merged null.
+func rejectNullBudget(mapping *yaml.Node) error {
+	value, set, err := budget.EffectiveYAMLValue(mapping, keyBudget)
+	if err != nil {
+		return err
+	}
+	if set && value.ShortTag() == yamlNullTag {
+		return errBudgetNull
+	}
+	return nil
+}
+
+// parseBudget decodes a budget value node; null is an error because it cannot be told from an absent key.
+func parseBudget(value *yaml.Node) (*budget.Spec, error) {
+	if resolveAlias(value).ShortTag() == yamlNullTag {
+		return nil, errBudgetNull
+	}
+	var spec budget.Spec
+	if err := value.Decode(&spec); err != nil {
+		return nil, err
+	}
+	return &spec, nil
 }
 
 // memorySettingsProbe holds the flow-level memory.* keys as pointers so

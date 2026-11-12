@@ -23,6 +23,8 @@ type RateSnapshot struct {
 	CacheWrite5m Rate   `json:"cache_write_5m"`
 	CacheWrite1h Rate   `json:"cache_write_1h"`
 	Output       Rate   `json:"output"`
+	// Explicit: the config card set input, output, cache_read and cache_write itself (money budgets).
+	Explicit bool `json:"explicit,omitempty"`
 }
 
 // UsageRecord is one line of usage.jsonl: one process invocation's usage,
@@ -113,6 +115,7 @@ func BuildRecord(r *Resolver, obs Observation, stageID, phase, scope string) Usa
 		CacheWrite5m: rr.cacheWriteRate(rr.card.CacheWrite5m),
 		CacheWrite1h: rr.cacheWriteRate(rr.card.CacheWrite1h),
 		Output:       rate(rr.card.Output),
+		Explicit:     rr.explicit,
 	}
 
 	if obs.ReportedCostUSD != nil && costDiffers(*obs.ReportedCostUSD, rec.EstimatedCostUSD) {

@@ -10,11 +10,13 @@ import (
 
 	"github.com/akopichin/afm/contracts/agentcomm"
 	"github.com/akopichin/afm/contracts/assistants"
+	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/skills"
 )
 
 const (
 	keyLoop       = "loop"
+	keyBudget     = "budget"
 	keyLoopEvery  = "every"
 	keyLoopPrompt = "prompt"
 )
@@ -35,6 +37,8 @@ type StageAssistant struct {
 	SkillsDir skills.Dir   `yaml:"skills_dir,omitempty"`
 	// Loop makes the helper wake itself on a fixed interval; nil means no loop. Needs trigger on_message.
 	Loop *StageAssistantLoop `yaml:"loop,omitempty"`
+	// Budget limits this helper's spend; nil means no own limit.
+	Budget *budget.Spec `yaml:"budget,omitempty" json:",omitempty"`
 	// decodeErr is the first malformed field of the object form. Flow.validate reports it with the stage and
 	// profile, which decoding does not know yet: the profile may follow the bad field in the YAML.
 	decodeErr error
@@ -129,7 +133,11 @@ func decodeProfileName(value *yaml.Node) (string, error) {
 func (a *StageAssistant) unmarshalMapping(value *yaml.Node) {
 	seen := make(map[string]bool, len(value.Content)/2)
 	for i := 0; i+1 < len(value.Content); i += 2 {
-		key := value.Content[i].Value
+		var key string // as yaml.v3 decodes it: an alias key is its target, not its anchor name
+		if err := value.Content[i].Decode(&key); err != nil {
+			a.keepDecodeErr(fmt.Errorf("field name: %w", err))
+			continue
+		}
 		if seen[key] {
 			a.keepDecodeErr(fmt.Errorf("duplicate field %q", key))
 			continue
@@ -189,8 +197,14 @@ func (a *StageAssistant) decodeField(key string, val *yaml.Node) error {
 			return err
 		}
 		a.Loop = &loop
+	case keyBudget:
+		spec, err := parseBudget(val)
+		if err != nil {
+			return fmt.Errorf("budget: %w", err)
+		}
+		a.Budget = spec
 	default:
-		return fmt.Errorf("unknown field %q; use profile, title, instruction, mode, trigger, skills, skills_dir, loop", key)
+		return fmt.Errorf("unknown field %q; use profile, title, instruction, mode, trigger, skills, skills_dir, loop, budget", key)
 	}
 	return nil
 }
