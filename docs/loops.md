@@ -92,6 +92,17 @@ There are at most **16 active loops per run**. A loop suspended by a reversible
 failure still occupies a slot, because Retry can bring it back. Stop it to free
 that slot. Short IDs are local to the run and are not reused within it.
 
+## Loops declared in flow.yaml
+
+A stage's `assistants:` entry with `trigger: on_message` can declare
+`loop: { every, prompt }` ([syntax](flow-reference.md#helper-loop)). When the
+helper attaches, afm creates the helper and its loop together. The loop belongs
+to you (creator `user`), so its ticks appear in the stage's Feed like any other
+loop, `/loop list` shows it, and `/loop stop L1` stops it. Its lifetime is the
+stage's. The first tick comes one `every` after the attach.
+See [Declared helper loops](collaboration.md#declared-helper-loops) for retries,
+resume and limits.
+
 ## Fixed ticks and skipped slots
 
 The durable creation time anchors the schedule. A loop created at 12:00 with a
@@ -206,5 +217,6 @@ See [journal compatibility](collaboration-journal.md#loop-records).
 
 Whole-flow [repeat](flow-reference.md#repeat-run-successful-flows-again) creates
 a fresh run after a successful flow. Loops belong to the old run and do not
-carry into the next cycle. Configure the new run's agents to create any loops
-that cycle needs.
+carry into the next cycle. Loops declared in `flow.yaml` are created again when
+their helper attaches in each new cycle; configure the new run's agents to create
+any other loops that cycle needs.

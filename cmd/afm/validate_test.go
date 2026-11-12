@@ -204,3 +204,43 @@ func TestValidateFlowFile_StageAssistantWithDisabledCollaborationWarns(t *testin
 		t.Fatalf("stderr = %q, want the disabled-collaboration warning for stage s", stderr)
 	}
 }
+
+const validateLoopMarker = "PROMPT-MARKER-7f3a"
+
+// loopFlow declares one helper loop on stage build; trigger is the helper's trigger line, empty for none.
+func loopFlow(trigger string) string {
+	return `name: loop-flow
+stages:
+  - id: build
+    agents: [auto]
+    assistants:
+      - profile: watcher
+` + trigger + `        loop:
+          every: 1s
+          prompt: ` + validateLoopMarker + `
+`
+}
+
+func TestValidateFlowFile_StageAssistantLoopReturnsOK(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  profiles:\n    watcher:\n      command: codex-as-claude\n")
+	if _, err := validateFlowFile(writeTestFlow(t, loopFlow("        trigger: on_message\n"))); err != nil {
+		t.Fatalf("validateFlowFile: %v", err)
+	}
+}
+
+// The message names the stage, the profile and the missing trigger, never the prompt.
+func TestValidateFlowFile_StageAssistantLoopWithoutTriggerNamesTheFix(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  profiles:\n    watcher:\n      command: codex-as-claude\n")
+	_, err := validateFlowFile(writeTestFlow(t, loopFlow("")))
+	if err == nil {
+		t.Fatal("validateFlowFile accepted a loop without a trigger")
+	}
+	for _, want := range []string{`stage "build"`, "watcher", "on_message"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), validateLoopMarker) {
+		t.Errorf("error %q leaks the prompt", err)
+	}
+}

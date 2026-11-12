@@ -295,6 +295,34 @@ When collaboration is disabled, afm warns about declared helpers and runs the
 stage without attaching them. This also lets `AFM_COLLABORATION=0` temporarily
 disable a flow's helpers.
 
+### Declared helper loops
+
+An `on_message` helper entry can add `loop: { every, prompt }` (fields and limits:
+[Helper loop](flow-reference.md#helper-loop)). The helper and its loop are
+created in one commit when the helper attaches, so the helper never exists
+without its loop. Nothing is created for a stage still in planning or when
+collaboration is disabled.
+
+- **Lifetime.** The loop ends when its stage finishes, is cancelled, or the helper
+  is superseded by a new stage or parent attempt, or when its conversation is
+  closed or full. A failed stage or failed helper only suspends it; a retry can
+  make it active again. A loop you stopped stays stopped.
+- **Retries and generations.** A new root generation attaches a fresh helper with
+  a fresh loop. A retry within the same generation keeps the existing pair.
+- **Resume.** The committed `every` and `prompt` are kept. Editing or deleting the
+  YAML on resume does not change a schedule already created, and adding a `loop`
+  to a helper that is already attached does not create one.
+- **Limits.** At most 16 loops are active at once, and each loop needs room in its
+  conversation budget. If either refuses, the whole helper attach is rejected with
+  the existing warning, and the stage runs without that helper.
+- **Gates.** Required-helper gates are unchanged. A loop is not continuous
+  validation after the stage completes.
+- **Reporting.** The helper tells the stage agent what changed through mesh
+  messages, as its `instruction` directs.
+
+Stages added during a run and the manual **Attach helper** dialog do not declare
+loops; use `/loop` for those, see [Repeating prompts](#repeating-prompts).
+
 ## Declare a team in flow.yaml
 
 Add `team:` at the top level of `flow.yaml` to start run agents with the run,
@@ -798,7 +826,8 @@ Use `/loop 5m @watcher Check the latest logs` in a stage's **Feed → Chat**
 to schedule a prompt for an existing run agent or a helper of that stage.
 `/loop list` shows the run's schedules; `/loop stop L1` stops one from any Feed.
 Run-agent loops continue across stages unless you add `--until-stage-end`;
-helper loops end with their stage. Busy or paused slots are skipped, without
+helper loops end with their stage. A stage helper can also get a loop from
+`flow.yaml` ([Declared helper loops](#declared-helper-loops)). Busy or paused slots are skipped, without
 catch-up after a restart.
 
 Agents can schedule themselves with

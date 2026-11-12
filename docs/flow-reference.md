@@ -116,7 +116,7 @@ stages:
 
 Object fields are `profile` (required), `title`, `instruction`, `mode`
 (`advisory` or `required`), `trigger` (`one_shot`, `checkpoints`,
-`on_completion`, or `on_message`), `skills`, and `skills_dir`. Omitted mode and trigger default to
+`on_completion`, or `on_message`), `skills`, `skills_dir`, and `loop`. Omitted mode and trigger default to
 `advisory` and `one_shot`. `skills` and `skills_dir` follow the
 [agent skills](#agent-skills) rules; a helper does not inherit its stage's skills.
 Profiles must be defined in `collaboration.profiles`; an unknown profile stops
@@ -128,6 +128,46 @@ a message and then answers each one in its own turn; see
 and [`examples/on-message-helper/`](https://github.com/akopichin/afm/tree/main/examples/on-message-helper).
 See [Helpers and collaboration](collaboration.md) for completion gates and
 behavior when collaboration is disabled.
+
+#### Helper loop
+
+A helper with `trigger: on_message` can also carry a `loop`, which sends it the
+same prompt at a fixed interval while its stage is open:
+
+```yaml
+stages:
+  - id: build
+    agents: [auto]
+    assistants:
+      - profile: reviewer
+        title: Conditions watcher
+        trigger: on_message
+        instruction: |
+          Run the project check when asked. Report changed conditions to the
+          stage agent through the existing agent mesh commands.
+        loop:
+          every: 5m
+          prompt: Check the current conditions and report anything that changed.
+```
+
+`loop` is optional, and when present it needs both fields:
+
+| Field | Rules |
+|---|---|
+| `every` | A Go duration string such as `5m`, `1h30m`, `+1m` or `.5m`, at least `1s`. Days (`1d`), numbers, zero and negative values are rejected |
+| `prompt` | Non-empty after trimming, at most 15,872 bytes (bytes, not characters) |
+
+`loop` requires an explicit `trigger: on_message`; omitting the trigger or using
+another one is a validation error, and `afm validate` and `afm run` stop before
+anything starts. Errors name the stage and profile but never print the prompt.
+The first tick arrives one `every` after the helper is attached. The helper still
+answers ordinary messages before and between ticks, and a tick only prompts it:
+it works within its profile's tools and permissions, and reports to the stage
+agent through normal mesh messages. Only the `assistants:` entries of execution
+stages declare loops; stages added during a run and the dashboard **Attach**
+dialog do not. See
+[Declared helper loops](collaboration.md#declared-helper-loops) and
+[Repeating prompts with loops](loops.md#loops-declared-in-flowyaml).
 
 ## Flow fields (top level)
 

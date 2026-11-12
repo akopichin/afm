@@ -216,13 +216,18 @@ func enginePaths(worktreeDir string) engine.Paths {
 // resources; this function only composes the transports around it, in the order the run needs:
 // workspace, Open, dashboard, Start, Wait, hold, Shutdown, dashboard shutdown, Close.
 func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, opts runOptions) (cycleResult, error) {
+	// Before the workspace, so a bad declaration leaves nothing to close.
+	loops, err := declaredAssistantLoops(f.Stages)
+	if err != nil {
+		return cycleResult{}, err
+	}
 	humanControl := cfg.Server.GetPort() > 0
 	ws := openRunWorkspace(humanControl)
 	var files engine.FileResolver
 	if ws != nil {
 		files = engine.FileResolver{Resolve: workspaceResolveFile(ws), CurrentSHA: workspaceCurrentFileSHA(ws)}
 	}
-	run, err := engine.Open(ctx, engine.Spec{Flow: f, Config: cfg.Execution(), Hooks: hooks}, engine.Options{
+	run, err := engine.Open(ctx, engine.Spec{Flow: f, Config: cfg.Execution(), Hooks: hooks, AssistantLoops: loops}, engine.Options{
 		Paths:    enginePaths(opts.worktreeDir),
 		RunName:  opts.runName,
 		ForceNew: opts.forceNewRun,

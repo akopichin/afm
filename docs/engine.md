@@ -51,7 +51,7 @@ update its pin explicitly, and repeat AFM tests. Verify the final build with
 contracts before engine versions that require them, and engine before AFM builds
 that require that revision. An engine release does not release AFM automatically.
 
-AFM 3.x pins engine `v1.0.1`. Engine tags and AFM product tags are independent;
+AFM 3.x pins engine `v1.0.3`. Engine tags and AFM product tags are independent;
 upgrading the engine requires an explicit `go.mod`/`go.sum` change and AFM
 integration checks. The engine's own CI validates its internal suite before
 that version is adopted by a consumer.

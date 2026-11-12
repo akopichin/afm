@@ -8,6 +8,7 @@ older ones further down. Dates follow the commits that shipped each change.
 ### Improvement:
 
 - Any pending agent question now accepts a free-text answer in the dashboard and the Telegram bot, and inline line feedback in the dashboard, including saved questions with `allow_custom: false` and questions with listed options. `from_options` still marks a clicked option, and feedback is not a plan approval. Uses afm-engine v1.0.2.
+- Declared stage helpers can carry a `loop` (`every`, `prompt`) that prompts the helper at a fixed interval while its stage is open. It requires `trigger: on_message`, is validated before the run starts and appears in the stage Feed and `/loop list`. Uses afm-engine v1.0.3.
 
 ### Fix:
 

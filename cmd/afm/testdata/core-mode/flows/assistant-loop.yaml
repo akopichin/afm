@@ -1,0 +1,13 @@
+name: core-assistant-loop
+stages:
+  - id: build
+    agents: [auto]
+    command: __AUTO_AGENT__
+    assistants:
+      - profile: watcher
+        title: Conditions watcher
+        instruction: Report anything that changed.
+        trigger: on_message
+        loop:
+          every: 1s
+          prompt: Check the current conditions.
