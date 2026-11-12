@@ -800,19 +800,13 @@ func (f *Flow) validate() error {
 		}
 		seen := make(map[string]bool, len(s.Assistants))
 		for i, a := range s.Assistants {
-			if a.Profile == "" {
-				return fmt.Errorf("stage %q: assistants[%d]: profile is required", s.ID, i)
+			if err := a.validate(); err != nil {
+				return stageAssistantError(s.ID, i, a.Profile, err)
 			}
 			if seen[a.Profile] {
 				return fmt.Errorf("stage %q: duplicate assistant profile %q", s.ID, a.Profile)
 			}
 			seen[a.Profile] = true
-			if !a.Mode.Valid() {
-				return fmt.Errorf("stage %q: assistants[%d]: mode must be %q or %q, got %q", s.ID, i, assistants.ModeAdvisory, assistants.ModeRequired, a.Mode)
-			}
-			if !a.Trigger.Valid() {
-				return fmt.Errorf("stage %q: assistants[%d]: trigger must be %q, %q, %q, or %q, got %q", s.ID, i, assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage, a.Trigger)
-			}
 		}
 	}
 

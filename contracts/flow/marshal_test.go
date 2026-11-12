@@ -94,3 +94,32 @@ func TestFlowMarshal_RoundTripsThroughParseFile(t *testing.T) {
 		t.Errorf("worktrees round-trip mismatch: got %v, want pointer to %v", parsed.Worktrees, worktrees)
 	}
 }
+
+func TestFlowMarshal_AssistantLoopRoundTrips(t *testing.T) {
+	want := StageAssistant{
+		Profile:   "qa",
+		Trigger:   "on_message",
+		SkillsDir: "libs/skills",
+		Loop:      &StageAssistantLoop{Every: "1h30m", Prompt: "check the queue"},
+	}
+	f := Flow{
+		Name:   "roundtrip-test",
+		Stages: []Stage{{ID: "s1", Agents: []AgentType{AgentAuto}, Assistants: StageAssistants{want}}},
+	}
+	data, err := yaml.Marshal(&f)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "flow.yaml")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	parsed, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v\n---\n%s", err, data)
+	}
+	got := parsed.Stages[0].Assistants[0]
+	if got.Loop == nil || *got.Loop != *want.Loop || got.SkillsDir != want.SkillsDir {
+		t.Errorf("round trip = %+v (loop %+v), want %+v (loop %+v)\n---\n%s", got, got.Loop, want, want.Loop, data)
+	}
+}
