@@ -30,8 +30,10 @@ binary, including `afm run --mode core`.
 
 The public repository contains the CLI composition, HTTP API, dashboard, SDK,
 and the independent `contracts` module. Public CI tests contracts, SDK, and UI
-without private credentials. Full builds and runtime integration run in trusted
-engine CI. Private dependencies are not vendored into this repository.
+without private credentials. Full builds, engine tests, and runtime integration
+run in AFM CI for trusted branches and same-repository pull requests, using a
+read-only engine token. Private dependencies are not vendored into this repository.
+See [CI configuration](releases.md#afm-3x-ci-configuration).
 
 ## Development across repositories
 
@@ -51,10 +53,11 @@ update its pin explicitly, and repeat AFM tests. Verify the final build with
 contracts before engine versions that require them, and engine before AFM builds
 that require that revision. An engine release does not release AFM automatically.
 
-AFM 3.x pins engine `v1.0.3`. Engine tags and AFM product tags are independent;
-upgrading the engine requires an explicit `go.mod`/`go.sum` change and AFM
-integration checks. The engine's own CI validates its internal suite before
-that version is adopted by a consumer.
+Engine tags and AFM product tags are independent; upgrading the engine requires
+an explicit `go.mod`/`go.sum` change. AFM CI validates that engine revision's
+internal suite on Linux and macOS, its independent consumer example, and AFM
+integration tests before the dependency update is merged. Engine workflows are
+disabled.
 
 ## Development in Docker
 
@@ -64,8 +67,8 @@ custom development image.
 
 On the host, add a GitHub entry to `~/.netrc` using a fine-grained personal access
 token with **Contents: read** access to `afm-engine`, and restrict the file to its
-owner with `chmod 600 ~/.netrc`. The Actions token used to dispatch CI builds
-does not grant source access.
+owner with `chmod 600 ~/.netrc`. The former Actions dispatch token does not grant
+source access; use a token with Contents read permission.
 
 Create `~/.config/go/env` on the host with:
 

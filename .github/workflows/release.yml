@@ -8,23 +8,158 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  GOPRIVATE: github.com/akopichin/afm-engine
+  GOWORK: 'off'
+  RELEASE_TAG: ${{ github.ref_name }}
+
 jobs:
-  release:
+  validate:
+    uses: ./.github/workflows/product-checks.yml
+    secrets:
+      ENGINE_READ_TOKEN: ${{ secrets.ENGINE_READ_TOKEN }}
+
+  artifacts:
+    name: Build release archives
     runs-on: ubuntu-latest
-    concurrency:
-      group: release-${{ github.ref_name }}
-      cancel-in-progress: false
     steps:
-      - name: Request trusted product build
-        env:
-          GH_TOKEN: ${{ secrets.ENGINE_BUILD_DISPATCH_TOKEN }}
-          AFM_REVISION: ${{ github.sha }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          ENGINE_BUILD_REF: ${{ vars.ENGINE_BUILD_REF }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release identity
         run: |
-          test -n "$ENGINE_BUILD_REF"
-          gh api --method POST repos/akopichin/afm-engine/actions/workflows/afm-release.yml/dispatches \
-            -f "ref=$ENGINE_BUILD_REF" \
-            -f "inputs[afm_revision]=$AFM_REVISION" \
-            -f "inputs[release_tag]=$RELEASE_TAG" \
-            -f 'inputs[publish]=true'
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          python3 scripts/check-public-tree.py
+      - uses: ./.github/actions/private-go
+        with:
+          token: ${{ secrets.ENGINE_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pkg/web/dashboard/package-lock.json
+      - name: Build dashboard assets
+        run: |
+          npm ci --prefix pkg/web/dashboard
+          make web
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: 2.17.0
+          install-only: true
+      - name: Build release artifacts without publication
+        env:
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+        run: |
+          goreleaser release --clean --skip=publish
+          python3 scripts/build-manifest.py dist/build-manifest.json
+          git diff --exit-code -- go.mod go.sum contracts/go.mod contracts/go.sum
+      - name: Retain reviewed binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: afm-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            dist/build-manifest.json
+            dist/homebrew/Casks/*.rb
+          retention-days: 30
+      - name: Remove module credentials
+        if: always()
+        run: |
+          rm -f "$HOME/.netrc"
+
+  docker:
+    name: Prepare Docker image
+    needs: artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          python3 scripts/check-public-tree.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: afm-${{ github.sha }}
+          path: dist
+      - name: Verify archives and prepare Docker context
+        id: context
+        run: |
+          python3 scripts/afm_docker_context.py \
+            . dist "$RUNNER_TEMP/afm-docker-context" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Prepare image without publication
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/afm-docker-context
+          file: ${{ runner.temp }}/afm-docker-context/Dockerfile.runtime
+          platforms: linux/amd64,linux/arm64
+          build-args: AFM_VERSION=${{ github.ref_name }}
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=afm-runtime
+          cache-to: type=gha,scope=afm-runtime,mode=max
+
+  publish:
+    name: Publish validated release
+    needs: [validate, artifacts, docker]
+    runs-on: ubuntu-latest
+    environment: afm-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          python3 scripts/check-public-tree.py
+      - name: Verify distribution approval
+        env:
+          DISTRIBUTION_APPROVED: ${{ vars.AFM_DISTRIBUTION_APPROVED }}
+        run: test "$DISTRIBUTION_APPROVED" = true
+      - uses: actions/download-artifact@v4
+        with:
+          name: afm-${{ github.sha }}
+          path: dist
+      - name: Verify archives and prepare Docker context
+        id: context
+        run: |
+          python3 scripts/afm_docker_context.py \
+            . dist "$RUNNER_TEMP/afm-docker-context" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Publish existing archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish-archives.sh "$RELEASE_TAG" dist
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish prepared image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/afm-docker-context
+          file: ${{ runner.temp }}/afm-docker-context/Dockerfile.runtime
+          platforms: linux/amd64,linux/arm64
+          build-args: AFM_VERSION=${{ github.ref_name }}
+          tags: ${{ steps.context.outputs.tags }}
+          push: true
+          cache-from: type=gha,scope=afm-runtime
+      - name: Publish prepared Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: python3 scripts/publish-cask.py "$RELEASE_TAG" dist

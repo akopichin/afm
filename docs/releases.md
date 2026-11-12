@@ -37,54 +37,56 @@ The commands use the same project configuration and run directories as `afm`.
 
 ## AFM 3.x CI configuration
 
-Public CI validates contracts, SDK, and dashboard changes. After these checks
-succeed on a push to `akopichin/afm`'s `main`, it requests `afm-release.yml` in the
-private `akopichin/afm-engine` repository with the exact AFM commit and
-`publish=false`. Pull requests and other branches do not dispatch private builds.
-The public job confirms that GitHub accepted the request; the full build result
-and archives are available in the private repository's Actions run.
+AFM owns validation, archive builds, and publication. The private `afm-engine`
+repository has no active workflows. Public checks run for every push and pull
+request. Product checks also run for pushes and same-repository pull requests in
+`akopichin/afm`; fork and Dependabot pull requests have no private module access.
+To validate an external contribution, review it and push the reviewed revision
+to a branch in AFM before merging.
 
 Configure these under AFM **Settings → Secrets and variables → Actions**:
 
 | Kind | Name | Value |
 |---|---|---|
-| Repository variable | `ENGINE_BUILD_REF` | A reviewed engine workflow branch or tag, currently `main` |
-| Repository secret | `ENGINE_BUILD_DISPATCH_TOKEN` | A dedicated fine-grained personal access token |
+| Repository secret | `ENGINE_READ_TOKEN` | Fine-grained token with **Contents → Read-only**, restricted to `afm-engine` |
+| Repository secret | `RELEASE_TOKEN` | Token with Contents write access to `homebrew-afm` |
+| Repository secrets | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | Docker image publisher credentials |
 
-Create the token in [GitHub developer settings](https://github.com/settings/personal-access-tokens/new).
-Select resource owner `akopichin`, repository access **Only select repositories →
-afm-engine**, and repository permission **Actions → Read and write**. Set an
-expiration and replace the secret before it expires. The token can operate on
-Actions in that repository; it is not restricted to a single workflow. It does
-not need Contents write permission. Store it directly in GitHub or use the
-interactive prompt; do not put the value in command arguments:
+Create the engine token in [GitHub developer settings](https://github.com/settings/personal-access-tokens/new).
+Select resource owner `akopichin` and repository access **Only select repositories →
+afm-engine**. Set an expiration and replace the secret before it expires.
+Store the value through the interactive prompt:
 
 ```bash
-gh secret set ENGINE_BUILD_DISPATCH_TOKEN --repo akopichin/afm
-gh variable set ENGINE_BUILD_REF --body main --repo akopichin/afm
+gh secret set ENGINE_READ_TOKEN --repo akopichin/afm
 ```
 
-The engine revision used by the product still comes from AFM's `go.mod`.
-`ENGINE_BUILD_REF` selects the workflow and integration-test checkout. Engine
-module downloads use the private repository's built-in `GITHUB_TOKEN`.
-Engine CI runs the internal engine suite on Linux and macOS. The AFM product
-workflow runs AFM, UI, SDK, and shared-host integration tests without repeating
-the internal engine suite. Pin only an engine revision with successful Engine CI.
-The workflow uses private Go/npm caches and separate validation steps, with lint
-before the long test suites. SDK unit and integration tests run together once;
-their results are not cached because they exercise the separately built binary.
-Updating the workflow ref does not change the engine module version in `go.mod`.
+The old `ENGINE_BUILD_DISPATCH_TOKEN` secret and `ENGINE_BUILD_REF` variable are
+unused and can be removed after migration. The built-in AFM `GITHUB_TOKEN`
+cannot read a different private repository; the dedicated read token is required.
 
-For actual publication, the private engine's `afm-release` environment also needs
-`AFM_PUBLISH_TOKEN` (AFM Contents write), `HOMEBREW_PUBLISH_TOKEN`
-(`homebrew-afm` Contents write), and `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` for the
-image publisher. These are not needed for validation-only builds. Enable
-`AFM_DISTRIBUTION_APPROVED=true` there only after resolving engine distribution.
-Existing AFM secrets cannot be read back through GitHub's API to copy them.
+Product checks download the engine version selected by AFM's `go.mod` with
+`GOWORK=off`. They check out that exact Git commit for engine tests on Linux and
+macOS and for the separate example and AFM integration modules. Integration
+workspaces are temporary; the product build uses downloaded, pinned modules.
+See [Contributing](https://github.com/akopichin/afm/blob/main/CONTRIBUTING.md)
+for the engine pin update procedure. Updating a dependency requires a new AFM
+commit with `go.mod` and `go.sum`; CI never follows engine `main` implicitly.
 
-The temporary `engine-contracts` branch can be deleted after the clean `main`
-has been pushed and contains its commits. Pinned contracts versions remain
-reachable through `main` and need no version changes for that deletion.
+Go and linter caches are disabled in jobs handling private sources, and engine
+checkouts live outside the public working tree. Only binary archives, checksums,
+the build manifest, and generated Homebrew casks are retained as artifacts.
+No vendor directory or private module cache is uploaded. Dashboard dependencies
+use the ordinary npm cache.
+
+Explicit version tag pushes run the same product checks alongside archive
+builds. Docker preparation uses only verified archives and public runtime files.
+Publication waits for validation, archives, and Docker preparation, then consumes
+those artifacts without recompiling. Only the publication job has Contents write
+permission and uses publisher secrets. It uses AFM's `afm-release` environment;
+configure any release protection rules there and set its environment variable
+`AFM_DISTRIBUTION_APPROVED=true` after resolving engine distribution. The existing
+engine distribution gate remains required. No engine repository secrets are used.
 
 ## Publish a version
 

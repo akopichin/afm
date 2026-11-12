@@ -24,7 +24,23 @@ before downloading dependencies. Private sources must never be committed under
 `vendor/`, uploaded as public caches, or copied into release archives. Run `go mod
 tidy` after dependency changes and commit the module manifests and checksums.
 The public CI tests `contracts`, `sdk`, and the dashboard without private access.
-Full product builds and integration tests run in the private engine repository.
+Full product builds, engine tests on Linux and macOS, and integration tests run
+in AFM CI for trusted branch pushes and pull requests. Fork and Dependabot pull
+requests run public checks only. See [CI configuration](docs/releases.md#afm-3x-ci-configuration)
+for private module access.
+
+To update the engine pin, push the engine commit first, then create an AFM branch:
+
+```bash
+GOWORK=off go get github.com/akopichin/afm-engine@<tag-or-commit>
+GOWORK=off go mod tidy
+```
+
+Commit `go.mod` and `go.sum`, review transitive dependency changes, and preserve
+the Go version. Merge only after AFM's product checks pass: they test the exact
+engine revision selected by the module graph, including its internal suite,
+independent example, and AFM integration module. Engine has no separate CI.
+Never move an existing module tag; use a new tag or commit for each update.
 
 For changes spanning both repositories, create an ignored workspace using
 `./scripts/dev-workspace.sh /path/to/afm-engine`. Consumer versions in `go.mod`

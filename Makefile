@@ -14,7 +14,7 @@ GOLANGCI_TAG=v2.11.4
 
 # The public repository must never contain vendored private engine sources.
 vendor:
-	@echo "Full vendoring belongs in the private build environment; use module downloads here." >&2
+	@echo "Vendoring is disabled; use pinned module downloads." >&2
 	@exit 1
 
 $(LOCAL_BIN):

@@ -1,0 +1,118 @@
+name: Product checks
+
+on:
+  workflow_call:
+    secrets:
+      ENGINE_READ_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  GOPRIVATE: github.com/akopichin/afm-engine
+  GOWORK: 'off'
+
+jobs:
+  validate:
+    name: AFM integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/private-go
+        with:
+          token: ${{ secrets.ENGINE_READ_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pkg/web/dashboard/package-lock.json
+      - name: Install dashboard dependencies
+        run: npm ci --prefix pkg/web/dashboard
+      - name: Build AFM and dashboard
+        run: make build
+      - name: Lint AFM and SDK
+        run: make lint-ci sdk-lint
+      - name: Test AFM and contracts
+        run: make test TESTFLAGS="-p 1"
+      - name: Test dashboard
+        run: make web-test
+      - name: Typecheck dashboard
+        run: make web-typecheck
+      - name: Test SDK units and integration once
+        working-directory: sdk
+        env:
+          AFM_SDK_TEST_BINARY: ${{ github.workspace }}/bin/afm
+        run: go test -race -count=1 -timeout 10m ./...
+      - name: Check schemas
+        run: make schema-check
+      - name: Check out pinned engine
+        run: python3 scripts/checkout_engine.py "$RUNNER_TEMP/afm-engine"
+      - name: Test the shared host with the pinned engine and AFM
+        run: |
+          workspace="$RUNNER_TEMP/afm-integration-workspace"
+          mkdir -p "$workspace"
+          cd "$workspace"
+          go work init "$GITHUB_WORKSPACE" "$RUNNER_TEMP/afm-engine" "$RUNNER_TEMP/afm-engine/integration/afm"
+          cd "$RUNNER_TEMP/afm-engine/integration/afm"
+          GOWORK="$workspace/go.work" go test -tags afmintegration -race -count=1 -timeout 10m ./...
+      - name: Validate documentation
+        run: |
+          python3 -m pip install -r docs/requirements.txt
+          mkdocs build --strict
+      - name: Check module manifests
+        run: git diff --exit-code -- go.mod go.sum contracts/go.mod contracts/go.sum sdk/go.mod sdk/go.sum
+      - name: Remove module credentials
+        if: always()
+        run: rm -f "$HOME/.netrc"
+
+  engine:
+    name: Engine (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/private-go
+        with:
+          token: ${{ secrets.ENGINE_READ_TOKEN }}
+      - name: Check out pinned engine
+        run: python3 scripts/checkout_engine.py "$RUNNER_TEMP/afm-engine"
+      - name: Build and test engine
+        working-directory: ${{ runner.temp }}/afm-engine
+        run: |
+          go build ./...
+          make test TESTFLAGS="-p 1"
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.4
+          working-directory: ${{ runner.temp }}/afm-engine
+          skip-cache: true
+      - name: Check durable state boundary
+        working-directory: ${{ runner.temp }}/afm-engine
+        run: go run ./tools/setstatuslinter ./internal/...
+      - name: Test independent consumer against the pinned engine
+        working-directory: ${{ runner.temp }}/afm-engine
+        run: |
+          go work init . ./examples/minimal
+          export GOWORK="$PWD/go.work"
+          version=$(awk '$1 == "github.com/akopichin/afm-engine" { print $2 } $1 == "require" && $2 == "github.com/akopichin/afm-engine" { print $3 }' examples/minimal/go.mod)
+          go work edit -replace "github.com/akopichin/afm-engine@$version=$PWD"
+          make example-test example-build
+      - name: Check engine source formatting
+        working-directory: ${{ runner.temp }}/afm-engine
+        run: git diff --exit-code
+      - name: Test the independent consumer without a workspace
+        working-directory: ${{ runner.temp }}/afm-engine/examples/minimal
+        run: |
+          go test -race -timeout 5m ./...
+          go build -o ../../bin/pinned-product .
+      - name: Remove module credentials
+        if: always()
+        run: rm -f "$HOME/.netrc"

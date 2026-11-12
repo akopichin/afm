@@ -1,4 +1,4 @@
-name: Public CI
+name: CI
 
 on:
   push:
@@ -36,25 +36,19 @@ jobs:
           npm test
           npm run typecheck
           npm run build
+      - name: Check CI and release policy
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 -m unittest discover -s scripts -p test_afm_release.py -v
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/*.yml
       - name: Public source boundary
         run: |
           python3 scripts/check-public-tree.py
           python3 scripts/sync-schemas.py --check
 
-  request-engine-build:
+  product:
     needs: validate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'akopichin/afm'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Request private validation without publication
-        env:
-          GH_TOKEN: ${{ secrets.ENGINE_BUILD_DISPATCH_TOKEN }}
-          AFM_REVISION: ${{ github.sha }}
-          ENGINE_BUILD_REF: ${{ vars.ENGINE_BUILD_REF }}
-        run: |
-          : "${GH_TOKEN:?Set the ENGINE_BUILD_DISPATCH_TOKEN repository secret}"
-          : "${ENGINE_BUILD_REF:?Set the ENGINE_BUILD_REF repository variable}"
-          gh api --method POST repos/akopichin/afm-engine/actions/workflows/afm-release.yml/dispatches \
-            -f "ref=$ENGINE_BUILD_REF" \
-            -f "inputs[afm_revision]=$AFM_REVISION" \
-            -f 'inputs[publish]=false'
+    if: github.repository == 'akopichin/afm' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]'
+    uses: ./.github/workflows/product-checks.yml
+    secrets:
+      ENGINE_READ_TOKEN: ${{ secrets.ENGINE_READ_TOKEN }}

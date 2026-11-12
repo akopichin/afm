@@ -1,0 +1,24 @@
+name: Private Go modules
+description: Download pinned modules without publishing a private source cache
+inputs:
+  token:
+    description: Read-only Contents token for afm-engine
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: Configure private module access
+      shell: bash
+      env:
+        MODULE_TOKEN: ${{ inputs.token }}
+      run: |
+        : "${MODULE_TOKEN:?Set the ENGINE_READ_TOKEN repository secret (afm-engine Contents read)}"
+        umask 077
+        printf 'machine github.com login x-access-token password %s\n' "$MODULE_TOKEN" > "$HOME/.netrc"
+    - name: Download pinned modules
+      shell: bash
+      run: go mod download
