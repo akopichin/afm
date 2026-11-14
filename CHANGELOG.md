@@ -7,7 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Fix:
 
-- Pin afm-engine v1.1.1 so release checks use the independent budget example with its published module dependencies.
+- Pin afm-engine v1.1.2 so release checks use published example dependencies and exercise the budget task-debt scenario with an admissible read-only adapter on Linux and macOS.
 
 ### Improvement:
 
