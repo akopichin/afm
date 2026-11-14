@@ -5,6 +5,10 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-14
 
+### Fix:
+
+- Pin afm-engine v1.1.1 so release checks use the independent budget example with its published module dependencies.
+
 ### Improvement:
 
 - Spending budgets: declare `budget` (`tokens`, `money`, `stop_policy` of `hard`, `medium` or `info`) on the flow, a stage, a declared helper, a team member or a helper profile. The dashboard warns at 80% and at the limit in the stage feed, shows a `Budget N%` badge, a **Stopped by budget** banner, a header **Budget** tile and **Cost → Budgets**, and a budget window with **Save** and **Save and continue**; a custom limit can also be saved to `flow.yaml`. Money limits need explicit rates; `afm validate` checks them. `afm check` and `afm report` print a Budgets section, `afm run` without a dashboard exits with code 75 when a limit holds the run and stops `repeat`, and the HTTP API serves `/api/budgets`. Uses afm-engine v1.1.0 and contracts v0.2.0. See `docs/budgets.md`.
