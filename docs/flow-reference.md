@@ -83,6 +83,7 @@ stages:
 | `script_after` | no | Shell script run right after the stage successfully completes |
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
 | `buttons` | no | Named one-click prompts for the stage's live agent, shown in the header of the selected stage, after its name and status (see [Dashboard](dashboard.md#stage-buttons)) |
+| `budget` | no | Spending limit of this stage `{tokens, money, stop_policy}`; see [Spending budgets](budgets.md) |
 | `assistants` | no | Helper profiles to attach automatically when this stage starts execution. A profile name, an object, or a list of either; see [Declared helpers](#declared-helpers) |
 | `reflect` | no | An object `{ file, mode }` that opts the stage into [agent memory](agent-memory.md): `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (default `rw`). Requires the flow-level `memory:` block |
 | `memory_use` | no | Overrides the flow-level `memory.memory_use` for this stage (`true`/`false`; unset = inherit). Controls whether the stage **reads** [memory](agent-memory.md) |
@@ -116,7 +117,8 @@ stages:
 
 Object fields are `profile` (required), `title`, `instruction`, `mode`
 (`advisory` or `required`), `trigger` (`one_shot`, `checkpoints`,
-`on_completion`, or `on_message`), `skills`, `skills_dir`, and `loop`. Omitted mode and trigger default to
+`on_completion`, or `on_message`), `skills`, `skills_dir`, `loop`, and `budget`
+(a [spending limit](budgets.md) for this helper that replaces the profile default). Omitted mode and trigger default to
 `advisory` and `one_shot`. `skills` and `skills_dir` follow the
 [agent skills](#agent-skills) rules; a helper does not inherit its stage's skills.
 Profiles must be defined in `collaboration.profiles`; an unknown profile stops
@@ -176,7 +178,7 @@ dialog do not. See
 directory; see below),
 `memory` ([agent-memory config](agent-memory.md)), `hooks`
 ([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `collaboration`,
-`team` (see below), `skills_dir` ([agent skills](#agent-skills)), `worktrees`,
+`budget` (run [spending limit](budgets.md)), `team` (see below), `skills_dir` ([agent skills](#agent-skills)), `worktrees`,
 `repeat` (see below), `stages`.
 
 ### Agent skills
@@ -323,7 +325,8 @@ team:
     skills: code-audit  # same scalar/list syntax as a stage
 ```
 
-`id`, `profile` and `title` are required; `instruction` is optional. `id` must
+`id`, `profile` and `title` are required; `instruction` and `budget` (a
+[spending limit](budgets.md) for this agent) are optional. `id` must
 be unique in the team and match `[A-Za-z0-9._-]`. The `@name` is made from
 `title`; when it is taken, the agent gets `-2`, `-3` and so on. A newly
 registered dashboard Assistant reserves `@assistant`, so a team title of

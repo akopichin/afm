@@ -1,0 +1,124 @@
+/* pkg/web/dashboard/public/skins/base/budget-dialog.css Бюджеты: окно, кнопка «Edit budget» у notice, индикаторы
+   (плитка шапки, бейдж стадии, раздел Cost). Только семантические токены из tokens.css. */
+
+/* === Окно бюджета === */
+.budget-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.budget-dialog-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
+.budget-dialog-muted { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+.budget-dialog-message { margin: 0; padding: 8px 10px; border-radius: var(--radius-md); font-size: 12.5px; line-height: 1.5; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--separator-subtle); }
+.budget-dialog-message--danger { border-color: rgba(var(--danger-rgb), 0.5); }
+
+.budget-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.budget-summary > div { min-width: 0; }
+.budget-summary dt { font-size: 12px; color: var(--text-muted); }
+.budget-summary dd { margin: 2px 0 0; font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); overflow-wrap: anywhere; }
+
+.budget-field-group,
+.budget-policy { margin: 0; padding: 0; border: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.budget-field-group > legend,
+.budget-policy > legend { padding: 0; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.budget-radio { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; }
+.budget-radio input { margin-top: 3px; flex: none; }
+.budget-radio-hint { display: block; margin-top: 2px; font-size: 12px; color: var(--text-secondary); }
+
+.budget-custom { display: flex; flex-direction: column; gap: 10px; margin-left: 24px; }
+.budget-custom-fields { display: flex; gap: 12px; }
+.budget-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.budget-field > span:first-child { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.budget-field input {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+}
+.budget-field input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent-primary); }
+.budget-field input[aria-invalid="true"] { border-color: var(--danger); }
+.budget-field-hint { font-size: 11.5px; color: var(--text-secondary); }
+.budget-field-error { margin: 0; font-size: 12px; color: var(--danger-text); }
+
+.budget-parents h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.budget-parents ul { margin: 0 0 4px; padding-left: 18px; font-size: 12.5px; color: var(--text-primary); }
+
+.budget-yaml { display: flex; flex-direction: column; gap: 4px; }
+.budget-yaml-option { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); }
+
+.budget-actions { flex-wrap: wrap; }
+
+@media (max-width: 600px) {
+  .budget-dialog { padding: 16px; }
+  .budget-custom { margin-left: 0; }
+  .budget-custom-fields { flex-direction: column; }
+  .budget-summary { grid-template-columns: 1fr; }
+}
+
+/* === Кнопка «Edit budget» у notice в ленте === */
+.feed-item-with-budget { display: flex; align-items: flex-start; gap: 8px; }
+.feed-item-with-budget > .feed-item { flex: 1 1 auto; min-width: 0; }
+.budget-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.budget-edit-btn:hover { color: var(--accent-text); border-color: var(--accent-primary); }
+.budget-edit-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.budget-edit-btn--compact { padding: 4px 6px; }
+
+/* === Стадия, остановленная бюджетом === */
+.budget-held-chip { margin-left: 8px; font-size: 12px; color: var(--attention-text); }
+
+/* === Индикаторы === */
+.metric-budget { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; border-radius: var(--radius-sm); position: relative; }
+.metric-budget:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.metric-budget[data-level="warning"] .metric-value { color: var(--attention-text); }
+.metric-budget[data-level="hold"] .metric-value { color: var(--danger-text); }
+.metric-budget[data-level="hold"] .metric-marker { background: var(--danger); }
+
+.stage-budget-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.stage-budget-badge[data-level="warning"] { color: var(--attention-text); border-color: rgba(var(--attention-rgb), 0.5); }
+.stage-budget-badge[data-level="hold"] { color: var(--danger-text); border-color: rgba(var(--danger-rgb), 0.5); }
+.stage-budget-badge:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.budget-status { font-size: 11.5px; color: var(--attention-text); }
+.budget-status[data-level="hold"] { color: var(--danger-text); }
+
+.cost-budgets { margin-top: 20px; }
+.cost-budgets h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.cost-budgets-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cost-budgets-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-sm); font-size: 13px; color: var(--text-primary); }
+.cost-budgets-row[data-nested="helper"] { padding-left: 24px; }
+.cost-budgets-row[data-nested="run_agent"] { padding-left: 24px; }
+.cost-budgets-label { flex: 0 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.cost-budgets-figures { flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.cost-budgets-row[data-level="warning"] .cost-budgets-figures { color: var(--attention-text); }
+.cost-budgets-row[data-level="hold"] .cost-budgets-figures { color: var(--danger-text); }
+.cost-budgets-row[data-limited="false"] .cost-budgets-figures,
+.cost-budgets-row[data-limited="false"] .cost-budgets-label { color: var(--text-muted); }

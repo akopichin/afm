@@ -20,6 +20,10 @@ type ExitError = host.ExitError
 // interruptedExitCode is the conventional exit code of a process stopped by SIGINT (128 + 2).
 const interruptedExitCode = 130
 
+// budgetHeldExitCode is the exit code of a run without a dashboard that a budget limit holds: unfinished, but
+// neither failed nor interrupted (EX_TEMPFAIL).
+const budgetHeldExitCode = 75
+
 // Committed failure wins over a later signal; both are runtime outcomes, so neither prints usage.
 func runExitError(signalCtx context.Context, runErr error, runDir string) error {
 	var failed *orchestrator.StageFailedError

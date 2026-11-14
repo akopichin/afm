@@ -451,6 +451,13 @@ describe('useStatus', () => {
     expect(result.capabilities.fileBrowser).toBe(true)
   })
 
+  test('normalizeStatus maps the budget capabilities and defaults them to off', () => {
+    const on = normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { budgets: true, budget_export: true } })
+    expect(on.capabilities).toMatchObject({ budgets: true, budgetExport: true })
+    const off = normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { budgets: 'yes' } })
+    expect(off.capabilities).toMatchObject({ budgets: false, budgetExport: false })
+  })
+
   test('normalizeStatus defaults capabilities.fileBrowser to false when absent', () => {
     const result = normalizeStatus({ flow_name: 'demo', stages: [] })
 

@@ -34,6 +34,8 @@ var facadeBypasses = map[string]map[string]bool{
 var facadeExceptions = map[string]map[string]bool{
 	"cmd/afm/init.go":          {"os.WriteFile": true, "os.OpenFile": true},
 	"cmd/afm/run_dashboard.go": {"os.OpenFile": true},
+	// The flow file lives outside the run directory; the budget export replaces it atomically.
+	"cmd/afm/run_budget_export.go": {"os.Rename": true},
 }
 
 // Transports reach the run only through the engine facade; these selectors would bypass it.

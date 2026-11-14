@@ -1,14 +1,18 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/config"
 	"github.com/akopichin/afm/contracts/flow"
 )
@@ -24,6 +28,9 @@ func validateFlowFile(path string) (string, error) {
 		return "", fmt.Errorf("invalid flow.yaml: %w", err)
 	}
 	if err := validateHelperProfiles(f); err != nil {
+		return "", fmt.Errorf("invalid flow.yaml: %w", err)
+	}
+	if err := validateMoneyBudgetRates(f); err != nil {
 		return "", fmt.Errorf("invalid flow.yaml: %w", err)
 	}
 	return fmt.Sprintf("OK: %q — %d stage(s), valid", f.Name, len(f.Stages)), nil
@@ -55,6 +62,65 @@ func validateHelperProfiles(f *flow.Flow) error {
 		return err
 	}
 	return engine.CheckTeamProfiles(f.Team, reg)
+}
+
+// validateMoneyBudgetRates refuses what engine Open refuses: a money budget over an agent command whose model has
+// no explicit rates. The scope is Open's: agent stages and verify agent steps under a money limit.
+func validateMoneyBudgetRates(f *flow.Flow) error {
+	if !declaresMoneyBudget(f) {
+		return nil
+	}
+	home, _ := os.UserHomeDir()
+	cfg, err := loadProductConfig(filepath.Join(home, config.AfmDir), fmDir())
+	if err != nil {
+		return err
+	}
+	for _, stage := range f.Stages {
+		scope := moneyBudgetScope(f, stage)
+		if scope == "" {
+			continue
+		}
+		for _, command := range stageAgentCommands(stage, cfg) {
+			check := accounting.CheckExplicitRates(cfg.Pricing, cfg.UsageHint(command))
+			if check.Status == accounting.RateCheckMissing {
+				return fmt.Errorf("money budget of %s needs explicit rates: command %q, model %q, missing %s",
+					scope, command, check.Key, strings.Join(check.Missing, ", "))
+			}
+		}
+	}
+	return nil
+}
+
+func declaresMoneyBudget(f *flow.Flow) bool {
+	return hasMoneyLimit(f.Budget) || slices.ContainsFunc(f.Stages, func(s flow.Stage) bool { return hasMoneyLimit(s.Budget) })
+}
+
+func hasMoneyLimit(spec *budget.Spec) bool { return spec != nil && spec.MoneyUSD > 0 }
+
+// moneyBudgetScope is the nearest scope above the stage with a money limit: the stage first, then the run.
+func moneyBudgetScope(f *flow.Flow, stage flow.Stage) budget.ScopeID {
+	switch {
+	case hasMoneyLimit(stage.Budget):
+		return budget.StageScope(stage.ID)
+	case hasMoneyLimit(f.Budget):
+		return budget.RunScope()
+	}
+	return ""
+}
+
+// stageAgentCommands lists the agent commands a stage runs: its own or the default client, and the commands of
+// its verify agent steps. A script stage runs no agent.
+func stageAgentCommands(stage flow.Stage, cfg config.Config) []string {
+	var commands []string
+	if !stage.IsScript() {
+		commands = append(commands, cmp.Or(stage.Command, cfg.Client.Command))
+	}
+	for _, step := range stage.Verify.Steps {
+		if step.Kind == flow.VerifyAgent && step.Command != "" {
+			commands = append(commands, step.Command)
+		}
+	}
+	return commands
 }
 
 func newValidateCmd() *cobra.Command {

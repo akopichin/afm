@@ -325,6 +325,23 @@ describe('BoardView', () => {
     expect(within(lane('Done')).getByRole('button', { name: 'CSV export, Done' })).toHaveFocus()
   })
 
+  test('a poll that moves the focused card to another lane right after close keeps focus on its new card', async () => {
+    const { rerender } = renderView(boardOf(entries))
+    const card = screen.getByRole('button', { name: 'CSV export, Todo' })
+    card.focus()
+    fireEvent.click(card)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(card).toHaveFocus()
+    rerender(
+      <BoardView
+        board={boardOf([...entries, entry('run:t-1', 'task/csv-export/qa', 'done: shipped', 9)])}
+        participants={participants}
+        stages={stages}
+      />,
+    )
+    await waitFor(() => expect(within(lane('Done')).getByRole('button', { name: 'CSV export, Done' })).toHaveFocus())
+  })
+
   test('a posted task that arrives while another dialog is open does not take focus behind it', async () => {
     vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
     const reload = vi.fn(() => Promise.resolve())

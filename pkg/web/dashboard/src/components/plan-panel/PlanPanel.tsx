@@ -36,10 +36,12 @@ type PlanPanelProps = {
   // statusAvailable — свежесть /api/status из useStatus: пока он устарел, счётчик ожидания лимита замирает.
   statusAvailable?: boolean
   onContinue?: () => void
+  // budgetHeld — паузу держит бюджет: баннер уже объяснил причину, общий текст про ручную паузу не нужен.
+  budgetHeld?: boolean
 }
 
 // Панель плана стадии: загрузка markdown, рендер, действия Approve/Send revision/Retry.
-export function PlanPanel({ stage, attention = false, banner, statusAvailable = true, onContinue }: PlanPanelProps): ReactElement {
+export function PlanPanel({ stage, attention = false, banner, statusAvailable = true, onContinue, budgetHeld = false }: PlanPanelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const { comments: allComments, acknowledge, scroll } = useComments()
   const hostZone = useMessageTimeZone()
@@ -315,9 +317,11 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
             {showPaused && (
               <div id="paused-section" className="section">
                 {pausedFromQuota && <p className="quota-title">{quotaTitle(stage.quota)}</p>}
-                <p className="paused-reason">
-                  {pausedFromQuota ? quotaPausedReasonText(stage.quota, hostZone, 'stage') : pausedReasonText(stage?.pausedFrom ?? '')}
-                </p>
+                {!budgetHeld && (
+                  <p className="paused-reason">
+                    {pausedFromQuota ? quotaPausedReasonText(stage.quota, hostZone, 'stage') : pausedReasonText(stage?.pausedFrom ?? '')}
+                  </p>
+                )}
                 {pausedFromQuota && (
                   <p className="quota-hint">Continue tries once, right now, with a fresh session; if the limit is still active, the stage waits again.</p>
                 )}

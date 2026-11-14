@@ -161,8 +161,11 @@ in YAML keep working. To switch helpers off entirely use `collaboration.enabled`
 A profile defines a role; its `command` is optional. Without it a helper runs the
 executor of its stage (or `client.command`), and a built-in `default` profile always
 exists. `collaboration.runtime_context` (`isolated` or `wrapper`) and
-`profiles.<id>.runtime_context` choose the environment of a helper's process; a
+`profiles.<id>.runtime_context` choose the environment of a helper's process;
+a
 profile value wins, and an empty, `null` or unknown value stops config loading.
+`profiles.<id>.budget` (`{tokens, money, stop_policy}`) is the default
+[spending limit](budgets.md) of helpers of that profile.
 See [Which executor a helper runs](collaboration.md#which-executor-a-helper-runs)
 and [Runtime context](collaboration.md#runtime-context).
 

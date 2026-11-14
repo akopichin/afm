@@ -3,6 +3,8 @@ import type { AttentionKind } from '../../hooks/use-workspace-view'
 
 type AttentionBannerProps = {
   kind: AttentionKind
+  // budget — стадию на паузе держит бюджет: его текст заменяет текст «paused», ведь Continue здесь открывает окно бюджета.
+  budget?: { title: string; subtitle: string }
 }
 
 // Тонкие линейные иконки: круг + знак, цвет берут у тона баннера.
@@ -26,11 +28,11 @@ const COPY: Record<AttentionKind, { title: string; subtitle: string; icon: React
 
 // AttentionBanner — шапка внутри контекстной вкладки: тихая линейная иконка + заголовок «что происходит»
 // + подзаголовок. Данные не тянет — чистый презентационный компонент.
-export function AttentionBanner({ kind }: AttentionBannerProps): ReactElement {
-  const copy = COPY[kind]
+export function AttentionBanner({ kind, budget }: AttentionBannerProps): ReactElement {
+  const copy = budget === undefined ? COPY[kind] : { ...budget, icon: ICON_PAUSE }
   const tone = kind === 'failed' || kind === 'hook_failed' ? 'danger' : 'attention'
   return (
-    <div className="attention-banner" data-kind={kind} data-tone={tone}>
+    <div className="attention-banner" data-kind={budget === undefined ? kind : 'budget'} data-tone={tone}>
       <svg className="attention-banner-icon" viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="9" />
         {copy.icon}

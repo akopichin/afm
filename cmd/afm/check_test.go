@@ -651,3 +651,47 @@ func TestCheck_OrdinaryPauseIgnoresCarriedQuota(t *testing.T) {
 		t.Errorf("a stage paused from running must not show the old usage limit, got:\n%s", out)
 	}
 }
+
+// A run that declared no budget has no Budgets section; the table is unchanged.
+func TestCheck_NoBudgetsNoSection(t *testing.T) {
+	chdirTemp(t)
+	makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+	if strings.Contains(out, "Budgets") {
+		t.Errorf("a run without budgets printed a Budgets section:\n%s", out)
+	}
+}
+
+// An unreadable budget journal is one note; the command and its exit code are unaffected, with accounting
+// display off as well.
+func TestCheck_BudgetReadFailureIsOneNote(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("AFM_ACCOUNTING", "0")
+	runDir := makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+	if err := os.WriteFile(filepath.Join(runDir, "usage.jsonl"), []byte("not json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var runErr error
+	stdout, _ := captureOutput(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		runErr = cmd.Execute()
+	})
+	if runErr != nil {
+		t.Fatalf("check failed on an unreadable budget journal: %v", runErr)
+	}
+	if got := strings.Count(stdout, "Budgets: unavailable"); got != 1 {
+		t.Errorf("%d budget notes, want 1:\n%s", got, stdout)
+	}
+	if !strings.Contains(stdout, cmdInit) {
+		t.Errorf("the stage table disappeared:\n%s", stdout)
+	}
+}

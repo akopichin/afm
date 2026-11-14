@@ -886,6 +886,14 @@ describe('PlanPanel', () => {
     await waitFor(() => expect(calls.some((c) => c.endsWith('/continue'))).toBe(true))
   })
 
+  test('budget hold: the generic paused sentence is hidden and Continue still goes to the owner', async () => {
+    const heldContinue = vi.fn()
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'running' })} onContinue={heldContinue} budgetHeld />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    expect(screen.queryByText(/manually paused/i)).not.toBeInTheDocument()
+    expect(heldContinue).toHaveBeenCalledOnce()
+  })
+
   test('Continue: uses the Hold owner when supplied instead of issuing a direct request', async () => {
     const api = await import('../../api/run-client')
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))

@@ -476,6 +476,92 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 	}
 }
 
+// budgetValues are the shapes of a budget: value, shared by every place that can declare one.
+var budgetValues = []struct {
+	name  string
+	value string
+	want  bool
+}{
+	{"tokens k suffix", "{tokens: 500k}", true},
+	{"tokens m suffix", "{tokens: 1.5m}", true},
+	{"tokens decimal k", "{tokens: 1.5k}", true},
+	{"tokens integer", "{tokens: 100000}", true},
+	{"money dollar suffix", "{money: 5$}", true},
+	{"money cents", "{money: 0.50$}", true},
+	{"money number", "{money: 2.5}", true},
+	{"tokens and money", "{tokens: 1m, money: 10$}", true},
+	{"policy hard", "{tokens: 1k, stop_policy: hard}", true},
+	{"policy medium", "{tokens: 1k, stop_policy: medium}", true},
+	{"policy info", "{money: 1$, stop_policy: info}", true},
+	{"unknown policy", "{tokens: 1k, stop_policy: soft}", false},
+	{"policy wrong case", "{tokens: 1k, stop_policy: HARD}", false},
+	{"null", "null", false},
+	{"bare key", "", false},
+	{"empty mapping", "{}", false},
+	{"scalar", "5", false},
+	{"unknown key", "{tokens: 1k, limit: 5}", false},
+	{"policy only", "{stop_policy: hard}", false},
+	{"tokens zero", "{tokens: 0}", false},
+	{"tokens negative", "{tokens: -5}", false},
+	{"tokens without suffix", "{tokens: \"500\"}", false},
+	{"tokens bad suffix", "{tokens: 5x}", false},
+	{"tokens too many decimals", "{tokens: 1.5555k}", false},
+	{"tokens null", "{tokens: null}", false},
+	{"money zero", "{money: 0$}", false},
+	{"money negative", "{money: -5}", false},
+	{"money without suffix", "{money: \"5\"}", false},
+	{"money null", "{money: null}", false},
+}
+
+// budgetPlaces put a budget value where the flow can declare one; %s is the value.
+var budgetPlaces = []struct{ name, flow string }{
+	{"run", "name: f\nbudget: %s\nstages:\n  - id: s\n    agents: [auto]\n"},
+	{"stage", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    budget: %s\n"},
+	{"stage assistant", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: qa\n        budget: %s\n"},
+	{"team member", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    budget: %s\nstages:\n  - id: s\n    agents: [auto]\n"},
+}
+
+func TestFlowSchemaMatchesParserBudget(t *testing.T) {
+	sch := compileSchema(t, flowSchemaPath)
+	for _, place := range budgetPlaces {
+		for _, v := range budgetValues {
+			t.Run(place.name+"/"+v.name, func(t *testing.T) {
+				body := fmt.Sprintf(place.flow, v.value)
+				if got := schemaAcceptsYAML(t, sch, body); got != v.want {
+					t.Errorf("schema accepts = %v, want %v", got, v.want)
+				}
+				path := filepath.Join(t.TempDir(), "flow.yaml")
+				if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := flow.ParseFile(path); (err == nil) != v.want {
+					t.Errorf("flow.ParseFile accepts = %v, want %v (error: %v)", err == nil, v.want, err)
+				}
+			})
+		}
+	}
+}
+
+// A profile's budget is the default for the helpers it creates; it takes the same value shapes.
+func TestConfigSchemaMatchesProfileBudget(t *testing.T) {
+	sch := compileSchema(t, configSchemaPath)
+	for _, v := range budgetValues {
+		t.Run(v.name, func(t *testing.T) {
+			body := fmt.Sprintf("collaboration:\n  profiles:\n    p:\n      command: /abs/x.sh\n      budget: %s\n", v.value)
+			if got := schemaAcceptsYAML(t, sch, body); got != v.want {
+				t.Errorf("schema accepts = %v, want %v", got, v.want)
+			}
+			projectDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectDir, "config.yaml"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.LoadFrom(t.TempDir(), projectDir); (err == nil) != v.want {
+				t.Errorf("config.LoadFrom accepts = %v, want %v (error: %v)", err == nil, v.want, err)
+			}
+		})
+	}
+}
+
 func TestRepositoryYAMLExamplesMatchSchemas(t *testing.T) {
 	flowSchema := compileSchema(t, flowSchemaPath)
 	flowExamples, err := filepath.Glob("../../examples/*/flow.yaml")

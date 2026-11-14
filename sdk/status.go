@@ -62,6 +62,10 @@ type Capabilities struct {
 	SideAgent     bool `json:"side_agent"`
 	Collaboration bool `json:"collaboration"`
 	AddStage      bool `json:"add_stage"`
+	// Budgets is true when the run serves the budgets API; BudgetExport when a limit can be saved to the flow
+	// file. Both are false for an afm that predates budgets.
+	Budgets      bool `json:"budgets"`
+	BudgetExport bool `json:"budget_export"`
 }
 
 // RunStatus is a snapshot of a run's flow name and per-stage statuses.

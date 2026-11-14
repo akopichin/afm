@@ -7,6 +7,9 @@ Nothing here is a real invoice: it is a transparent, reproducible **list-price
 estimate**, computed entirely from tokens afm observed and rates afm knows
 about.
 
+Spending **limits** (warnings at 80%, stops at 100%) are a separate feature that
+reads the same usage records: see [Spending budgets](budgets.md).
+
 ## Where the numbers come from
 
 Every agent process (`claude`, a GLM/Codex/DeepSeek shim, …) ends its

@@ -50,6 +50,8 @@ connection dropping.
 - After the run reaches its result, core keeps the API up so a client can read
   the final state, and prints `api: holding the final state until interrupted`.
   It stops only on interrupt (`Ctrl+C` / `SIGINT`) and exits with code `0`.
+- A run held by a [budget limit](budgets.md) stays open: update the limit and
+  continue through `POST /api/budgets/update` with `resume: true`.
 - A failed stage does not stop the process: you can inspect it and use **Retry**
   through the API. With `--exit-on-fail` the run stops and the command exits with
   code `1`, as in the dashboard mode.

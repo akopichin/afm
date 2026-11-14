@@ -8,6 +8,7 @@ import { MessageTime } from '../message-time/MessageTime'
 import { MeshAvatar } from '../team/MeshAvatar'
 import { ExecutorBadge } from '../ExecutorBadge'
 import type { ReportCache } from './report-cache'
+import { BudgetEditButton } from '../budget-dialog/BudgetEditButton'
 
 // Листовые рендеры ленты: общие для FeedGroupView (беседа с side-agent, рамочные пузыри) и для строк
 // виртуального списка. Состояние раскрытий в них либо локальное, либо приходит от вызывающего.
@@ -248,9 +249,10 @@ export function FeedItemRow({ item, timeInHead, imagePolicy, onOpenDialog, onRep
   }
   // Отчёт verify — ПОД самой строкой, а не внутри неё: тот же приём, что и feed-item-segments.
   return (
-    <div className="feed-item-with-report" data-feed-item="">
+    <div className={`feed-item-with-report${item.budgetEditable === true ? ' feed-item-with-budget' : ''}`} data-feed-item="">
       <div className={className} onAnimationEnd={onAnimEnd}>{content}</div>
       {report}
+      {item.budgetEditable === true && item.budgetScope !== undefined && <BudgetEditButton scope={item.budgetScope} />}
     </div>
   )
 }

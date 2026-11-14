@@ -36,6 +36,7 @@ type runOptions struct {
 	afterRun      func() (moreCycles bool)
 	// onRunCreated вызывается сразу после создания (или открытия) run dir, до запуска стадий.
 	onRunCreated func(runID string)
+	flowPath     string // файл флоу, в который «Save to flow.yaml» записывает лимит; "" — сохранение недоступно
 	// containerBrowser — дескриптор browser из transport, прочитанный один раз за процесс (только в контейнере).
 	containerBrowser *browser.Descriptor
 }
@@ -227,7 +228,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	if ws != nil {
 		files = engine.FileResolver{Resolve: workspaceResolveFile(ws), CurrentSHA: workspaceCurrentFileSHA(ws)}
 	}
-	run, err := engine.Open(ctx, engine.Spec{Flow: f, Config: cfg.Execution(), Hooks: hooks, AssistantLoops: loops}, engine.Options{
+	engineOpts := engine.Options{
 		Paths:    enginePaths(opts.worktreeDir),
 		RunName:  opts.runName,
 		ForceNew: opts.forceNewRun,
@@ -244,7 +245,13 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		Debug:        debugEnabled,
 		Stdout:       os.Stdout,
 		Stderr:       os.Stderr,
-	})
+	}
+	// Assigned only when set: a nil *budgetExporter in the interface would look like a configured exporter.
+	exporter := budgetExporterFor(opts.flowPath, f)
+	if exporter != nil {
+		engineOpts.BudgetExporter = exporter
+	}
+	run, err := engine.Open(ctx, engine.Spec{Flow: f, Config: cfg.Execution(), Hooks: hooks, AssistantLoops: loops}, engineOpts)
 	if err != nil {
 		if ws != nil {
 			_ = ws.Close()
@@ -257,7 +264,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	read := run.Read()
 	collab := run.CollaborationSetup()
 	api := run.Collaboration()
-	srv, agentAPIURL, err := startServer(cfg, server.Config{
+	serverCfg := server.Config{
 		RunDir:      read.RunDir(),
 		Runtime:     server.RuntimeInfo{Mode: opts.launch.String(), Ready: run.Ready},
 		Description: f.Description,
@@ -280,7 +287,12 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		AssistantsReader:  assistantsReader(collab, api),
 		DiscussionService: discussionService(collab, api),
 		ProposalActions:   proposalActions(collab, api),
-	}, runSurface{run.Mesh(), run.Graph(), run.Flow()}, opts.launch, opts.cycle <= 1)
+		Budgets:           run.Budgets(),
+	}
+	if exporter != nil {
+		serverCfg.BudgetExport = exporter
+	}
+	srv, agentAPIURL, err := startServer(cfg, serverCfg, runSurface{run.Mesh(), run.Graph(), run.Flow()}, opts.launch, opts.cycle <= 1)
 	if err != nil {
 		return cycleResult{}, err
 	}
@@ -300,14 +312,17 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		return cycleResult{RunID: res.RunID, Resumed: res.Resumed}, runExitError(ctx, res.Err, res.RunDir)
 	}
 	// Err is nil for a run with a failed stage too; success is the persisted finished state with all done.
-	out := cycleResult{RunID: res.RunID, Resumed: res.Resumed, Completed: res.Completed}
+	out := cycleResult{RunID: res.RunID, Resumed: res.Resumed, Completed: res.Completed, Budget: res.Budget}
+	if res.Budget != nil && res.Budget.Held {
+		return out, budgetHeldExit(ctx, run, opts.flowPath)
+	}
 	if out.Completed || !f.Repeat.Enabled {
 		fmt.Printf("afm: flow %q completed\n", f.Name)
 	} else {
 		fmt.Printf("afm: flow %q: cycle %d did not complete successfully\n", f.Name, opts.cycle)
 	}
 	// The next cycle estimate is needed before the dashboard hold, to choose its length.
-	moreCycles := out.Completed && opts.afterRun != nil && opts.afterRun()
+	moreCycles := out.Completed && res.Budget == nil && opts.afterRun != nil && opts.afterRun()
 	if srv != nil {
 		holdAfterResult(ctx, srv, opts.launch, moreCycles)
 	}
@@ -357,4 +372,34 @@ func resolveFlowPath(args []string) (string, error) {
 		return yamls[0], nil
 	}
 	return "", fmt.Errorf("multiple flow files found; specify one: %v", yamls)
+}
+
+// budgetExporterFor is nil without a flow file, which leaves saving to the flow unavailable. A typed nil must
+// not reach the engine's interface.
+func budgetExporterFor(flowPath string, f *flow.Flow) *budgetExporter {
+	if flowPath == "" {
+		return nil
+	}
+	return newBudgetExporter(flowPath, absRootDir(), f)
+}
+
+// budgetHeldExit reports the scopes that keep a run without a dashboard from finishing. Nobody can raise a limit
+// there, so the process ends with the hold code; a restarted run reads the flow again and continues by itself.
+func budgetHeldExit(ctx context.Context, run *engine.Run, flowPath string) error {
+	views, err := run.Budgets().List(context.WithoutCancel(ctx))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "afm: cannot list the held budgets: %v\n", err)
+	}
+	fmt.Println("afm: the run is held by a budget limit")
+	for _, v := range views {
+		if v.Hold != nil {
+			fmt.Printf("  %s: %s · %s\n", budgetLabel(v), budgetFigures(v), budgetState(v))
+		}
+	}
+	file := "the flow file"
+	if flowPath != "" {
+		file = relativeToRoot(absRootDir(), flowPath)
+	}
+	fmt.Printf("afm: raise the limit in %s; a restarted run continues by itself, or run with a dashboard port to edit and continue\n", file)
+	return &ExitError{Code: budgetHeldExitCode, Silent: true}
 }

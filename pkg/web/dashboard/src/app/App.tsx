@@ -42,6 +42,10 @@ import { useRunConversationsSeen } from '../components/run-conversations/run-con
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
+import { lastBudgetEventKey, useBudgets } from '../hooks/use-budgets'
+import { BudgetUiContext, type BudgetUi } from '../components/budget-dialog/budget-context'
+import { BudgetDialog } from '../components/budget-dialog/BudgetDialog'
+import { holdText, holdTitle, participantScope } from '../lib/budget-format'
 import { useRunEpoch } from '../hooks/use-run-epoch'
 import { useElapsed } from '../hooks/use-elapsed'
 import { useStageClock } from '../hooks/use-stage-clock'
@@ -94,7 +98,7 @@ export function App(): ReactElement {
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, collaborationMode, runCost,
     runOverheadCost, coverageIssues, accounting, usageAnalytics, statusAvailable, refresh, runStatus,
-    timeZone, utcOffsetMinutes, unknownCommandName, hideAttachHelpers,
+    timeZone, utcOffsetMinutes, unknownCommandName, hideAttachHelpers, statusTick,
   } = useStatus()
   const runEpoch = useRunEpoch(runId)
   const stageActions = useMemo(createStageActions, [runEpoch])
@@ -129,6 +133,16 @@ export function App(): ReactElement {
 
   const wsUrl = buildWebSocketUrl()
   const { events, arrivals, connected, activity: liveActivity, significantVersion } = useEventFeed(wsUrl, runId)
+
+  // Бюджеты: список обновляется в такт опросу статуса и сразу по budget_*-событию; окно — одно на приложение.
+  const budgets = useBudgets({ enabled: capabilities.budgets, runId, tick: statusTick, eventKey: lastBudgetEventKey(events) })
+  const [budgetDialog, setBudgetDialog] = useState<{ scope: string; opener: HTMLElement | null } | null>(null)
+  const openBudgetDialog = useCallback((scope: string, opener: HTMLElement | null) => setBudgetDialog({ scope, opener }), [])
+  const closeBudgetDialog = useCallback(() => setBudgetDialog(null), [])
+  // Окно принадлежит рану и capability: новый ран или выключенные бюджеты закрывают его.
+  useEffect(() => {
+    setBudgetDialog(null)
+  }, [runId, capabilities.budgets])
 
   // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано справа от рейла: Feed,
   // контекстный attention или read-only просмотр истории плана/диалога.
@@ -240,6 +254,29 @@ export function App(): ReactElement {
   // assistantsByStage — дерево задач помощников КАЖДОЙ стадии, из ОТДЕЛЬНОГО поллинга (useStageAssistants),
   // а не из /api/status (AGENTS.md: статус не раздувается). Капабилити выключена → хук не делает запросов.
   const assistantsByStage = useStageAssistants(stages.map((s) => s.id), capabilities.collaboration)
+  // budgetNames — подписи областей бюджета: помощники и run agents известны по имени, а не по ID задачи. Карта
+  // пересобирается только когда меняются сами подписи, а не на каждый опрос задач: от неё зависит разбор всей ленты.
+  const budgetNameEntries: [string, string, string][] = []
+  for (const [stageId, entry] of Object.entries(assistantsByStage)) {
+    for (const task of entry.tasks) budgetNameEntries.push([`task:${task.id}`, `Helper ${task.title !== '' ? task.title : task.profileId} · ${stageId}`, stageId])
+  }
+  for (const p of meshParticipants) {
+    const scope = participantScope(p)
+    if (p.kind === 'run_agent' && scope !== null) budgetNameEntries.push([scope, `Run agent ${p.display_name ?? p.alias ?? p.id}`, ''])
+  }
+  const budgetNamesKey = JSON.stringify(budgetNameEntries)
+  const budgetScopes = useMemo(() => {
+    const entries = JSON.parse(budgetNamesKey) as [string, string, string][]
+    return {
+      names: new Map(entries.map(([scope, label]) => [scope, label])),
+      stageOf: new Map(entries.filter(([, , stageId]) => stageId !== '').map(([scope, , stageId]) => [scope, stageId])),
+    }
+  }, [budgetNamesKey])
+  const budgetUi = useMemo<BudgetUi>(
+    () => ({ enabled: capabilities.budgets, views: budgets.byScope, names: budgetScopes.names, stageOf: budgetScopes.stageOf, openDialog: openBudgetDialog }),
+    [capabilities.budgets, budgets.byScope, budgetScopes, openBudgetDialog],
+  )
+
   const selectedTaskStageTasks = selection?.kind === 'assistant' ? assistantsByStage[selection.stageId]?.tasks ?? [] : []
   const selectedTask =
     selection?.kind === 'assistant'
@@ -361,6 +398,16 @@ export function App(): ReactElement {
     (workspaceStage.status === 'paused' && heldPauseEpisodes.get(workspaceStage.id) === workspaceStage.updatedAt))
 
   const heldContinue = heldWorkspacePause && workspaceStage !== null ? () => pauseOnFocus.resumeNow(workspaceStage.id) : undefined
+
+  // Стадию на паузе может держать бюджет: тогда Continue не шлёт stage-continue (engine его отклонит), а открывает окно
+  // той области, чей лимит держит стадию.
+  const stageBudgetView = workspaceStage !== null && workspaceStage.status === 'paused' ? budgets.byScope.get(`stage:${workspaceStage.id}`) : undefined
+  const stageBudgetHold = stageBudgetView?.hold ?? null
+  const budgetHoldScope = stageBudgetView !== undefined && stageBudgetHold !== null ? (stageBudgetHold.scope !== '' ? stageBudgetHold.scope : stageBudgetView.scope) : null
+  const budgetContinue = budgetHoldScope !== null
+    ? () => openBudgetDialog(budgetHoldScope, document.activeElement instanceof HTMLElement ? document.activeElement : null)
+    : undefined
+  const continueHandler = budgetContinue ?? heldContinue
 
   // Feed follows the selected stage, using its replayed events as well as live updates.
   const stageEvents = useStageEvents(workspaceStage?.id ?? null, events, runId)
@@ -631,21 +678,22 @@ export function App(): ReactElement {
   }
 
   // Единственная панель детали — по одной за раз, на всю доступную высоту.
-  const attentionBanner = inAttention && contextKind !== null ? <AttentionBanner kind={contextKind} /> : undefined
+  const budgetBanner = stageBudgetView !== undefined && stageBudgetHold !== null ? { title: holdTitle(stageBudgetView), subtitle: holdText(stageBudgetView, budgetScopes.names) } : undefined
+  const attentionBanner = inAttention && contextKind !== null ? <AttentionBanner kind={contextKind} budget={contextKind === 'paused' ? budgetBanner : undefined} /> : undefined
   let detailPanel: ReactElement | null = null
   if (workspaceStage !== null) {
     if (wsState.view === 'attention') {
       detailPanel = contextKind === 'question'
         ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
-        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} statusAvailable={statusAvailable} onContinue={heldContinue} />
+        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} statusAvailable={statusAvailable} onContinue={continueHandler} budgetHeld={budgetContinue !== undefined} />
     } else if (wsState.view === 'plan-history') {
       detailPanel = showPlan
-        ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} onContinue={heldContinue} />
+        ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} onContinue={continueHandler} budgetHeld={budgetContinue !== undefined} />
         : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} /> : null
     } else if (wsState.view === 'dialog-history') {
       detailPanel = showDialog
         ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
-        : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} onContinue={heldContinue} /> : null
+        : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} onContinue={continueHandler} budgetHeld={budgetContinue !== undefined} /> : null
     }
   }
 
@@ -655,6 +703,7 @@ export function App(): ReactElement {
     <UnknownCommandNameContext.Provider value={unknownCommandName}>
     <MessageTimeZoneProvider timeZone={timeZone} utcOffsetMinutes={utcOffsetMinutes}>
     <DialogOpenContext.Provider value={reportDialogOpen}>
+    <BudgetUiContext.Provider value={budgetUi}>
     {/* SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
         useSideAgentContext() (file-browser → side-agent, via its "Send to assistant" no-pause flow) and
         needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
@@ -769,7 +818,8 @@ export function App(): ReactElement {
                     showControls={wsState.view === 'feed' && selection?.kind === 'stage'}
                     showStageButtons={selection?.kind === 'stage'}
                     controlsEnabled={flowPauseState === 'none' && (!pauseOnFocus.hasActiveOp(workspaceStage.id) || (workspaceStage.status === 'paused' && pauseOnFocus.isOwned(workspaceStage.id)))}
-                    onContinue={heldContinue}
+                    onContinue={continueHandler}
+                    budgetHeld={budgetContinue !== undefined}
                     feedFocus={focusAvailable ? { active: feedFocus.active, onToggle: feedFocus.toggle, target: stageFeedShown ? 'feed' : 'view', onShowFeed: stageFeedShown ? undefined : openFeed } : undefined}
                     pendingAttention={beacon ?? undefined}
                     replyNeeded={wsState.view === 'feed' && feedReplies.stageId === workspaceStage.id ? feedReplies.count : 0}
@@ -992,6 +1042,10 @@ export function App(): ReactElement {
         />
       )}
 
+      {budgetDialog !== null && (
+        <BudgetDialog key={budgetDialog.scope} scope={budgetDialog.scope} opener={budgetDialog.opener} onClose={closeBudgetDialog} onView={budgets.apply} onChanged={refresh} />
+      )}
+
       {addStageOpen && (
         <AddStageDialog
           capabilityEnabled={capabilities.addStage}
@@ -1006,6 +1060,7 @@ export function App(): ReactElement {
       </CommentProvider>
       </StageActionsContext.Provider>
     </SideAgentProvider>
+    </BudgetUiContext.Provider>
     </DialogOpenContext.Provider>
     </MessageTimeZoneProvider>
     </UnknownCommandNameContext.Provider>

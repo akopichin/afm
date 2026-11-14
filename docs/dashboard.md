@@ -566,6 +566,12 @@ All three are a **list-price estimate**, not an invoice. To hide them entirely, 
 into `usage.jsonl`, just not displayed. See [Cost accounting](accounting.md) for the
 full model (token semantics, `pricing:` overrides, coverage, and the display switch).
 
+The **Cost** tab also lists the run's [spending budgets](budgets.md#in-the-dashboard)
+(run, stages, helpers, run agents, including scopes with no limit), each with an
+**Edit** button, whether or not accounting is displayed. Budget warnings appear in
+the stage feed, the stage rail shows a `Budget N%` badge, and a stage stopped by
+its budget shows a **Stopped by budget** banner.
+
 With accounting off, or on a run with no usage data, the **Cost** tab is still
 available as **Stage time**: the same summary and **Time** column without the token
 and cost columns. The rail keeps showing stage time.

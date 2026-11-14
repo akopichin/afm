@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AfmEvent } from '../../types'
 import { mergeCapped, toEvent } from '../use-event-feed'
 import { useRunEpoch } from '../use-run-epoch'
+import { isRunBudgetNotice } from '../../types/budget'
 
 // Кап отдельный от глобальной ленты — вкладка Feed одной стадии не обязана видеть больше 2000: этого
 // достаточно, чтобы показать полный ход стадии, не раздувая память на очень долгих ранах.
@@ -50,7 +51,8 @@ export function useStageEvents(stageId: string | null, globalEvents: AfmEvent[],
   // изменился, остаётся прежний массив.
   const liveRef = useRef<AfmEvent[]>([])
   const live = useMemo(() => {
-    const next = globalEvents.filter((e) => e.stageId === stageId).slice(-MAX_STAGE_EVENTS)
+    // Notices рана не принадлежат стадии, а общей ленты нет: каждая стадия показывает их у себя.
+    const next = globalEvents.filter((e) => e.stageId === stageId || isRunBudgetNotice(e)).slice(-MAX_STAGE_EVENTS)
     if (isSameEvents(liveRef.current, next)) return liveRef.current
     liveRef.current = next
     return next

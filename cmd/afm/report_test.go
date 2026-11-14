@@ -353,3 +353,21 @@ func TestReportCmd_Registered(t *testing.T) {
 	}
 	t.Fatal("expected \"report\" to be registered as a root subcommand")
 }
+
+// With accounting display off the hint is stderr only and a run without budgets adds nothing to stdout.
+func TestReport_NoBudgetsNoSection(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("AFM_ACCOUNTING", "0")
+	makeRunState(t, "flow-20260101-120000", cmdInit, state.StatusDone)
+	stdout, _ := captureOutput(t, func() {
+		cmd := newReportCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("report: %v", err)
+		}
+	})
+	if strings.Contains(stdout, "Budgets") {
+		t.Errorf("a run without budgets printed a Budgets section:\n%s", stdout)
+	}
+}

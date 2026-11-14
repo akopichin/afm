@@ -8,6 +8,7 @@ import { presentVerifyStep } from '../../lib/verify-step'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import { AssistantTaskRow } from '../assistants'
 import { QuotaCountdown } from './QuotaCountdown'
+import { StageBudgetBadge } from '../budget-dialog/StageBudgetBadge'
 
 type StagesListProps = {
   stages: Stage[]
@@ -286,6 +287,7 @@ export function StagesList({
             {awaitingAssistantsBlocked && (
               <span className="assistants-blocked-badge" title="A required helper task needs your decision">⚠</span>
             )}
+            <StageBudgetBadge stageId={stage.id} />
             {stage.preNote !== '' && (
               <span className="prenote-badge" role="img" aria-label="Stage note attached" title="Stage note attached · select stage to read">📝</span>
             )}

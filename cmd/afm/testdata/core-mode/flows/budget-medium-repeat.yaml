@@ -1,0 +1,9 @@
+name: core-budget-medium
+repeat: {max_cycles: 3}
+stages:
+  - id: build
+    agents: [auto]
+    command: __BUDGET_AGENT__
+    budget:
+      tokens: 100
+      stop_policy: medium

@@ -59,6 +59,7 @@ nav:
       - Artifacts & inputs: artifacts.md
       - Agent memory: agent-memory.md
       - Cost accounting: accounting.md
+      - Spending budgets: budgets.md
       - Dashboard: dashboard.md
       - Core mode (API only): core-mode.md
       - Engine and 3.x builds: engine.md

@@ -163,6 +163,8 @@ func newCheckCmd() *cobra.Command {
 				}
 			}
 
+			// Budgets come from the journal, so they show with accounting display off too.
+			printBudgets(os.Stdout, loadRunBudgets(os.Stdout, latest), rs.RunStatus == state.RunStatusRunning)
 			fmt.Println()
 			switch {
 			case loadErr != nil && errors.Is(loadErr, accounting.ErrCorruptUsage):

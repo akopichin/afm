@@ -5,6 +5,7 @@ import type { UsageCounts } from '../../types/usage-analytics'
 import { plural } from '../../lib/plural'
 import { formatStageDuration, type StageTimes, type StageTimeView } from '../../lib/stage-timing'
 import { summarizeCoverageGroups, visibleCoverageIssues } from './coverage-summary'
+import { BudgetsSection } from '../budget-dialog/BudgetsSection'
 
 export type CostPanelProps = {
   stages: Stage[]
@@ -179,6 +180,7 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
         </p>
         {!usage && <p className="empty-hint">{unavailable ? 'Cost unavailable this run' : 'No usage data'}</p>}
         {usage && runCost !== undefined && <UsageBreakdown cost={runCost} />}
+        <BudgetsSection stageIds={stages.map((stage) => stage.id)} />
         <span id={idleHintId} hidden>{IDLE_HINT}</span>
       </div>
     </div>

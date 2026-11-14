@@ -1,0 +1,7 @@
+name: core-budget
+stages:
+  - id: build
+    agents: [auto]
+    command: __BUDGET_AGENT__
+    budget:
+      tokens: 100

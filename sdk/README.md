@@ -163,6 +163,7 @@ All methods below take a `context.Context` and use the local dashboard API:
 | `Send(MeshSendRequest)` | Send an Agent Mesh message with a caller-supplied stable request ID for safe retries after an ambiguous response. |
 | `AssistantProfiles`, `AttachAndSend(AttachAndSendRequest)` | Find available profiles and attach an agent with an optional first message. |
 | `Approve`, `Retry`, `Revise`, `Pause`, `Continue` | Send the corresponding stage control request. |
+| `Budgets`, `Budget(scope)`, `UpdateBudget(BudgetUpdate)`, `ResumeBudget(scope, revision)` | Read the spending limits, change one and continue a held scope. See [Budgets](#budgets). |
 
 `StageView` contains each stage's runtime status and UI flags such as
 `ShowPlan`, `ShowDialog`, and `Buttons`. `RunStatus.Capabilities` tells a client
@@ -177,6 +178,43 @@ Rejected dashboard requests return `*afmsdk.HTTPError` with `StatusCode` and a
 bounded `Body`; use `errors.As` to inspect it. Oversized successful responses
 wrap `afmsdk.ErrResponseTooLarge` for `errors.Is`. JSON responses are limited
 to 8 MiB, plan responses to 16 MiB, and error bodies to 4 KiB.
+
+## Budgets
+
+A run with spending limits serves them through `Budgets` (every scope) and `Budget` (one scope: `run`,
+`stage:<id>` or `task:<id>`, with a `YAML` block when the limit can be saved to the flow file). A `BudgetView`
+carries the engine's decision: effective limit, spend, per-metric level, `Hold` (why work is stopped), parent
+limits and the `Actions` that make sense now. Display it; do not recompute admission.
+
+```go
+detail, err := run.Budget(ctx, "stage:build")
+if err != nil {
+	return err // errors.Is(err, afmsdk.ErrBudgetsUnavailable) for an afm without budgets
+}
+res, err := run.UpdateBudget(ctx, afmsdk.BudgetUpdate{
+	Scope:            "stage:build",
+	ExpectedRevision: detail.View.Revision, // 0 is a valid revision
+	Override: afmsdk.BudgetOverride{
+		Kind: afmsdk.BudgetOverrideLimit,
+		Spec: &afmsdk.BudgetSpec{Tokens: 1_000_000, StopPolicy: afmsdk.BudgetPolicyHard},
+	},
+	Resume: true, // continue the held scope after saving
+})
+var budgetErr *afmsdk.BudgetError
+if errors.As(err, &budgetErr) && budgetErr.Code == "budget_still_limited" {
+	// The limit was saved (res.View is the new revision) but work is still stopped: raise it further.
+}
+```
+
+`BudgetOverride` kinds are `none` (use the declared limit), `limit` (`Spec` required) and `unlimited` (drop the
+scope's own limit; parent limits still apply). `SaveToYAML` also writes a limit to the flow file; the outcome is
+`BudgetUpdateResult.Export`, whose failure does not undo the saved override.
+
+Refusals are `*afmsdk.BudgetError{Status, Code, Message}`; branch on `Code`: `budget_invalid`,
+`budget_unknown_scope`, `budget_revision_conflict`, `budget_still_limited`, `budget_rates_missing`,
+`budget_closed`. `UpdateBudget` returns the saved result **and** a `*BudgetError` when the override was saved
+but continuing was refused. `RunStatus.Capabilities.Budgets` and `.BudgetExport` say what the run serves; an afm
+without budgets answers `ErrBudgetsUnavailable`.
 
 ## Scope and checks
 

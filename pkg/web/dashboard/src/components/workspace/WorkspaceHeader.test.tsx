@@ -277,3 +277,15 @@ it('the reply-needed indicator is a button that goes to the pending question', (
   fireEvent.click(screen.getByRole('button', { name: 'Go to the question awaiting your reply' }))
   expect(onReplyJump).toHaveBeenCalledTimes(1)
 })
+
+it('a budget-held paused stage says so and Continue goes to the budget handler, not stage-continue', () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const onContinue = vi.fn()
+  render(<WorkspaceHeader stage={stage({ status: 'paused' })} connected budgetHeld onContinue={onContinue} />)
+  expect(screen.getByText('Stopped by budget')).toBeInTheDocument()
+  const button = screen.getByRole('button', { name: 'Continue' })
+  expect(button).toHaveAttribute('title', 'Open the budget to continue this stage')
+  fireEvent.click(button)
+  expect(onContinue).toHaveBeenCalledTimes(1)
+  expect(fetchSpy).not.toHaveBeenCalled()
+})

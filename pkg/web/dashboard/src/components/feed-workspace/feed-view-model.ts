@@ -2,6 +2,8 @@ import type { AfmEvent, StageStatus } from '../../types'
 import type { MeshMessage } from '../../api/mesh-client'
 import { stepTooltip, type ExecutorLabel } from '../../lib/executor-label'
 import { presentVerifyStep } from '../../lib/verify-step'
+import { NO_SCOPE_NAMES, noticeText, type BudgetScopeNames } from '../../lib/budget-format'
+import { parseBudgetNotice } from '../../types/budget'
 
 // Семантическая презентация ленты: каждое РЕАЛЬНОЕ событие из events.jsonl превращается в FeedItem с
 // ролью, тоном и текстом.
@@ -40,6 +42,9 @@ export type FeedItem = {
   // executor, shown as a badge beside the text.
   title?: string
   executor?: ExecutorLabel
+  // budgetScope — область budget_*-notice; budgetEditable — у notice есть кнопка «Edit budget» (предупреждение и лимит).
+  budgetScope?: string
+  budgetEditable?: boolean
 }
 
 // FeedGroup — последовательные items одной стороны и стадии, слитые визуально в
@@ -119,11 +124,15 @@ type Mapped = {
   meshMessageId?: string
   title?: string
   executor?: ExecutorLabel
+  budgetScope?: string
+  budgetEditable?: boolean
+  // once — событие-эпизод: повтор того же dedupeId (история и WS отдали одну копию) не получает второй строки.
+  once?: boolean
 }
 
 // mapEvent — единственная точка соответствия «тип события → презентация».
 // null — событие сознательно не рендерится в ленте (см. ask_user/user_answered ниже).
-function mapEvent(event: AfmEvent, unknownPrefix: string | undefined): Mapped | null {
+function mapEvent(event: AfmEvent, unknownPrefix: string | undefined, budgetNames: BudgetScopeNames): Mapped | null {
   const data = event.payload
   const obj = isRecord(data) ? data : {}
 
@@ -196,6 +205,11 @@ function mapEvent(event: AfmEvent, unknownPrefix: string | undefined): Mapped | 
     case 'quota_reset':
     case 'quota_warning':
       return mapQuotaNotice(event.type, obj)
+    case 'budget_warning':
+    case 'budget_limit_reached':
+    case 'budget_updated':
+    case 'budget_resumed':
+      return mapBudgetNotice(event.type, data, budgetNames)
     case 'team_warning':
       // The flow's team: declaration could not be applied as written for one member (a durable run-level notice,
       // pkg/orchestrator/team.go) — the run goes on, so a warning, not an error.
@@ -431,6 +445,26 @@ function mapQuotaNotice(type: 'quota_wait' | 'quota_reset' | 'quota_warning', ob
   return { actor: 'system', tone, kind: 'status', text: lead(message !== '' ? message : fallback), mono: false }
 }
 
+// mapBudgetNotice — notices бюджета: предупреждение и лимит несут кнопку редактирования, изменение и продолжение — нет.
+// Один notice на порог, метрику и ревизию: ключ строки переживает reload-replay.
+function mapBudgetNotice(type: string, data: unknown, names: BudgetScopeNames): Mapped | null {
+  const notice = parseBudgetNotice(type, data)
+  if (notice === null) return null
+  const { text, tone, editable } = noticeText(notice, names)
+  const episode = notice.kind === 'warning' || notice.kind === 'limit_reached'
+  return {
+    actor: 'system',
+    tone,
+    kind: 'status',
+    text,
+    mono: false,
+    dedupeId: episode ? `budget:${notice.kind}:${notice.scope}:${notice.metric ?? ''}:${notice.revision}` : undefined,
+    once: episode,
+    budgetScope: notice.scope,
+    budgetEditable: editable,
+  }
+}
+
 // mapVerifyEvent — презентация AI-verify наблюдательных событий. Именованный шаг показывается своим именем
 // (у AI-шага исполнитель — отдельным бейджем), безымянный — как раньше: с номером и командой/исполнителем.
 function mapVerifyEvent(
@@ -532,15 +566,20 @@ function itemKeyBase(event: AfmEvent, dedupeId: string | undefined): string {
 }
 
 // toFeedItems — события → FeedItem[] с уникальными стабильными ключами.
-export function toFeedItems(events: AfmEvent[], unknownPrefix?: string): FeedItem[] {
+export function toFeedItems(events: AfmEvent[], unknownPrefix?: string, budgetNames: BudgetScopeNames = NO_SCOPE_NAMES): FeedItem[] {
   const counts = new Map<string, number>()
+  const seenOnce = new Set<string>()
   const items: FeedItem[] = []
 
   events.forEach((event) => {
-    const m = mapEvent(event, unknownPrefix)
+    const m = mapEvent(event, unknownPrefix, budgetNames)
     if (m === null) return // ask_user/user_answered — не рендерим (см. mapEvent)
 
     const base = itemKeyBase(event, m.dedupeId)
+    if (m.once === true) {
+      if (seenOnce.has(base)) return
+      seenOnce.add(base)
+    }
     const n = counts.get(base) ?? 0
     counts.set(base, n + 1)
     const key = n === 0 ? base : `${base}#${n}`
@@ -567,6 +606,8 @@ export function toFeedItems(events: AfmEvent[], unknownPrefix?: string): FeedIte
       meshMessageId: m.meshMessageId,
       title: m.title,
       executor: m.executor,
+      budgetScope: m.budgetScope,
+      budgetEditable: m.budgetEditable,
     })
   })
 

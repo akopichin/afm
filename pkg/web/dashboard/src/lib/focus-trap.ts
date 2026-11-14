@@ -42,6 +42,43 @@ export function trapTab(e: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'preventDefa
 // commit, поэтому вопрос, пришедший одним batch с открытием диалога, уже видит диалог открытым.
 export const DialogOpenContext = createContext<(open: boolean) => void>(() => {})
 
+// workspaceFallback — последняя опора фокуса, когда ни открывший элемент, ни карточка уже не в документе: выбранная
+// вкладка воркспейса или основная область.
+export function workspaceFallback(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.workspace-tabs [aria-selected="true"]') ?? document.querySelector<HTMLElement>('#main')
+}
+
+let stopKeeping: (() => void) | null = null
+
+// keepFocus — фокус, отданный после закрытия диалога, не должен уйти в body, когда его цель исчезает (бейдж пропал,
+// карточка переехала в другую колонку). Пока фокус на цели или в body, при потере цели resolve() выбирает следующую.
+// Останавливается, когда фокус осознанно ушёл на другой элемент; по времени не ограничен. Новый вызов заменяет прежний.
+function keepFocus(first: HTMLElement, resolve: () => HTMLElement | null): void {
+  stopKeeping?.()
+  let current = first
+  const observer = new MutationObserver(check)
+  function stop(): void {
+    observer.disconnect()
+    document.removeEventListener('focusin', onFocusIn)
+    if (stopKeeping === stop) stopKeeping = null
+  }
+  function onFocusIn(e: FocusEvent): void {
+    if (e.target !== current) stop()
+  }
+  function check(): void {
+    const focused = document.activeElement
+    if (focused !== null && focused !== document.body && focused !== current) return stop()
+    if (current.isConnected) return
+    const next = resolve()
+    if (next === null) return stop()
+    current = next
+    next.focus()
+  }
+  document.addEventListener('focusin', onFocusIn)
+  observer.observe(document.body, { childList: true, subtree: true })
+  stopKeeping = stop
+}
+
 // useModalDialog — жизненный цикл фокуса модального диалога: фокус входит в первый элемент, Tab не выходит
 // наружу, Escape вызывает onClose, на закрытии фокус возвращается туда, где его ждут. returnFocus находит цель
 // в момент закрытия (например, карточку задачи по ключу, если доска её перерисовала); без неё — элемент,
@@ -110,8 +147,16 @@ export function useModalDialog(
       // Скрыт, а не закрыт: фокус остаётся у показанного вида.
       if (!activeRef.current) return
       const opener = openerRef.current
-      const target = returnFocusRef.current?.() ?? (opener instanceof HTMLElement && opener.isConnected ? opener : null)
-      target?.focus()
+      const resolve = (): HTMLElement | null => {
+        const found = returnFocusRef.current?.()
+        if (found?.isConnected) return found
+        if (opener instanceof HTMLElement && opener.isConnected) return opener
+        return workspaceFallback()
+      }
+      const target = resolve()
+      if (target === null) return
+      target.focus()
+      keepFocus(target, resolve)
     }
   }, [modalRef, reportOpen, active])
 }

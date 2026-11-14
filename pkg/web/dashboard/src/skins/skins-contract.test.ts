@@ -992,9 +992,9 @@ describe('skins CSS contract — scanner', () => {
     expect(scanCss('x.css', '/* only a comment */\n').problem).toMatch(/no declarations/)
   })
 
-  it('scans all 27 stylesheets, each balanced and with declarations', () => {
-    expect(Object.keys(SHIPPED_CSS)).toHaveLength(27)
-    expect(SCANNED).toHaveLength(27)
+  it('scans all 28 stylesheets, each balanced and with declarations', () => {
+    expect(Object.keys(SHIPPED_CSS)).toHaveLength(28)
+    expect(SCANNED).toHaveLength(28)
     expect(SCANNED.flatMap(({ problem }) => (problem === null ? [] : [problem]))).toEqual([])
   })
 })

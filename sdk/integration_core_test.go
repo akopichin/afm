@@ -56,6 +56,7 @@ func newCoreFixture(t *testing.T, flowFile string, subst map[string]string) *cor
 	text := readCoreTestdata(t, "flows/"+flowFile)
 	for placeholder, rel := range map[string]string{
 		"__AGENT__": "agents/agent.sh", "__AUTO_AGENT__": "agents/auto_agent.sh", "__ASK_AGENT__": "agents/ask_agent.sh",
+		"__BUDGET_AGENT__": "agents/budget_agent.sh",
 	} {
 		abs, err := filepath.Abs(filepath.Join(coreTestdata, rel))
 		if err != nil {
@@ -939,5 +940,76 @@ func TestIntegration_CoreRepeatKeepsDashboardBehavior(t *testing.T) {
 	}
 	if n := fx.agentRuns("build:implementation"); n != 2 {
 		t.Errorf("implementation ran %d times, want once per cycle", n)
+	}
+}
+
+// Budgets through the SDK against the real afm: a held stage keeps core alive, a saved limit that still holds
+// returns the partial result, and a raised limit with resume continues the same run.
+func TestIntegration_CoreBudgetHoldUpdateResume(t *testing.T) {
+	fx := newCoreFixture(t, "budget.yaml", nil)
+	// 85 tokens warn, 30 more pass the limit of 100, the third turn completes the stage.
+	t.Setenv("AFM_IT_BUDGET_TOKENS", "85 30 20")
+	t.Setenv("AFM_IT_BUDGET_DONE_AT", "3")
+	ctx := coreTestContext(t)
+	run := fx.start(ctx)
+
+	if caps := mustStatus(ctx, t, run).Capabilities; !caps.Budgets || !caps.BudgetExport {
+		t.Fatalf("capabilities = %+v, want budgets and export", caps)
+	}
+	var held BudgetDetail
+	waitUntil(t, "stage build to be held by its budget", func() bool {
+		var err error
+		held, err = run.Budget(ctx, "stage:build")
+		return err == nil && held.View.Hold != nil
+	})
+	if held.View.Hold.Reason != "limit_reached" || held.View.Spent.Tokens != 115 || held.YAML == nil || !held.YAML.Available {
+		t.Fatalf("held view = %+v yaml %+v", held.View, held.YAML)
+	}
+	if !processAliveForTest(run) {
+		t.Fatal("a held run ended the process")
+	}
+	views, err := run.Budgets(ctx)
+	if err != nil || len(views) < 2 {
+		t.Fatalf("Budgets = %+v, %v", views, err)
+	}
+
+	// Resume without a new limit is refused with a typed error and changes nothing.
+	_, err = run.ResumeBudget(ctx, "stage:build", held.View.Revision)
+	var budgetErr *BudgetError
+	if !errors.As(err, &budgetErr) || budgetErr.Code != "budget_still_limited" || budgetErr.Status != http.StatusConflict {
+		t.Fatalf("ResumeBudget err = %v, want 409 budget_still_limited", err)
+	}
+
+	// A limit below the spend is saved, the continue is refused: result and error together.
+	partial, err := run.UpdateBudget(ctx, BudgetUpdate{
+		Scope: "stage:build", ExpectedRevision: held.View.Revision, Resume: true,
+		Override: BudgetOverride{Kind: BudgetOverrideLimit, Spec: &BudgetSpec{Tokens: 50, StopPolicy: BudgetPolicyHard}},
+	})
+	if !errors.As(err, &budgetErr) || budgetErr.Code != "budget_still_limited" {
+		t.Fatalf("UpdateBudget err = %v, want budget_still_limited", err)
+	}
+	if partial.View.Revision != held.View.Revision+1 || partial.View.Override.Spec == nil || partial.View.Override.Spec.Tokens != 50 {
+		t.Fatalf("partial result = %+v, want the saved override", partial)
+	}
+
+	// Another writer holds the old revision: a conflict, not a silent overwrite.
+	_, err = run.UpdateBudget(ctx, BudgetUpdate{Scope: "stage:build", ExpectedRevision: held.View.Revision, Override: BudgetOverride{Kind: BudgetOverrideNone}})
+	if !errors.As(err, &budgetErr) || budgetErr.Code != "budget_revision_conflict" {
+		t.Fatalf("stale update err = %v, want budget_revision_conflict", err)
+	}
+
+	done, err := run.UpdateBudget(ctx, BudgetUpdate{
+		Scope: "stage:build", ExpectedRevision: partial.View.Revision, Resume: true,
+		Override: BudgetOverride{Kind: BudgetOverrideLimit, Spec: &BudgetSpec{Tokens: 1000, StopPolicy: BudgetPolicyHard}},
+	})
+	if err != nil || done.View.Hold != nil {
+		t.Fatalf("UpdateBudget = %+v, %v", done, err)
+	}
+	requireResult(ctx, t, run, RunStateFinished)
+	if n := fx.agentRuns("build:3"); n != 1 {
+		t.Errorf("third agent turn ran %d times, want 1 in the same run", n)
+	}
+	if _, err := run.Budget(ctx, "stage:unknown"); !errors.As(err, &budgetErr) || budgetErr.Code != "budget_unknown_scope" || budgetErr.Status != http.StatusNotFound {
+		t.Errorf("unknown scope err = %v, want 404 budget_unknown_scope", err)
 	}
 }

@@ -23,6 +23,7 @@ import { executorLabel, executorTooltip, useUnknownCommandName } from '../../lib
 import { messageText } from '../../lib/agent-result'
 import { canReplyInConversation, isAgentMessageToUser } from '../../lib/mesh-reply'
 import { messageDelivered, sideAgentOutcome } from './mesh-receipt'
+import { useBudgetUi } from '../budget-dialog/budget-context'
 
 export { FeedGroupView } from './feed-rows'
 
@@ -119,7 +120,8 @@ export function FeedWorkspace({
   const list = useRef<FeedListHandle>(null)
 
   const unknownPrefix = useUnknownCommandName()
-  const items = useMemo(() => toFeedItems(events, unknownPrefix), [events, unknownPrefix])
+  const { names: budgetNames } = useBudgetUi()
+  const items = useMemo(() => toFeedItems(events, unknownPrefix, budgetNames), [events, unknownPrefix, budgetNames])
   // The stage's conversations, interleaved with its events — only in a stage feed with the mesh on — together
   // with its conversation log with its agent: the "Not answered" marks and the posts only that log has.
   const conversation = useStageConversation(mesh !== undefined ? stageId : null)

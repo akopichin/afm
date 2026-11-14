@@ -431,4 +431,14 @@ describe('useStageEvents', () => {
       expect(seqs.every((s, i) => i === 0 || s > (seqs[i - 1] as number))).toBe(true)
     })
   })
+
+  it('adds run-level budget notices to every stage feed, but not stage-less run agent notices', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('[]'))
+    const notice = (scope: string, stageId: string, receipt: number): AfmEvent => ({
+      type: 'budget_warning', stageId, payload: { scope }, timestamp: new Date(receipt).toISOString(), receipt,
+    })
+    const live = [ev('a', 1), notice('run', '', 2), notice('task:t1', '', 3), notice('stage:b', 'b', 4)]
+    const { result } = renderHook(() => useStageEvents('a', live, 'run-a'))
+    await waitFor(() => expect(result.current.map((e) => e.receipt ?? e.seq)).toEqual([1, 2]))
+  })
 })

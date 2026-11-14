@@ -1,7 +1,7 @@
-github.com/akopichin/afm-engine v1.0.3 h1:wCQp22XVxfd+yuyaYgiT4d6fqBka8kqy97gSHF8MMlc=
-github.com/akopichin/afm-engine v1.0.3/go.mod h1:KH3XCbwwWpJKSl82F9SuRvYgwzbUxMqlzqM3tvEFTag=
-github.com/akopichin/afm/contracts v0.1.0 h1:Y4p8zikawttc5eKhfgVH3CdkRywBgUptojexVyTB2FE=
-github.com/akopichin/afm/contracts v0.1.0/go.mod h1:al5OyOuvs4jWevX1OCgPma8T7kHZewoYclTxUCzjEto=
+github.com/akopichin/afm-engine v1.1.0 h1:xGiymuha1bA7irjR1AcH9S0+9hsw+RCeNtLP5Id7AIU=
+github.com/akopichin/afm-engine v1.1.0/go.mod h1:QvT4xa739NSuf56qPCKBmjCbLd97KPlpDZL0a41xflI=
+github.com/akopichin/afm/contracts v0.2.0 h1:FEAOKrtJacwXTVb0pTOld+NGtbuzCydx6vt5iZY20cw=
+github.com/akopichin/afm/contracts v0.2.0/go.mod h1:al5OyOuvs4jWevX1OCgPma8T7kHZewoYclTxUCzjEto=
 github.com/aymanbagabas/go-udiff v0.4.1 h1:OEIrQ8maEeDBXQDoGCbbTTXYJMYRCRO1fnodZ12Gv5o=
 github.com/aymanbagabas/go-udiff v0.4.1/go.mod h1:0L9PGwj20lrtmEMeyw4WKJ/TMyDtvAoK9bf2u/mNo3w=
 github.com/cpuguy83/go-md2man/v2 v2.0.3/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=

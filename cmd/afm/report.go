@@ -38,8 +38,11 @@ func newReportCmd() *cobra.Command {
 
 			// `afm report` is a pure cost/usage command. usage.jsonl keeps being collected, so `AFM_ACCOUNTING=1
 			// afm report` shows it on demand.
+			snapshot := rs.RunStatus == state.RunStatusRunning
 			if !accountingDisplayEnabled() {
 				fmt.Fprintln(os.Stderr, "accounting display disabled; set AFM_ACCOUNTING=1 or accounting.enabled: true to view")
+				// Budgets are limits, not cost analytics: they stay visible.
+				printBudgetsMarkdown(os.Stdout, loadRunBudgets(os.Stdout, runDir), snapshot)
 				return nil
 			}
 
@@ -67,6 +70,7 @@ func newReportCmd() *cobra.Command {
 			}
 
 			fmt.Print(accounting.RenderMarkdown(filepath.Base(runDir), stages, led, renderState, accountingShowMoney()))
+			printBudgetsMarkdown(os.Stdout, loadRunBudgets(os.Stdout, runDir), snapshot)
 
 			switch {
 			case loadErr == nil:

@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 import { costReason, summarizeCoverageGroups } from '../cost-panel/coverage-summary'
 import { formatTokensCompact } from '../../lib/format-tokens'
+import { compactFigure, statusLevel } from '../../lib/budget-format'
+import { useBudgetUi } from '../budget-dialog/budget-context'
 
 // costReason/summarizeCoverageGroups живут в components/cost-panel/coverage-summary — и тайл Est.
 export { costReason, summarizeCoverageGroups }
@@ -63,6 +65,12 @@ export function RunMetrics({
   // Один id на оба рендера тайла — twin render не должен плодить дубликаты id в DOM. useId() уникален на
   // экземпляр RunMetrics, так что двух RunMetrics на странице тоже не столкнёт.
   const costReasonId = useId()
+
+  // Плитка бюджета рана — только при лимите или удержании: без них шапка остаётся прежней (UX F10a), а лимит
+  // любой области задаётся из списка Budgets во вкладке Cost.
+  const { views, openDialog } = useBudgetUi()
+  const runBudget = views.get('run')
+  const budgetShown = runBudget !== undefined && (runBudget.effective !== null || runBudget.hold !== null)
 
   // Поповер «⋯» — на узкой шапке раскрывает все пять метрик с подписями, чтобы вторичные не пропадали
   // молча. На десктопе кнопка скрыта CSS-ом.
@@ -135,6 +143,31 @@ export function RunMetrics({
     )
   }
 
+  // Budget — худшая метрика лимита рана; маркер с 80% и при удержании, клик открывает окно бюджета.
+  function renderBudgetMetric(fromPopover: boolean): ReactElement | null {
+    if (runBudget === undefined || !budgetShown) return null
+    const level = statusLevel(runBudget)
+    const value = runBudget.hold !== null ? 'Stopped' : compactFigure(runBudget) ?? '—'
+    return (
+      <button
+        type="button"
+        className="metric metric-budget"
+        data-metric="budget"
+        data-level={level}
+        key="budget"
+        aria-label={`Run budget: ${value}. Open budget`}
+        onClick={(e) => {
+          if (fromPopover) setMoreOpen(false)
+          openDialog('run', e.currentTarget)
+        }}
+      >
+        {level !== 'ok' && <span className="metric-marker" aria-hidden="true" />}
+        <span className="metric-label">Budget</span>
+        <span id={fromPopover ? undefined : 'run-budget'} className="metric-value">{value}{chevron()}</span>
+      </button>
+    )
+  }
+
   // Est. tokens — как и Est.
   function renderTokensMetric(fromPopover: boolean): ReactElement {
     return (
@@ -156,6 +189,7 @@ export function RunMetrics({
       {metrics.map((m) => renderMetric(m, true))}
       {showTokens && renderTokensMetric(false)}
       {showCost && renderCostMetric(false)}
+      {renderBudgetMetric(false)}
       <button
         type="button"
         className="metrics-more"
@@ -171,6 +205,7 @@ export function RunMetrics({
           {metrics.map((m) => renderMetric(m, false))}
           {showTokens && renderTokensMetric(true)}
           {showCost && renderCostMetric(true)}
+          {renderBudgetMetric(true)}
         </div>
       )}
       {/* Общий скрытый узел с пояснением маркера — оба рендера тайла (инлайн +

@@ -137,6 +137,9 @@ type capabilities struct {
 	AddStage bool `json:"add_stage"`
 	// UsageAnalytics — подключён ли GET /api/usage/analytics (не «есть ли данные»).
 	UsageAnalytics bool `json:"usage_analytics"`
+	// Budgets — подключён ли /api/budgets*; BudgetExport — можно ли сохранять лимит в flow.yaml.
+	Budgets      bool `json:"budgets"`
+	BudgetExport bool `json:"budget_export"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -181,6 +184,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp.Capabilities.SideAgent = s.sideAgent != nil
 	resp.Capabilities.Collaboration = s.assistantProfiles != nil
 	resp.Capabilities.AddStage = s.graphActions != nil
+	resp.Capabilities.Budgets = s.budgets != nil
+	resp.Capabilities.BudgetExport = s.budgets != nil && s.budgetExport != nil
 	if s.usageAnalytics != nil {
 		resp.Capabilities.UsageAnalytics = true
 		facts := s.usageAnalytics.Facts()

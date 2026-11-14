@@ -59,11 +59,12 @@ func newModeFixture(t *testing.T, mode, flowFile, flowTail string) *modeFixture 
 	fx.agentPath = testdataAbs(t, "agents/auto_agent.sh")
 	text := readTestdata(t, "flows/"+flowFile)
 	for placeholder, rel := range map[string]string{
-		"__AGENT__":       "agents/agent.sh",
-		"__ASK_AGENT__":   "agents/ask_agent.sh",
-		"__AUTO_AGENT__":  "agents/auto_agent.sh",
-		"__BOARD_AGENT__": "agents/board_agent.sh",
-		"__PLAN__":        "plans/plan.md",
+		"__AGENT__":        "agents/agent.sh",
+		"__ASK_AGENT__":    "agents/ask_agent.sh",
+		"__AUTO_AGENT__":   "agents/auto_agent.sh",
+		"__BOARD_AGENT__":  "agents/board_agent.sh",
+		"__BUDGET_AGENT__": "agents/budget_agent.sh",
+		"__PLAN__":         "plans/plan.md",
 	} {
 		text = strings.ReplaceAll(text, placeholder, testdataAbs(t, rel))
 	}

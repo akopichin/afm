@@ -390,6 +390,14 @@ Full example: [`examples/agent-team-review/`](https://github.com/akopichin/afm/t
 both answers with `afm agent wait`, fixes the valid findings, and then passes a
 `verify:` gate.
 
+## Limit helper and run-agent spending
+
+A helper, a declared `team` member or a profile can carry a `budget`
+(`{tokens, money, stop_policy}`). Each helper or run agent has its own counter. A
+stage helper's spend also counts toward its stage and the run; a run agent's
+spend counts toward the run only, as it belongs to no stage; a helper started with `afm agent spawn`
+uses its profile's default. See [Spending budgets](budgets.md).
+
 ## Hide the attach helper buttons
 
 Set `collaboration.hide_attach_helpers: true` in global or project `config.yaml`, or

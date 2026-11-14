@@ -30,7 +30,7 @@ export type FlowStatus = {
   backoffOpenSince: string[]
   // capabilities — фичефлаги бэкенда для текущего запуска: включён ли файловый браузер проекта, подключён
   // ли «боковой» агент, и включена ли collaboration (помощники/сабагенты стадии).
-  capabilities: { fileBrowser: boolean; sideAgent: boolean; collaboration: boolean; addStage: boolean }
+  capabilities: { fileBrowser: boolean; sideAgent: boolean; collaboration: boolean; addStage: boolean; budgets: boolean; budgetExport: boolean }
   // graphRevision — текущая ревизия рантайм-реестра стадий (Этап 9); add-stage диалог использует её как
   // стартовую optimistic-concurrency метку. 0, когда add_stage выключен/не сообщён.
   graphRevision: number
@@ -82,7 +82,7 @@ const EMPTY_STATUS: FlowStatus = {
   idleSince: null,
   backoffAccumulatedMs: 0,
   backoffOpenSince: [],
-  capabilities: { fileBrowser: false, sideAgent: false, collaboration: false, addStage: false },
+  capabilities: { fileBrowser: false, sideAgent: false, collaboration: false, addStage: false, budgets: false, budgetExport: false },
   graphRevision: 0,
   runId: '',
   flowPauseState: 'none',
@@ -100,8 +100,10 @@ const EMPTY_STATUS: FlowStatus = {
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages — уже упорядоченный массив
 // StageView (см. pkg/server/stageview.go), маппинг 1:1 через toStage.
 
-export function useStatus(): FlowStatus & { refresh: () => void; statusAvailable: boolean } {
+// statusTick растёт на каждый успешный ответ: по нему зависимые опросы (бюджеты) идут в такт статусу.
+export function useStatus(): FlowStatus & { refresh: () => void; statusAvailable: boolean; statusTick: number } {
   const [status, setStatus] = useState<FlowStatus>(EMPTY_STATUS)
+  const [statusTick, setStatusTick] = useState(0)
   const [statusAvailable, setStatusAvailable] = useState(false)
   const lastStatusSuccessAt = useRef<number | null>(null)
   const cancelledRef = useRef(false)
@@ -137,6 +139,7 @@ export function useStatus(): FlowStatus & { refresh: () => void; statusAvailable
     if (requestId !== latestRequestId.current) return
 
     setStatus(normalizeStatus(data))
+    setStatusTick((tick) => tick + 1)
     lastStatusSuccessAt.current = Date.now()
     setStatusAvailable(true)
   }, [])
@@ -181,7 +184,7 @@ export function useStatus(): FlowStatus & { refresh: () => void; statusAvailable
     }
   }, [load])
 
-  return { ...status, refresh, statusAvailable }
+  return { ...status, refresh, statusAvailable, statusTick }
 }
 
 export function normalizeStatus(raw: unknown): FlowStatus {
@@ -213,6 +216,8 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     sideAgent: rawCapabilities.side_agent === true,
     collaboration: rawCapabilities.collaboration === true,
     addStage: rawCapabilities.add_stage === true,
+    budgets: rawCapabilities.budgets === true,
+    budgetExport: rawCapabilities.budget_export === true,
   }
   const graphRevision = typeof obj.graph_revision === 'number' ? obj.graph_revision : 0
   const runId = typeof obj.run_id === 'string' ? obj.run_id : ''

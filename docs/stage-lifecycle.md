@@ -125,13 +125,23 @@ Approve/revise/retry are durably recorded in the log (fsync) before control
 returns — a crash right after approval doesn't lose the intent; recovery continues
 from the correct state. See [the event log](internals/event-log.md).
 
+## Budget holds
+
+A stage whose [budget](budgets.md) is reached with `hard` (or, for new work,
+`medium`) is held: a started stage is paused with a budget reason, while a stage that has
+not started stays pending or ready and is not admitted (`auto_run: false` still
+applies); no retry is spent and
+it does not become `failed`. It continues when you raise the limit and press
+**Continue**, or when a restarted run reads a higher declared limit. Manual pauses
+and approvals are not released by a budget resume.
+
 ## Repeating a flow
 
 With [flow-level `repeat`](flow-reference.md#repeat-run-successful-flows-again), a
 successful pass finishes its run, then afm starts the flow again in a new run
 directory. Stages begin from `pending` in the new run; their previous `done`
 states are not reset in place. A failed stage, interruption, or storage failure
-stops repetition. A finite `max_cycles` counts passes including the first;
+stops repetition, as does a run held by a `hard` or `medium` budget. A finite `max_cycles` counts passes including the first;
 restarting the `afm run` process starts that count over.
 
 Between runs, the dashboard shows the completed run for about five seconds,

@@ -2,6 +2,13 @@
 
 Newest first. See the module's [README](./README.md) for usage; see the main project's [release-notes.md](../CHANGELOG.md) for afm itself.
 
+## 2026-11-14
+
+### Improvement: budgets
+
+- `Run.Budgets`, `Run.Budget(scope)`, `Run.UpdateBudget` and `Run.ResumeBudget` read and change the spending limits of a run, with `BudgetView`, `BudgetUpdate` and `BudgetOverride` types. `RunStatus.Capabilities.Budgets` and `.BudgetExport` say what the run serves; an `afm` without budgets answers `ErrBudgetsUnavailable`.
+- `UpdateBudget` returns the saved result and a `*BudgetError` when the limit was saved but continuing was refused (`budget_still_limited`). Refusals carry `Status`, `Code` and `Message`. See the [README](./README.md#budgets).
+
 ## 2026-11-07
 
 ### Improvement: core mode in the SDK

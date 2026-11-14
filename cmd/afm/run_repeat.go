@@ -28,6 +28,8 @@ type cycleResult struct {
 	// Completed — журнал рана содержит run_finished и все стадии done. orch.Run()==nil этого не гарантирует:
 	// ран с failed-стадией тоже возвращает nil.
 	Completed bool
+	// Budget — как бюджет повлиял на ран; не nil запрещает следующий цикл repeat.
+	Budget *engine.BudgetOutcome
 }
 
 // cycleLoop — всё, что неизменно между циклами одного процесса `afm run`.
@@ -55,6 +57,7 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 		exitOnFail:      l.exitOnFail,
 		worktreeDir:     l.worktreeDir,
 		forceNewRun:     l.forceNewRun,
+		flowPath:        l.flowPath,
 		runName:         runNameFor(l.worktreeName, f.Name),
 	}
 	if config.ReExecedIntoContainer() {
@@ -85,6 +88,11 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 		}
 		if !res.Completed {
 			return created, fmt.Errorf("cycle %d: run %s did not complete successfully; repeat stopped", opts.cycle, res.RunID)
+		}
+		if res.Budget != nil {
+			// Engine forbids starting another cycle after a hard or medium limit; this is an ordinary end.
+			fmt.Println("afm: repeat stopped: budget limit reached")
+			return prune(created, f.Repeat.KeepRuns), nil
 		}
 		completed++
 		early := next

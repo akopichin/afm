@@ -7,6 +7,8 @@ import { ExecutorBadge } from '../ExecutorBadge'
 import { STAGE_STATUS_LABELS, type Stage, type StageStatus } from '../../types'
 import { ThreadList } from './ThreadList'
 import { TabList, tabPanelProps } from '../tab-list'
+import { participantScope, statusLevel, statusText } from '../../lib/budget-format'
+import { useBudgetUi } from '../budget-dialog/budget-context'
 
 export type RunTeamListStage = { id: string; status: string }
 
@@ -144,6 +146,7 @@ export function RunTeamList({
   onCreateConversation, actionButtonRef, helperTasks = [], onClose,
 }: RunTeamListProps): ReactElement {
   const listTabsId = useId()
+  const { views: budgetViews } = useBudgetUi()
   const newFilterRef = useRef<HTMLButtonElement>(null)
   const focusedThreadRowRef = useRef<HTMLButtonElement | null>(null)
   const [stagesExpanded, setStagesExpanded] = useState(true)
@@ -176,6 +179,10 @@ export function RunTeamList({
 
   function renderRow(p: MeshParticipant, nested = false): ReactElement {
     const stage = stages.find((s) => s.id === p.stage_id)
+    // Бюджет помощника и run agent — только текст статуса: кнопки редактирования в этих строках нет.
+    const budgetScope = participantScope(p)
+    const budgetView = budgetScope === null ? undefined : budgetViews.get(budgetScope)
+    const budgetStatus = statusText(budgetView)
     const name = participantLabel(p)
     const status = focused ? focusStatus(p, stage) : participantStatus(p, stage)
     const detail = status ?? (p.scope === 'run' ? participantRole(p.kind) : null)
@@ -207,6 +214,7 @@ export function RunTeamList({
             <span className="team-person-detail" title={detail ?? undefined}>
               {p.alias !== undefined && p.alias !== '' && <span className="team-person-handle">@{p.alias}</span>}
               {detail !== null && <span className="team-person-status">{detail}</span>}
+              {budgetStatus !== null && budgetView !== undefined && <span className="budget-status" data-level={statusLevel(budgetView)}>{budgetStatus}</span>}
               {helperTask !== undefined && <span className="team-person-mode">{helperTask.mode === 'required' ? 'Required' : 'Advisory'}</span>}
               {sandbox !== null && (
                 <span className="team-person-sandbox" data-enforcement={p.readonly_enforcement} title={sandbox.title}>

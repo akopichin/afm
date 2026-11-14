@@ -17,4 +17,12 @@ describe('AttentionBanner', () => {
     rerender(<AttentionBanner kind="approval" />)
     expect(container.querySelector('.attention-banner')).toHaveAttribute('data-tone', 'attention')
   })
+
+  test('a budget hold replaces the paused text, so Continue is not offered as a plain resume', () => {
+    const { container } = render(<AttentionBanner kind="paused" budget={{ title: 'Stopped by budget', subtitle: 'The run budget is used up. Change the limit to continue.' }} />)
+    expect(screen.getByText('Stopped by budget')).toBeInTheDocument()
+    expect(screen.getByText(/The run budget is used up/)).toBeInTheDocument()
+    expect(screen.queryByText('Stage is paused')).toBeNull()
+    expect(container.querySelector('.attention-banner')).toHaveAttribute('data-kind', 'budget')
+  })
 })

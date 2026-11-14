@@ -59,6 +59,8 @@ type WorkspaceHeaderProps = {
   // showStageButtons — false, когда в воркспейсе выбран helper, а не сама стадия: кнопки принадлежат стадии.
   showStageButtons?: boolean
   onContinue?: () => void
+  // budgetHeld — стадию держит бюджет: рядом со статусом подпись, а Continue называет своё действие — открыть бюджет.
+  budgetHeld?: boolean
   feedFocus?: FeedFocusControl
   pendingAttention?: PendingAttention
 }
@@ -81,7 +83,7 @@ const COLLAPSE_ICON = icon(<path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5" />)
 // WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + чип статуса (точка, слово,
 // «thinking» во время running) и справа действия: ответ ждут, People, ожидание (в фокусе), Retry,
 // Pause/Continue иконкой, Focus.
-export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, onReplyJump, controlsEnabled = true, showControls = true, showStageButtons = true, onContinue, feedFocus, pendingAttention }: WorkspaceHeaderProps): ReactElement {
+export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, onReplyJump, controlsEnabled = true, showControls = true, showStageButtons = true, onContinue, budgetHeld = false, feedFocus, pendingAttention }: WorkspaceHeaderProps): ReactElement {
   const action = useStageAction(stage)
   const paused = stage.status === 'paused'
   const buttonsShown = showStageButtons && !stage.isScript && BUTTON_STATUSES.has(stage.status) && stage.buttons.length > 0
@@ -106,6 +108,7 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
           )}
         </span>
         {stage.status === 'awaiting_quota' && stage.quota !== undefined && <QuotaCountdown quota={stage.quota} live={statusAvailable} compact />}
+        {budgetHeld && <span className="budget-held-chip">Stopped by budget</span>}
       </span>
       {buttonsShown && (
         <span className="stage-buttons" role="group" aria-label="Stage buttons">
@@ -148,7 +151,7 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
             type="button"
             className="workspace-action workspace-action-icon"
             aria-label={paused ? 'Continue' : 'Pause'}
-            title={paused ? 'Continue stage' : 'Pause stage'}
+            title={paused ? (budgetHeld ? 'Open the budget to continue this stage' : 'Continue stage') : 'Pause stage'}
             disabled={action.locked || !statusAvailable || !controlsEnabled}
             onClick={() => paused && onContinue !== undefined ? onContinue() : void action.send(paused ? continueStage : pauseStage)}
           >

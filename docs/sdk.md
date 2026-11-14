@@ -63,6 +63,12 @@ fmt.Println(status.RunState) // finished, failed or interrupted
 Core keeps running after the result, so `Run.Wait` does not return until
 `Shutdown`. Details and errors are in the SDK README.
 
+## Budgets
+
+`Budgets`, `Budget`, `UpdateBudget` and `ResumeBudget` read and change the
+[spending limits](budgets.md) of a run, in dashboard and core mode; see the
+[README](https://github.com/akopichin/afm/blob/main/sdk/README.md#budgets).
+
 See the [SDK README](https://github.com/akopichin/afm/blob/main/sdk/README.md)
 for module setup, a complete `Connect` example, API details and checks. To
 operate the same dashboard from a private Telegram chat, see the

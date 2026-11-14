@@ -69,6 +69,8 @@ type Server struct {
 	graphActions       GraphActions                 // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
 	agentMesh          AgentMeshActions             // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
 	mesh               MeshActions                  // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
+	budgets            BudgetActions                // лимиты расходов; nil = capability off (/api/budgets* 404)
+	budgetExport       BudgetExportCheck            // проверка «Save to flow.yaml»; nil = save_to_yaml недоступен
 	ownerWaits         OwnerWaitActions             // owner wait recovery; nil, or without ownerTokenDigest = its two routes 404
 	ownerTokenDigest   *[sha256.Size]byte           // SHA-256 of the run owner's bearer token; the token itself is not kept
 	redact             func(string) string          // removes the run's secret values from logged text; nil = environment secrets only
@@ -192,6 +194,10 @@ type Config struct {
 	AgentMesh AgentMeshActions
 	// Mesh — Agent Mesh Phase 7 (T7.1) UI-facing adapter; nil = capability off (/api/mesh/* 404).
 	Mesh MeshActions
+	// Budgets — spending limits of the run; nil = capability off (/api/budgets* 404).
+	Budgets BudgetActions
+	// BudgetExport describes whether a limit can be saved to the flow file; nil leaves the yaml block out.
+	BudgetExport BudgetExportCheck
 	// OwnerWaits and OwnerToken enable the owner's wait recovery routes under /api/mesh/stages/{id}; both are
 	// required, and without the token the routes 404 rather than open to same-origin trust.
 	OwnerWaits OwnerWaitActions
@@ -266,6 +272,8 @@ func New(cfg Config) *Server {
 		graphActions:       cfg.GraphActions,
 		agentMesh:          cfg.AgentMesh,
 		mesh:               cfg.Mesh,
+		budgets:            cfg.Budgets,
+		budgetExport:       cfg.BudgetExport,
 		ownerWaits:         cfg.OwnerWaits,
 		redact:             cfg.RedactSecrets,
 		commandNames:       cfg.CommandNames,
@@ -328,6 +336,11 @@ func New(cfg Config) *Server {
 	// /api/mesh/* (Agent Mesh Phase 7, T7.1) — UI-facing surface, same conditional-registration convention.
 	if s.mesh != nil {
 		mux.HandleFunc("/api/mesh/", s.routeMesh)
+	}
+	// /api/budgets* — same conditional-registration convention as above.
+	if s.budgets != nil {
+		mux.HandleFunc("/api/budgets", s.routeBudgets)
+		mux.HandleFunc("/api/budgets/", s.routeBudgets)
 	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.ui != nil {

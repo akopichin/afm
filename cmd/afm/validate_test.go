@@ -1,10 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/contracts/flow"
 )
 
 func writeTestFlow(t *testing.T, content string) string {
@@ -242,5 +249,116 @@ func TestValidateFlowFile_StageAssistantLoopWithoutTriggerNamesTheFix(t *testing
 	}
 	if strings.Contains(err.Error(), validateLoopMarker) {
 		t.Errorf("error %q leaks the prompt", err)
+	}
+}
+
+// budgetParityRecipes declares the agent command "bcmd" (model budget-m) and "vcmd" (model verify-m) so that
+// the rate check has a model to look at.
+const budgetParityRecipes = `docker:
+  agents:
+    bcmd:
+      type: claude
+      model: budget-m
+      auth: {from: "env:AFM_TEST_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN"}
+    vcmd:
+      type: claude
+      model: verify-m
+      auth: {from: "env:AFM_TEST_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN"}
+`
+
+const budgetParityRates = `pricing:
+  models:
+    budget-m: {input: 1, output: 2, cache_read: 0.1, cache_write: 1.5}
+    verify-m: {input: 1, output: 2, cache_read: 0.1, cache_write: 1.5}
+`
+
+// openBudgetRun opens (without starting) the run the way afm run does and returns Open's error.
+func openBudgetRun(t *testing.T, flowPath string) error {
+	t.Helper()
+	f, err := flow.ParseFile(flowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	cfg, err := loadProductConfig(filepath.Join(home, config.AfmDir), fmDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := engine.Open(context.Background(), engine.Spec{Flow: f, Config: cfg.Execution()}, engine.Options{
+		Paths:  enginePaths(""),
+		Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if err == nil {
+		_ = run.Close()
+	}
+	return err
+}
+
+// The validate preflight and engine Open must refuse exactly the same flows: a stricter validate would reject
+// flows that run, a looser one would pass flows that fail at start.
+func TestValidateFlowFile_MoneyRatesMatchEngineOpen(t *testing.T) {
+	const money = "  money: 5\n  tokens: 100k\n"
+	cases := []struct {
+		name    string
+		config  string
+		flow    string
+		refused bool
+	}{
+		{"no budget at all", budgetParityRecipes, "name: f\nstages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n", false},
+		{"tokens only, no rates", budgetParityRecipes, "name: f\nbudget:\n  tokens: 100k\nstages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n", false},
+		{"run money, no rates", budgetParityRecipes, "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n", true},
+		{"run money, explicit rates", budgetParityRecipes + budgetParityRates, "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n", false},
+		{"run money, a rate missing", budgetParityRecipes + "pricing:\n  models:\n    budget-m: {input: 1, output: 2, cache_read: 0.1}\n", "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n", true},
+		{"stage money, no rates", budgetParityRecipes, "name: f\nstages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n    budget:\n" + strings.ReplaceAll(money, "  ", "      ") + "", true},
+		{"money only on an uncovered script stage", budgetParityRecipes, "name: f\nstages:\n  - id: a\n    script: echo ok\n    budget:\n" + strings.ReplaceAll(money, "  ", "      ") + "  - id: b\n    agents: [auto]\n    command: bcmd\n", false},
+		{"script stage under a run money budget", budgetParityRecipes, "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    script: echo ok\n", false},
+		{"command without a recipe", "", "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n    command: unknown-cmd\n", false},
+		{"default client command", "", "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n", false},
+		{"configured client command, no rates", budgetParityRecipes + "client:\n  command: bcmd\n", "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n", true},
+		{"configured client command, explicit rates", budgetParityRecipes + budgetParityRates + "client:\n  command: bcmd\n", "name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n", false},
+		{"verify agent step, no rates", budgetParityRecipes + "pricing:\n  models:\n    budget-m: {input: 1, output: 2, cache_read: 0.1, cache_write: 1.5}\n",
+			"name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n    verify:\n      command: vcmd\n", true},
+		{"verify agent step, explicit rates", budgetParityRecipes + budgetParityRates,
+			"name: f\nbudget:\n" + money + "stages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n    verify:\n      command: vcmd\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeValidateConfig(t, tc.config)
+			t.Setenv("AFM_SIDEAGENT", "0")
+			t.Setenv("AFM_TEST_TOKEN", "x")
+			path := writeTestFlow(t, tc.flow)
+
+			_, validateErr := validateFlowFile(path)
+			openErr := openBudgetRun(t, path)
+
+			var engineErr *engine.Error
+			openRefused := errors.As(openErr, &engineErr) && engineErr.Code == engine.CodeBudgetRatesMissing
+			if openErr != nil && !openRefused {
+				t.Fatalf("engine.Open failed for another reason: %v", openErr)
+			}
+			if openRefused != tc.refused {
+				t.Errorf("engine.Open refused = %t, want %t (err %v)", openRefused, tc.refused, openErr)
+			}
+			if validateRefused := validateErr != nil; validateRefused != openRefused {
+				t.Errorf("validate refused = %t but engine.Open refused = %t\nvalidate: %v\nopen: %v", validateRefused, openRefused, validateErr, openErr)
+			}
+			if tc.refused && validateErr != nil && !strings.Contains(validateErr.Error(), "needs explicit rates") {
+				t.Errorf("validate error = %v, want the missing-rates explanation", validateErr)
+			}
+		})
+	}
+}
+
+func TestValidateFlowFile_MissingRatesNameScopeCommandModelAndCategories(t *testing.T) {
+	writeValidateConfig(t, budgetParityRecipes+"pricing:\n  models:\n    budget-m: {input: 1, output: 2}\n")
+	path := writeTestFlow(t, "name: f\nstages:\n  - id: a\n    agents: [auto]\n    command: bcmd\n    budget:\n      money: 3\n")
+	_, err := validateFlowFile(path)
+	if err == nil {
+		t.Fatal("validateFlowFile passed a money budget without explicit rates")
+	}
+	for _, want := range []string{"stage:a", `"bcmd"`, `"budget-m"`, "cache_read", "cache_write"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %s", err, want)
+		}
 	}
 }
