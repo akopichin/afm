@@ -47,6 +47,7 @@ theme:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Try the playground: playground.md
   - Guides:
       - flow.yaml reference: flow-reference.md
       - Configuration: config-reference.md

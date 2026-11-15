@@ -1,16 +1,36 @@
 # afm
 
-**A control plane for AI agent teams.** Put several agents on one job — stage
-agents that own a step of the flow, run agents that join for the whole run — let
-them talk to each other directly, and keep a human in the loop. Describe the flow
-in a YAML file; afm runs the agents sequentially or in parallel, waits for your
-approval where you want it, and writes every message, wait and stage transition
-to an event log, so a run survives a restart. Works with `claude` and any
-claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
+**Your agents. One team. You're in control.**
 
-<p align="center">
-  <img src="assets/afm-team.gif" alt="afm demo — QA, Architect, Frontend and DevOps coordinate a checkout in the stage feed" width="900">
-</p>
+Build a pipeline around the way you work, or start with a ready-made one.
+Choose the stages, agents, checks and approval points — from a single task to
+hours of coordinated work. Steer the run in the dashboard, inspect results,
+compare agent time and estimated spend, and manage budgets. Runs keep their
+recorded progress across restarts.
+
+- [Try the playground](playground.md): simulated agents, real dashboard,
+  parallel work, Cost charts and a budget you can raise. No model account needed.
+- [Run a pipeline](pipelines.md): use the
+  [afm-pipelines catalog](https://github.com/akopichin/afm-pipelines) for development,
+  independent review or an architecture workshop.
+- [Create your own flow](getting-started.md): choose stages, dependencies and checks.
+
+<details>
+<summary>A real long run: 7 stages, 235 agent jobs, over 35 hours elapsed</summary>
+
+<img src="assets/long-flow.png" alt="Completed development pipeline with model breakdown and parallel agent timeline" width="1000">
+
+</details>
+
+Explore [Cost and agent charts](dashboard.md#models-and-agents) and
+[spending budgets](budgets.md) to understand and control the work.
+
+## Watch the playground
+
+![AFM playground: your agents, your rules](assets/afm-playground.gif)
+
+[Try it yourself](playground.md) to explore the full workflow.
+The UI is real; agent output and prices are simulated.
 
 ## Why afm, when Claude Code already exists
 

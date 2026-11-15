@@ -1,14 +1,18 @@
 # afm
 
-**Reliable, resumable workflows for AI agents.** Define stages, dependencies,
-approvals, and checks. afm runs your agents through the flow and records progress
-on disk. If a run is interrupted, start it again: completed stages stay completed,
-interrupted stages are retried, and approvals, team agents, conversations, and
-pending waits are restored from their saved state.
+## Your agents. One team. You're in control.
 
-Start with a single agent or bring a team. Use Claude, Codex, GLM, DeepSeek,
-Cursor, or other compatible agents in the same flow, with a live dashboard to
-review plans, answer questions, and steer the work.
+[Build a pipeline](#build-your-own-flow) around the way you work, or start with
+[a ready-made one](#run-a-pipeline-on-your-project).
+Choose the stages, agents, checks and approval points — from a single task to
+hours of coordinated work. Use AFM to build a feature, review code, plan a
+refactor, or run a workflow of your own.
+
+Mix Claude, Codex and other compatible clients across roles. Review decisions,
+follow conversations, inspect results and control spending in a live dashboard.
+Stop and resume: AFM preserves the run's recorded progress.
+
+<br>
 
 [![CI](https://github.com/akopichin/afm/actions/workflows/ci.yml/badge.svg)](https://github.com/akopichin/afm/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/akopichin/afm?sort=semver)](https://github.com/akopichin/afm/releases)
@@ -17,50 +21,153 @@ review plans, answer questions, and steer the work.
 [![Docs](https://img.shields.io/badge/docs-akopichin.github.io%2Fafm-blue)](https://akopichin.github.io/afm/)
 [![Telegram](https://img.shields.io/badge/Telegram-%40afm__development-26A5E4?logo=telegram&logoColor=white)](https://t.me/afm_development)
 
+[Documentation ↓](#documentation)
+
+## What a long run looks like
+
+A real `dev-pipeline` run: **7 stages, 235 agent jobs and over 35 hours elapsed**,
+from planning through implementation, live acceptance checks, docs, commit and
+merge. The timeline shows parallel work, reviews and specialist interventions.
+This is an example of orchestration at scale, not a typical runtime or cost claim.
+
 <p align="center">
-  <img src="docs/assets/afm-team.gif" alt="afm demo — agents fix checkout with a required helper review, live conversations, recurring Kafka checks, and automatic resume after usage limits" width="900">
+<img src="docs/assets/long-flow.png" alt="A completed dev-pipeline run: seven stages, model token breakdown and a timeline of 235 agent jobs over 35 hours" width="900">
 </p>
+
+[Open the full-size screenshot](docs/assets/long-flow.png).
+
+## Try it without model accounts
+
+With AFM and Python 3 installed, run this from a checkout of this repository:
+
+```bash
+python3 examples/playground/run.py
+```
+
+It opens a separate playground with **simulated agents and real AFM state**.
+Answer the Scope question, watch parallel work, explore the Cost charts, then
+raise the deliberately small budget to let the final report start. No provider
+login is needed. The final agent posts a visual report directly into the feed;
+agent output, tokens, timelines in that image and prices are illustrative.
+
+![Illustrative playground report with parallel agents, costs and a budget checkpoint](examples/playground/report-development.png)
+
+Try `--scenario review` for five parallel reviewers or `--scenario refactor`
+for two architects. See the [playground walkthrough](docs/playground.md) for
+installation, restart, cost exploration and budget controls.
+
+## Run a pipeline on your project
+
+Install AFM ([other platforms and setup](docs/getting-started.md)):
+
+```bash
+brew install --cask akopichin/afm/afm
+```
+
+[**afm-pipelines**](https://github.com/akopichin/afm-pipelines) is the reusable
+workflow catalog for **AFM 3.1.4+**. Packages include the flow, agent roles,
+skills and supporting scripts. AFM fetches and snapshots the package; there is
+no separate catalog installation and it does not rewrite your configuration.
+
+| Pipeline | Use it for | Result |
+|---|---|---|
+| [dev-pipeline](https://github.com/akopichin/afm-pipelines/tree/main/pipelines/dev-pipeline) | Delivering a feature or fixing a bug with coordinated writers, independent reviews and acceptance checks | A checked change, documentation, commit and optional approved local merge |
+| [review](https://github.com/akopichin/afm-pipelines/tree/main/pipelines/review) | Reviewing a branch, uncommitted changes or selected files from five perspectives | A deduplicated, ranked report with evidence and coverage gaps; no automatic fixes |
+| [refactor](https://github.com/akopichin/afm-pipelines/tree/main/pipelines/refactor) | Understanding an architecture and agreeing on a refactoring direction with two architects | An interactive workshop and approved refactoring plans; implementation is a separate step |
+
+From your project, after configuring the required tools and provider access:
+
+```bash
+afm run --pipeline github.com/akopichin/afm-pipelines//pipelines/dev-pipeline@v2.0.1 --worktree my-change
+```
+
+In a pipeline source, `//` separates the Git repository from the package folder:
+`afm-pipelines` is the repository, `pipelines/dev-pipeline` is the folder inside it.
+
+That is the one-command **run**, not a one-command provider setup. Before the
+first run, check the package's effective roles and missing requirements without
+starting agents:
+
+```bash
+afm pipelines inspect github.com/akopichin/afm-pipelines//pipelines/dev-pipeline@v2.0.1
+```
+
+The catalog currently recommends Opus 5.5 for planning/architecture, Sonnet 5.5
+for routine development, GPT-6.1 Sol for independent checks, and GPT-6 Astra for
+escalation in `dev-pipeline`. `review` pairs Sonnet with five Sol reviewers;
+`refactor` pairs Opus and Sol architects. **Use accounts with access to those
+models, or override the complete role recipes** with `--pipeline-options`.
+The identities are recommendations; the roles and workflow checks still matter.
+Inspect reports requested settings, not proof of provider access.
+
+Docker/autoShim, collaboration, browser support and runtime tools depend on the
+package. Follow the [catalog setup guide](https://github.com/akopichin/afm-pipelines/blob/main/docs/installer.md)
+and [model overrides](https://github.com/akopichin/afm-pipelines/blob/main/docs/model-bindings.md).
+The `afm-pipelines` agent skill can help choose and configure a package; use a
+current version that understands catalog v2.
+
+Repeat the same command to resume. Use a new worktree name for a new development
+task. Review uncommitted changes in the current checkout, without `--worktree`.
+The review package was added after `v2.0.1`; use the catalog revision that includes it:
+
+<!-- TODO: replace the review commit with the first catalog release tag that includes this package. -->
+
+```bash
+afm run --pipeline github.com/akopichin/afm-pipelines//pipelines/review@c591e4256c1c04136615f3291429201e5e46e0ce
+```
+
+## See where time and money go
+
+In **Cost**, compare stages, then open **Models & agents**:
+
+- **Breakdown:** time, tokens and estimated cost by model or individual agent.
+- **Agent jobs:** each invocation's stage, start, duration and estimated cost.
+- **Charts:** compare cost, time or tokens; select a bar to inspect its jobs.
+  The **When agents worked** timeline reveals parallel work and long-running jobs.
+- **Budgets:** set limits for the run, stages or agents. Choose warnings only,
+  finish active work, or stop; raise a limit with **Save and continue**.
+
+Dollar figures require `accounting.show_money: true` and known prices. They are
+**list-price estimates**, including for subscription clients. A dollar budget
+requires explicit complete rate cards. See [accounting](docs/accounting.md),
+[budgets](docs/budgets.md) and the [hands-on demo](docs/playground.md).
+
+## Watch the controls in action
+
+A quick preview of the playground: inspect agent costs, raise a budget and
+open the visual report. Try the demo yourself to explore the full workflow.
+
+![AFM playground: your agents, your rules](docs/assets/afm-playground.gif)
+
+[Try the same playground](docs/playground.md)
+
+<details>
+<summary>Earlier demo: conversations, helper review and recovery after usage limits</summary>
+
+<img src="docs/assets/afm-team.gif" alt="Agents coordinate a checkout fix, exchange findings and resume after usage limits" width="900">
+
+</details>
 
 ## Why afm
 
-- **A flow that survives interruptions.** Restart `afm run` after a crash,
-  Ctrl+C, or a stopped container to recover the run's recorded progress.
-  Completed stages are skipped; interrupted stages are retried. Pending approvals
-  and questions are preserved, and the team's agents, tasks, conversations, and
-  waits are restored. Agents can also wait for provider usage limits to reset
-  without spending their ordinary retry budget. See
-  [Resume on restart](docs/stage-lifecycle.md#resume-on-restart).
+- **Checks before completion.** Declare stage dependencies and artifacts, then
+  gate results with [test commands and independent AI review](docs/verify.md).
+  Agents can also exercise the app in a [managed browser](docs/browser.md).
+- **Coordination across agents.** Specialists exchange findings, track work on
+  a shared board and wait for colleagues' replies. See
+  [helpers and collaboration](docs/collaboration.md).
+- **Durable, inspectable progress.** Completed stages, approvals, conversations
+  and pending waits survive restarts. Logs, events and artifacts stay on disk.
+  See [resume on restart](docs/stage-lifecycle.md#resume-on-restart).
+- **Workflows that carry forward.** [Repeat a successful flow](docs/flow-reference.md#repeat-run-successful-flows-again),
+  schedule prompts with [`/loop`](docs/loops.md), or enable
+  [memory](docs/agent-memory.md) to carry project lessons into later runs.
 
-  <p align="center">
-    <img src="docs/assets/afm-restart.gif" alt="afm restarts mid-run and the team's conversations and waits are restored" width="720">
-  </p>
+## Build your own flow
 
-- **An explicit path to a checked result.** Run stages sequentially or in
-  parallel, declare their dependencies, and pass artifacts between them. Add
-  [test commands and independent AI review](docs/verify.md) as completion checks.
-  Stage agents can also exercise the app in a
-  [managed Chrome browser](docs/browser.md) on supported macOS hosts.
-- **Human control throughout the flow.** Review plans line by line before
-  implementation, answer agents' questions, pause work, send revisions, or add
-  a stage as the task evolves. Follow the flow in the [dashboard](docs/dashboard.md),
-  or answer questions and approve plans through [Telegram](docs/telegram-bot.md).
-- **One agent or a coordinating team.** Choose different agents and models for
-  different stages. Add specialists who exchange findings, track assignments on
-  a shared board, and delegate helper tasks. Stages can wait for colleagues'
-  answers before continuing; you can join their conversations. See
-  [Helpers and collaboration](docs/collaboration.md).
-- **Flows you can run again.** [Repeat successful flows](docs/flow-reference.md#repeat-run-successful-flows-again)
-  in fresh runs, use [`/loop`](docs/loops.md) to send recurring prompts to existing
-  agents during a run, and opt into [memory](docs/agent-memory.md) to carry project
-  lessons into future runs.
-- **A history you can inspect.** Logs, events, artifacts, and (with `--debug`)
-  the exact prompts agents received stay on disk. See what happened, who did the
-  work, and which decisions moved the flow forward.
-
-## Quick start
+[Install AFM first](docs/getting-started.md), then run from your project:
 
 ```bash
-brew install --cask akopichin/afm/afm   # or see the install guide for Linux/Docker/source
 afm init                                # scaffold a flow into .afm/flows/ interactively
 afm run                                 # run the flow from .afm/flows (or: afm run path/to/flow.yaml)
 ```

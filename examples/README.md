@@ -8,6 +8,7 @@ them write into these sources (e.g. the `basic` flow implements a JWT backend/fr
 
 | Example | What it shows |
 |---------|---------------|
+| [`playground/`](playground/) | No-model interactive demo: parallel workers, Cost charts, budget hold and resume. Run its launcher directly; it creates a separate directory. |
 | [`basic/`](basic/) | A classic three-stage feature: planning → implementation → review, with `depends_on` and artifacts. |
 | [`interactive/`](interactive/) | An interactive stage that asks the user a question through the file-based dialog protocol. |
 | [`cursor-agent/`](cursor-agent/) | Using a non-Claude agent (`type: cursor`, the local `cursor-agent` CLI baked into the Docker image) via Docker autoShim. |

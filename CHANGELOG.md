@@ -5,6 +5,11 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-15
 
+### Improvement:
+
+- Reorganize the README around reusable pipeline packages, real-run evidence, cost exploration and budget controls. Add a synthetic playground with development, review and refactor scenarios.
+- Add visual playground reports and a captioned video tour covering cost charts, budget controls and run recovery, with scripts to reproduce the recording, a playground walkthrough and a new documentation navigation entry.
+
 ### Fix:
 
 - Publish pipeline snapshots on macOS before locking their root directory, preserving read-only permissions on the completed snapshot.
