@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Publish contracts v0.3.0 with additive conditional-approval request, snapshot and result types. Atomic enforcement and MCP integration require a subsequent engine and AFM implementation.
 - Reorganize the README around reusable pipeline packages, real-run evidence, cost exploration and budget controls. Add a synthetic playground with development, review and refactor scenarios.
 - Add visual playground reports and a captioned video tour covering cost charts, budget controls and run recovery, with scripts to reproduce the recording, a playground walkthrough and a new documentation navigation entry.
 
