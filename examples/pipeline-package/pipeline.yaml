@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/pipeline.schema.json
+schema_version: 2
+name: demo-review
+version: 1.0.0
+description: "Drafts release notes with one agent, then checks them with a package script"
+entrypoint: flow.yaml
+agents: agents.yaml
+resources:
+  - skills
+  - scripts
+roles:
+  writer:
+    command: demo-review-writer
+    description: "Drafts the release notes"
+  reviewer:
+    command: demo-review-reviewer
+    profile: demo-review-reviewer
+    description: "Reviews the draft as a helper"
+requirements:
+  docker_auto_shim: true
+  collaboration: true
+  tools: [bash]

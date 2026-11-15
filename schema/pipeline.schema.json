@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/pipeline.schema.json",
+  "title": "afm pipeline package manifest",
+  "description": "Schema for pipeline.yaml (schema_version 2), the manifest of a package started with afm run --pipeline.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "version", "entrypoint"],
+  "properties": {
+    "schema_version": {
+      "const": 2,
+      "description": "Manifest format version; only 2 is supported. Version 1 is the catalog installer manifest."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$",
+      "description": "Package name; prefixes every command and profile id the package defines (<name>-...)."
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Package version shown in the banner and inspect."
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of the package."
+    },
+    "entrypoint": { "$ref": "#/definitions/packagePath", "description": "Flow file, relative to the package root." },
+    "agents": { "$ref": "#/definitions/packagePath", "description": "Optional agents file with docker.agents and collaboration.profiles." },
+    "resources": {
+      "type": "array",
+      "description": "Extra files and directories copied into the snapshot. pipeline.yaml, entrypoint and agents are always included.",
+      "items": { "$ref": "#/definitions/packagePath" }
+    },
+    "roles": {
+      "type": "object",
+      "description": "Stable role ids bound to the package's commands and profiles.",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_-]*$" },
+      "additionalProperties": { "$ref": "#/definitions/role" }
+    },
+    "requirements": { "$ref": "#/definitions/requirements" }
+  },
+  "definitions": {
+    "packagePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/]",
+      "not": { "pattern": "(^|/)\\.\\.?(/|$)|//|/$|\\\\" },
+      "description": "Clean relative path inside the package: no leading slash, no . or .. segments."
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1, "description": "Command defined in the package docker.agents." },
+        "profile": { "type": "string", "description": "Profile defined in the package collaboration.profiles." },
+        "description": { "type": "string" }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the package expects from the environment; inspect and run report what is missing.",
+      "properties": {
+        "docker_auto_shim": { "type": "boolean", "description": "Needs docker.autoShim to run recipe commands." },
+        "collaboration": { "type": "boolean", "description": "Needs collaboration (helpers, team) enabled." },
+        "browser": { "type": "boolean", "description": "Needs the managed browser." },
+        "tools": {
+          "type": "array",
+          "description": "Commands that must be on PATH.",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Fake `codex`: answers `exec --help` and, for `exec --json`, records a marker, writes the stage
+# summary and emits the JSONL that codex-as-claude translates.
+set -euo pipefail
+
+if [[ "${1:-}" == "exec" && "${2:-}" == "--help" ]]; then
+    echo "  --output-last-message <FILE>"
+    exit 0
+fi
+
+cat >/dev/null 2>&1 || true
+
+argv_file="${FAKE_AGENT_ARGV_FILE:-}"
+if [[ -n "$argv_file" ]]; then
+    printf 'codex %q\n' "$*" >>"$argv_file"
+fi
+
+marker="${FAKE_AGENT_MARKER_FILE:-}"
+if [[ -n "$marker" ]]; then
+    printf 'codex stage=%s\n' "${AFM_STAGE_NAME:-}" >>"$marker"
+fi
+
+release="${FAKE_AGENT_RELEASE_FILE:-}"
+if [[ -n "$release" ]]; then
+    for _ in $(seq 1 "${FAKE_AGENT_RELEASE_TIMEOUT:-60}"); do
+        [[ -e "$release" ]] && break
+        sleep 1
+    done
+fi
+
+if [[ -n "${AFM_STAGE_DIR:-}" ]]; then
+    printf '# Summary\n\nDone by fake codex.\n' >"$AFM_STAGE_DIR/execution_summary.md"
+fi
+
+printf '%s\n' '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"fake codex done"}}'
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'

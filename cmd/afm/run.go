@@ -17,6 +17,7 @@ import (
 	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/contracts/lifecyclehooks"
 	"github.com/akopichin/afm/contracts/worktree"
+	"github.com/akopichin/afm/pkg/pipeline"
 	"github.com/akopichin/afm/pkg/server"
 )
 
@@ -37,6 +38,8 @@ type runOptions struct {
 	// onRunCreated вызывается сразу после создания (или открытия) run dir, до запуска стадий.
 	onRunCreated func(runID string)
 	flowPath     string // файл флоу, в который «Save to flow.yaml» записывает лимит; "" — сохранение недоступно
+	// pipeline — binding рана к снимку пакета; nil без --pipeline.
+	pipeline *pipelineBinder
 	// containerBrowser — дескриптор browser из transport, прочитанный один раз за процесс (только в контейнере).
 	containerBrowser *browser.Descriptor
 }
@@ -51,11 +54,16 @@ func newRunCmd() *cobra.Command {
 	var worktreeClear bool
 	var worktreeClearForce bool
 	var worktreeName string
+	var pf pipelineFlags
 
 	cmd := &cobra.Command{
 		Use:   "run [flow.yaml]",
 		Short: "Run a flow (or resume the latest run)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Before any config, cache or run is touched: a contradictory command line must leave nothing behind.
+			if err := pf.validate(args); err != nil {
+				return err
+			}
 			resolvedExitOnFail, err := resolveExitOnFail(exitOnFail, cmd.Flags().Changed("exit-on-fail"), os.Getenv("AFM_EXIT_ON_FAIL"))
 			if err != nil {
 				return err
@@ -83,13 +91,23 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 
-			flowPath, err := resolveFlowPath(args)
-			if err != nil {
-				return err
-			}
-			f, err := flow.ParseFile(flowPath)
-			if err != nil {
-				return fmt.Errorf("parse flow: %w", err)
+			var f *flow.Flow
+			var flowPath string
+			var plan *pipelinePlan
+			if pf.active() {
+				// The package's flow and agents are assembled in memory; no config file is read for them or written.
+				if plan, err = preparePipelineRun(commandContext(cmd), pf, cfg, worktreeName, worktreeClear, worktreeClearForce); err != nil {
+					return err
+				}
+				f, cfg = plan.setup.loaded.Flow, plan.setup.cfg
+				announcePipeline(plan)
+			} else {
+				if flowPath, err = resolveFlowPath(args); err != nil {
+					return err
+				}
+				if f, err = flow.ParseFile(flowPath); err != nil {
+					return fmt.Errorf("parse flow: %w", err)
+				}
 			}
 
 			if err := config.ValidateVerifySpecs(f, cfg); err != nil {
@@ -140,7 +158,16 @@ func newRunCmd() *cobra.Command {
 					return err
 				}
 				releaseOwnerTokenForDocker(os.Stdout)
-				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir, saved, launch)
+				var launchArgs []string
+				if plan != nil {
+					launchPath, err := writePipelineLaunch(plan)
+					if err != nil {
+						return err
+					}
+					defer os.Remove(launchPath) //nolint:errcheck
+					launchArgs = []string{"--pipeline-launch=" + launchPath}
+				}
+				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir, saved, launch, launchArgs...)
 			}
 
 			// reasoning is never a hard error — warn on non-canonical/cursor values and proceed. Emitted
@@ -153,7 +180,7 @@ func newRunCmd() *cobra.Command {
 			// Один signal-контекст на все циклы repeat и ожидание dashboard между ними.
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
-			_, err = cycleLoop{
+			loop := cycleLoop{
 				flowPath:        flowPath,
 				cfg:             cfg,
 				cliMaxParallel:  maxParallel != 0,
@@ -163,7 +190,15 @@ func newRunCmd() *cobra.Command {
 				requireApproval: requireApproval,
 				exitOnFail:      resolvedExitOnFail,
 				forceNewRun:     mode != worktree.ClearNone,
-			}.run(ctx, f, hooks)
+			}
+			if plan != nil {
+				loop.forceNewRun = loop.forceNewRun || plan.forceNew
+				loop.binder = newPipelineBinder(plan.setup, plan.runName, worktreeName, plan.resume)
+				loop.loadFlow = func() (*flow.Flow, error) {
+					return pipeline.LoadFlow(plan.setup.loaded.Snapshot, plan.setup.loaded.Manifest)
+				}
+			}
+			_, err = loop.run(ctx, f, hooks)
 			return err
 		},
 	}
@@ -175,6 +210,10 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&exitOnFail, "exit-on-fail", false, "stop the run and exit 1 when a stage fails (env: AFM_EXIT_ON_FAIL)")
 	cmd.Flags().BoolVar(&worktreeClear, "worktree-clear", false, "recreate the flow worktree, discarding uncommitted changes but keeping its branch and commits; also starts a fresh run")
 	cmd.Flags().BoolVar(&worktreeClearForce, "worktree-clear-force", false, "recreate the flow worktree AND its branch from HEAD, discarding the branch's commits; also starts a fresh run")
+	cmd.Flags().StringVar(&pf.source, "pipeline", "", "run a pipeline package from a local directory or Git (<repo>[//<subdir>][@<ref>]) instead of a flow file")
+	cmd.Flags().StringVar(&pf.options, "pipeline-options", "", "options file (docker.agents and collaboration.profiles) layered over the pipeline package; requires --pipeline")
+	cmd.Flags().StringVar(&pf.launch, "pipeline-launch", "", "internal: launch record handed to the container")
+	_ = cmd.Flags().MarkHidden("pipeline-launch")
 	cmd.Flags().StringVar(&worktreeName, "worktree", "", "worktree/branch name (default: flow name); implies worktrees are enabled and isolates this run under .afm/runs/<name>-…")
 	return cmd
 }
@@ -228,6 +267,16 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	if ws != nil {
 		files = engine.FileResolver{Resolve: workspaceResolveFile(ws), CurrentSHA: workspaceCurrentFileSHA(ws)}
 	}
+	// The binder cannot fail the engine's callback; its error is acted on right after Open, before anything starts.
+	var runCreatedErr error
+	onRunCreated := func(runID string) {
+		if opts.pipeline != nil {
+			runCreatedErr = opts.pipeline.runCreated(runID, opts.cycle)
+		}
+		if opts.onRunCreated != nil {
+			opts.onRunCreated(runID)
+		}
+	}
 	engineOpts := engine.Options{
 		Paths:    enginePaths(opts.worktreeDir),
 		RunName:  opts.runName,
@@ -239,7 +288,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 			AssistantAvailable: humanControl,
 		},
 		Cycle:        engine.Cycle{Number: opts.cycle, PreviousRunID: opts.previousRunID},
-		OnRunCreated: opts.onRunCreated,
+		OnRunCreated: onRunCreated,
 		Browser:      func() (*browser.Descriptor, func(), error) { return opts.runBrowser(cfg) },
 		Files:        files,
 		Debug:        debugEnabled,
@@ -260,6 +309,12 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	}
 	// Runs last: stores are released after the dashboard, which reads them until it is shut down.
 	defer func() { _ = run.Close() }()
+	if runCreatedErr != nil {
+		if ws != nil {
+			_ = ws.Close()
+		}
+		return cycleResult{}, runCreatedErr
+	}
 
 	read := run.Read()
 	collab := run.CollaborationSetup()
@@ -314,7 +369,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	// Err is nil for a run with a failed stage too; success is the persisted finished state with all done.
 	out := cycleResult{RunID: res.RunID, Resumed: res.Resumed, Completed: res.Completed, Budget: res.Budget}
 	if res.Budget != nil && res.Budget.Held {
-		return out, budgetHeldExit(ctx, run, opts.flowPath)
+		return out, budgetHeldExit(ctx, run, opts.flowPath, opts.pipeline != nil)
 	}
 	if out.Completed || !f.Repeat.Enabled {
 		fmt.Printf("afm: flow %q completed\n", f.Name)
@@ -385,7 +440,7 @@ func budgetExporterFor(flowPath string, f *flow.Flow) *budgetExporter {
 
 // budgetHeldExit reports the scopes that keep a run without a dashboard from finishing. Nobody can raise a limit
 // there, so the process ends with the hold code; a restarted run reads the flow again and continues by itself.
-func budgetHeldExit(ctx context.Context, run *engine.Run, flowPath string) error {
+func budgetHeldExit(ctx context.Context, run *engine.Run, flowPath string, packaged bool) error {
 	views, err := run.Budgets().List(context.WithoutCancel(ctx))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "afm: cannot list the held budgets: %v\n", err)
@@ -395,6 +450,11 @@ func budgetHeldExit(ctx context.Context, run *engine.Run, flowPath string) error
 		if v.Hold != nil {
 			fmt.Printf("  %s: %s · %s\n", budgetLabel(v), budgetFigures(v), budgetState(v))
 		}
+	}
+	if packaged {
+		// The flow lives in an immutable package snapshot: there is no file to edit here.
+		fmt.Println("afm: the limit is part of the pipeline package; run with a dashboard port to raise it and continue")
+		return &ExitError{Code: budgetHeldExitCode, Silent: true}
 	}
 	file := "the flow file"
 	if flowPath != "" {

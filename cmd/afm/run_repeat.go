@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -43,6 +44,11 @@ type cycleLoop struct {
 	requireApproval bool
 	exitOnFail      bool
 	forceNewRun     bool // clear-флаги: первый цикл не продолжает чужой ран
+	// loadFlow перечитывает флоу перед следующим циклом; nil — из flowPath. Пакет читает тот же снимок, поэтому
+	// пути его skills_dir не теряются, а путь экспорта бюджета (flowPath) остаётся пустым.
+	loadFlow func() (*flow.Flow, error)
+	// binder связывает каждый ран пакета с его снимком; nil вне --pipeline.
+	binder *pipelineBinder
 }
 
 // run проходит флоу и, пока включён repeat, повторяет его после каждого успешного рана. Единственный
@@ -59,6 +65,7 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 		forceNewRun:     l.forceNewRun,
 		flowPath:        l.flowPath,
 		runName:         runNameFor(l.worktreeName, f.Name),
+		pipeline:        l.binder,
 	}
 	if config.ReExecedIntoContainer() {
 		var err error
@@ -173,7 +180,7 @@ func (l cycleLoop) reload(prev *flow.Flow, prevHooks []lifecyclehooks.Registered
 	fail := func(cause error) error {
 		return fmt.Errorf("cycle %d not started (%d completed): %w", completed+1, completed, cause)
 	}
-	next, err = flow.ParseFile(l.flowPath)
+	next, err = l.readFlow()
 	if err != nil {
 		return nil, nil, "", fail(fmt.Errorf("parse flow: %w", err))
 	}
@@ -182,7 +189,7 @@ func (l cycleLoop) reload(prev *flow.Flow, prevHooks []lifecyclehooks.Registered
 	}
 	switch {
 	case !next.Repeat.Enabled:
-		return nil, nil, fmt.Sprintf("repeat is disabled in %s", l.flowPath), nil
+		return nil, nil, fmt.Sprintf("repeat is disabled in %s", cmp.Or(l.flowPath, "the pipeline flow")), nil
 	case !repeatContinues(next.Repeat, completed):
 		return nil, nil, fmt.Sprintf("max_cycles %d reached", next.Repeat.MaxCycles), nil
 	}
@@ -196,6 +203,13 @@ func (l cycleLoop) reload(prev *flow.Flow, prevHooks []lifecyclehooks.Registered
 		}
 	}
 	return next, hooks, "", nil
+}
+
+func (l cycleLoop) readFlow() (*flow.Flow, error) {
+	if l.loadFlow != nil {
+		return l.loadFlow()
+	}
+	return flow.ParseFile(l.flowPath)
 }
 
 // checkReloadCompatible отклоняет правки, меняющие worktree или Docker-монтирование: их создаёт

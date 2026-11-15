@@ -50,6 +50,7 @@ nav:
   - Guides:
       - flow.yaml reference: flow-reference.md
       - Configuration: config-reference.md
+      - Pipeline packages: pipelines.md
       - Stage lifecycle: stage-lifecycle.md
       - Autonomous track: autonomous-track.md
       - AI-verify: verify.md

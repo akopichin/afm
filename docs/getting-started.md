@@ -222,18 +222,25 @@ in Claude Code and Codex:
 - `/afm-run` — runs a flow, monitors it, and requests plan approvals right in the chat
 - `/afm-check` — shows the status of the current run
 - `/afm-init` — creates flow.yaml interactively
-- `/afm-pipelines` — finds and installs reusable workflows from the
-  [AFM Pipelines catalog](https://github.com/akopichin/afm-pipelines), with
-  project-specific model profiles, settings and optional skills
+- `/afm-pipelines` — inspects and runs reusable pipeline packages from a local
+  folder or Git (for example the
+  [AFM Pipelines catalog](https://github.com/akopichin/afm-pipelines)), with
+  project-specific model choices
 - `/afm-retry` — retries a failed stage
 - `/afm-review` — view a stage plan with feedback/approval
 - `/afm-live-run` — exercise a change in the real running app via the managed Chrome browser
 - `/afm-mesh-driven-development` — execute a plan inside an afm run by delegating tasks to named team/mesh agents
 
-For example, ask the agent to "install the refactor pipeline in this project".
-The pipeline skill reads the catalog's manifests, offers role/model choices,
-and uses its installation scripts to prepare a concrete change plan, apply it
-with backups, and validate the flow. Packages are versioned independently of
-AFM. Installing this skill does not download pipelines or start paid agent runs.
-The first installer supports Claude/Codex Docker recipes; it reports provider
-login and runtime checks separately from configuration validation.
+For example, ask the agent to "run the refactor pipeline in this project". The
+skill resolves the source, runs `afm pipelines inspect` to show roles, effective
+models and what is missing, offers role/model choices as an options file, and
+runs the package only after you agree. Nothing is installed and
+`.afm/config.yaml` is not edited; you can do the same by hand:
+
+```bash
+afm pipelines inspect ./my-pipeline
+afm run --pipeline ./my-pipeline --pipeline-options ./my-options.yaml
+```
+
+Packages are versioned independently of AFM and can be pinned to a Git tag or
+commit. See [Pipeline packages](pipelines.md).

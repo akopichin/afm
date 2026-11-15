@@ -237,6 +237,17 @@ Full recipes and per-provider notes are in
 and the [`examples/cursor-agent/`](https://github.com/akopichin/afm/tree/main/examples/cursor-agent)
 flow.
 
+## Running a pipeline package in Docker
+
+`afm run --pipeline` adds the package snapshot to the container as a read-only
+mount at the same absolute path, so `AFM_PIPELINE_DIR` and package skills resolve
+inside and outside. The host writes a launch record and re-executes afm in the
+container with `--pipeline-launch=<file>`; the container assembles the run from
+the mounted snapshot and does not fetch the package again. Recipes and secrets use
+the same bare `-e NAME` transport as other autoShim agents, and secret values never
+appear in the command line. The image must contain this version of afm: an older
+image rejects the launch record. See [Pipeline packages](pipelines.md).
+
 ## Project file browser
 
 Inside a running Docker container the dashboard header can show a folder-icon button

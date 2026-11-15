@@ -330,6 +330,15 @@ combined. A relative path is resolved from the run's effective project root,
 not from the config file. See [Agent skills](flow-reference.md#agent-skills) for
 the path rules, library format, and loading behavior.
 
+## Pipeline package layers
+
+`afm run --pipeline` assembles `docker.agents` recipes and
+`collaboration.profiles` in memory on top of the config above: your global and
+project `config.yaml` first, then the package's agents file, then the
+`--pipeline-options` file. A record with the same name is replaced whole by the
+later layer. These are the only keys a package or an options file may set, and
+neither edits `.afm/config.yaml`. See [Pipeline packages](pipelines.md#agent-layers).
+
 ## Working directory
 
 By default `.afm/` is created in the current folder. To move it elsewhere:

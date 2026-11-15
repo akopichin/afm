@@ -11,6 +11,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Run reusable pipeline packages without installing them: `afm run --pipeline <source> [--pipeline-options <file>]` takes a local folder or Git source (`<repo>[//<subdir>][@<ref>]`), pins it to an immutable snapshot and assembles agent recipes and helper profiles in memory, leaving `.afm/config.yaml` unchanged. `afm pipelines inspect` shows roles, effective models and missing requirements without starting an agent. The same command continues an interrupted run on its recorded snapshot, and the options file can be edited between Ctrl+C and the next start. See `docs/pipelines.md`.
 - Spending budgets: declare `budget` (`tokens`, `money`, `stop_policy` of `hard`, `medium` or `info`) on the flow, a stage, a declared helper, a team member or a helper profile. The dashboard warns at 80% and at the limit in the stage feed, shows a `Budget N%` badge, a **Stopped by budget** banner, a header **Budget** tile and **Cost → Budgets**, and a budget window with **Save** and **Save and continue**; a custom limit can also be saved to `flow.yaml`. Money limits need explicit rates; `afm validate` checks them. `afm check` and `afm report` print a Budgets section, `afm run` without a dashboard exits with code 75 when a limit holds the run and stops `repeat`, and the HTTP API serves `/api/budgets`. Uses afm-engine v1.1.0 and contracts v0.2.0. See `docs/budgets.md`.
 
 ## 2026-11-11

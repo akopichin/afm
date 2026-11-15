@@ -1,0 +1,17 @@
+# Package defaults. Names start with the package name; auth reads the secret from the host environment.
+docker:
+  agents:
+    demo-review-writer:
+      model: claude-sonnet-5-5
+      auth: { from: "env:CLAUDE_CODE_OAUTH_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN" }
+    demo-review-reviewer:
+      model: claude-haiku-5-5
+      auth: { from: "env:CLAUDE_CODE_OAUTH_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN" }
+
+collaboration:
+  profiles:
+    demo-review-reviewer:
+      title: Release notes reviewer
+      command: demo-review-reviewer
+      instructions: |
+        Check the draft against the review-checklist skill and report only concrete problems.

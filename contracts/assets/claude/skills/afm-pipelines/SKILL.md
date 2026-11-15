@@ -1,86 +1,99 @@
 ---
 name: afm-pipelines
-description: Find, install, configure, update or remove reusable AFM pipelines. Use when the user wants a ready-made AFM workflow or an architecture/refactoring workshop, including per-pipeline models, profiles and skills.
+description: Inspect, configure and run reusable AFM pipeline packages from a local folder or a Git source. Use when the user wants a ready-made AFM workflow or an architecture/refactoring workshop, including per-pipeline models, profiles and skills.
 ---
 
-# AFM pipeline setup
+# AFM pipeline packages
 
-The catalog is https://github.com/akopichin/afm-pipelines. AFM ships this skill;
-the catalog ships packages and the versioned installer. Do not assume the catalog
-is already cloned, that a suggested pipeline is installed, or that all projects
-use the same models. Installing a pipeline does not authorize running it.
+A pipeline package is a folder with `pipeline.yaml` (manifest `schema_version: 2`), a
+flow, optional agent recipes, skills and scripts. AFM runs it directly from a local
+path or a Git source; nothing is installed and `.afm/config.yaml` is never edited.
+Do not assume the user has a checkout, that a package suits their project, or that
+all roles should use the same models. Running a package needs the user's go-ahead.
 
-## Find and prepare
+## Find the source
 
-Reuse a user-specified catalog checkout. Otherwise clone the catalog into a new
-cache directory outside the target project, using Git without executing remote
-shell snippets. Resolve the selected release/ref to an immutable commit and
-checkout that commit detached. Keep the commit in the installation report. Do
-not reset an existing checkout with local edits. A local development checkout is
-allowed when requested; clearly report that it is not a clean published version.
+Use the source the user names: an absolute or relative folder, or a Git source
+`<repo>[//<subdir>][@<ref>]`, for example
+`github.com/akopichin/afm-pipelines//pipelines/refactor@v1.2.0`. Repositories may be
+`host/path`, `https://`, `ssh://`, `git@host:path` or `file://`. URLs with embedded
+credentials are rejected; rely on the user's git credential helper or ssh key. Do not
+clone the repository by hand. AFM fetches it into its own cache, pins the ref to a
+full commit and shows the commit it used. Prefer a tag or commit over a branch so
+the version is reproducible, and tell the user which one you chose.
 
-Read the checkout's README and `docs/installer.md`. For installer protocol 1,
-Node.js 22+ and Git are required; install its locked dependency with
-`npm ci --ignore-scripts --no-audit --no-fund` in the catalog checkout.
+## Inspect first
 
-Run `node scripts/pipelines.mjs list`, then
-`node scripts/pipelines.mjs inspect --project /absolute/project/root`.
-The target must be a Git project root. Inspect manifests and package READMEs to
-match the user's objective. Present relevant choices; do not install every
-package or invent entries absent from the catalog.
+```sh
+afm pipelines inspect <source> [--pipeline-options /absolute/options.yaml] [--json]
+```
+
+It starts no agents and writes nothing to the project. Read the source and commit,
+content hash, package version, each role's effective client, model, reasoning and
+the layer that defined it (`package`, `options` or `base`), the requirements
+(Docker autoShim, collaboration, browser, tools) and what is missing. Use `--json`
+when you need to process the result. A non-zero exit means the package or options
+are invalid; show the message, which names the offending key.
+
+A package whose manifest has `schema_version: 1` is in the old catalog-installer
+format. `inspect` says so and `afm run --pipeline` refuses it. For those packages
+follow the catalog's own README and `docs/installer.md`, and say that they use the
+older mechanism.
 
 ## Choose settings
 
-For the selected package, offer the required AFM settings, each role's client,
-model and reasoning configuration, and optional project-local skills for Claude
-and/or Codex. Reuse preferences already supplied. Explain package constraints
-and missing dependencies. The initial installer supports Claude/Codex Docker
-recipes, including copies of existing compatible AFM profiles. Arbitrary host
-commands need a separate adapter; do not pretend the Docker recipes work on host.
+For each role offer the package defaults, a different client or model, or an
+existing profile of the user. Reuse choices the user already gave. Put the choices
+in an options file kept outside the project's committed files:
 
-Use the documented options JSON format. Each role can use its recommended
-settings, copy an existing profile, or override client/model/reasoning. Copies
-are isolated by pipeline and role; never edit a shared profile to customize just
-one pipeline. Package recommendations are not mandatory model identities.
-
-Provider login, Docker/client installation and paid model probes are separate
-steps. Offer the missing setup with concrete commands appropriate to the user's
-environment. Do not print credentials or put them in plans. The installer itself
-only checks configuration and files; it does not prove provider access.
-
-## Plan and apply
-
-From the catalog checkout:
-
-```sh
-node scripts/pipelines.mjs plan refactor --project /absolute/project/root --options /absolute/options.json --out /absolute/install-plan.json
-node scripts/pipelines.mjs apply /absolute/install-plan.json
-node scripts/pipelines.mjs verify refactor --project /absolute/project/root
+```yaml
+docker:
+  agents:
+    <package>-writer:        # replaces the package recipe of this name as a whole
+      type: codex
+      model: gpt-5.5
+      reasoning: high
+collaboration:
+  profiles:
+    <package>-reviewer:      # replaces the package profile as a whole: keep `command`
+      title: Reviewer
+      command: claude
 ```
 
-Replace `refactor` with the selected catalog entry. Omit `--options` to use
-package defaults or previously installed choices. Before apply, show the plan
-summary: catalog revision, models, settings, skill destinations and changed files.
-Proceed when that concrete scope is already authorized; ask only for unresolved
-choices or additional changes. The plan file is private local state, not a file
-to commit or share. Do not dump its base64 payload into the conversation.
+Only `docker.agents` and `collaboration.profiles` are accepted; any other key is
+rejected with its path. A record replaces the one with the same name entirely, so
+repeat every field you want to keep; nothing is inherited, including `auth`, `url`
+and `model` when the `type` changes. A `claude`-type recipe needs an `auth` block even
+when you only override the model; `codex` recipes do not. Package recipes may read
+secrets only from `env:` references. Reasoning levels and models are the user's
+choice; package recommendations are not mandatory.
 
-If inputs changed or local files conflict, inspect the differences and create a
-new plan; do not force through conflicts. Apply performs backups and AFM flow
-validation, rolling back a failed validation. After interruption, use the
-documented `recover` command before retrying. Never delete the apply lock blindly.
+Provider login, Docker/client installation and paid model probes are separate steps.
+Offer concrete commands for the user's environment and never print credentials or
+put them in files you create. `inspect` checks configuration, not provider access.
 
-Report what was installed, its Git revision, selected models, checks performed,
-remaining setup and the resulting run command. For worktree runs, explain which
-new project configuration/skill files need to be committed so they are present
-in the worktree. Preserve existing runs and their snapshots.
+## Run and continue
 
-## Update or remove
+```sh
+afm run --pipeline <source> [--pipeline-options /absolute/options.yaml] [--worktree NAME]
+```
 
-Update by selecting a new catalog revision and making another `plan`; existing
-model choices are reused unless explicitly changed. Old generated profile
-versions remain available for earlier runs. Removal uses
-`remove NAME --project ROOT --out PLAN`, then `apply PLAN`. Confirm removal is
-within the user's request and that runs using those profiles are stopped.
-Removal preserves plans, run artifacts, credentials and shared AFM settings;
-edited managed files cause a conflict instead of being deleted.
+`--pipeline` replaces the positional flow file; passing both, or
+`--pipeline-options` alone, is an error. Skill libraries and `file:` prompts inside
+the package resolve inside an immutable snapshot, and scripts see its path in
+`AFM_PIPELINE_DIR`; the project keeps its usual root and worktree rules. In Docker
+the snapshot is mounted read-only and the image must contain this afm version.
+
+To continue an interrupted run, repeat the same command with the same `--worktree`
+and source. AFM resumes on the recorded snapshot without fetching, so the version
+does not change under the run. A different source for an unfinished run stops
+before anything starts, with a hint. Options may change between stop and continue:
+an ordinary stage then runs on the new recipe, with its results kept. Helpers and
+team agents report `executor_changed` as before, and an interactive stage's saved
+session does not carry over to a client of another type. If a run used options and
+the continuation omits them, AFM warns and uses the package values; pass the file
+again to keep your choices.
+
+Report the source and commit, the roles with their models, the checks you ran, any
+missing setup and the exact run command. Existing runs and their snapshots are
+preserved; AFM does not clean its package cache.

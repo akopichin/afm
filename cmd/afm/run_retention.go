@@ -9,6 +9,7 @@ import (
 
 	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
 	"github.com/akopichin/afm/contracts/state"
+	"github.com/akopichin/afm/pkg/pipeline"
 )
 
 // pruneRuns удаляет из base самые старые успешные раны сверх keep. created — ID ранов, созданных этим
@@ -63,6 +64,10 @@ func prune(created []string, keep int) []string {
 	removed, err := pruneRuns(base, created, keep)
 	for _, id := range removed {
 		fmt.Printf("afm: removed old run %s\n", id)
+		// The binding exists only for pipeline runs; deleting a missing one is a no-op.
+		if err := pipeline.DeleteBinding(pipeline.BindingsDir(absRootDir()), id); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: repeat cleanup: %v\n", err)
+		}
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: repeat cleanup: %v\n", err)

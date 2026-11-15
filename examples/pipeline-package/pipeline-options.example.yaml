@@ -1,0 +1,17 @@
+# Your choices for this package, passed with `afm run --pipeline <pkg> --pipeline-options <this file>`.
+# A record replaces the package's record of the same name as a whole; nothing here edits .afm/config.yaml.
+docker:
+  agents:
+    # Run the writer on Codex instead of Claude. No auth block: Codex uses the mounted ~/.codex login.
+    demo-review-writer:
+      type: codex
+      model: gpt-5.5
+      reasoning: high
+
+collaboration:
+  profiles:
+    # Point the reviewer at a command you already have instead of the package's recipe. The record is
+    # replaced entirely, so keep `command` here.
+    demo-review-reviewer:
+      title: Release notes reviewer
+      command: claude

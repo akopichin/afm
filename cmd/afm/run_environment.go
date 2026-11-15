@@ -20,8 +20,8 @@ func opensHostBrowser(cfg config.Config, launch launchMode) bool {
 }
 
 // saved is the run this start would resume (nil for a new run): its frozen skill libraries need mounts too, and its
-// unfinished helper tasks their commands.
-func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string, saved *engine.SavedRun, launch launchMode) error {
+// unfinished helper tasks their commands. extraArgs follow the original arguments, so they win over a repeated flag.
+func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string, saved *engine.SavedRun, launch launchMode, extraArgs ...string) error {
 	absDir, err := filepath.Abs(afmRoot)
 	if err != nil {
 		return fmt.Errorf("resolve project dir: %w", err)
@@ -73,7 +73,7 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		DashboardPort: port,
 		ExtraMounts:   slices.Concat(cfg.Docker.ExtraMounts, skillMounts),
 		// The absolute, final --dir wins over a user's relative flag inside Docker.
-		ExtraArgs:          append(os.Args[1:], "--dir="+absDir),
+		ExtraArgs:          slices.Concat(os.Args[1:], []string{"--dir=" + absDir}, extraArgs),
 		ClientCommand:      cfg.Client.Command,
 		Recipes:            proj.Recipes,
 		SecretsFile:        cfg.Docker.SecretsFile,

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm-engine/engine"
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
 	"github.com/akopichin/afm/contracts/accounting"
 	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/config"
@@ -40,8 +41,7 @@ func validateFlowFile(path string) (string, error) {
 // and project config, with the registry and checks afm run uses. Config is loaded only for a flow that declares
 // helpers. Whether a helper's executor exists on this machine is not checked: PATH differs in the container.
 func validateHelperProfiles(f *flow.Flow) error {
-	declaresAssistants := slices.ContainsFunc(f.Stages, func(s flow.Stage) bool { return len(s.Assistants) > 0 })
-	if len(f.Team) == 0 && !declaresAssistants {
+	if !declaresHelpers(f) {
 		return nil
 	}
 	home, _ := os.UserHomeDir()
@@ -49,6 +49,21 @@ func validateHelperProfiles(f *flow.Flow) error {
 	if err != nil {
 		return err
 	}
+	return checkHelperProfiles(f, cfg, "")
+}
+
+func declaresHelpers(f *flow.Flow) bool {
+	return len(f.Team) > 0 || slices.ContainsFunc(f.Stages, func(s flow.Stage) bool { return len(s.Assistants) > 0 })
+}
+
+// teamOperationPrefix is the engine's request-id namespace of the agent a team member creates; its presence in a
+// run's journal index means the member's agent already exists with its own saved profile snapshot.
+const teamOperationPrefix = "team/"
+
+// checkHelperProfiles is validateHelperProfiles against an already assembled config. The assembled registry is
+// checked whenever collaboration is on, because the engine turns collaboration off for an invalid one after it
+// created the run. runDir is the run being continued, or "" for a new one: members it already created need no profile.
+func checkHelperProfiles(f *flow.Flow, cfg config.Config, runDir string) error {
 	if !cfg.Collaboration.IsEnabled() {
 		engine.WarnAssistantsWithoutCollaboration(f.Stages)
 		engine.WarnTeamWithoutCollaboration(f.Team)
@@ -61,7 +76,23 @@ func validateHelperProfiles(f *flow.Flow) error {
 	if err := engine.CheckStageAssistants(f.Stages, reg); err != nil {
 		return err
 	}
-	return engine.CheckTeamProfiles(f.Team, reg)
+	return engine.CheckTeamProfiles(teamToCreate(f.Team, runDir), reg)
+}
+
+// teamToCreate drops the members whose agent the run in runDir already created. An unreadable run keeps every
+// member, which is the strict check a new run gets.
+func teamToCreate(team flow.Team, runDir string) flow.Team {
+	if runDir == "" {
+		return team
+	}
+	rs, err := implstate.LoadRunState(runDir)
+	if err != nil {
+		return team
+	}
+	return slices.DeleteFunc(slices.Clone(team), func(m flow.TeamMember) bool {
+		_, created := rs.Assistants.OperationIndex[teamOperationPrefix+m.ID]
+		return created
+	})
 }
 
 // validateMoneyBudgetRates refuses what engine Open refuses: a money budget over an agent command whose model has
@@ -75,6 +106,11 @@ func validateMoneyBudgetRates(f *flow.Flow) error {
 	if err != nil {
 		return err
 	}
+	return checkMoneyBudgetRates(f, cfg)
+}
+
+// checkMoneyBudgetRates is validateMoneyBudgetRates against an already assembled config.
+func checkMoneyBudgetRates(f *flow.Flow, cfg config.Config) error {
 	for _, stage := range f.Stages {
 		scope := moneyBudgetScope(f, stage)
 		if scope == "" {

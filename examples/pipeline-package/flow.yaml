@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
+# Package entrypoint: inspect it with `afm pipelines inspect examples/pipeline-package`, run it with
+# `afm run --pipeline examples/pipeline-package`.
+
+name: demo-review
+description: "Release notes drafted by an agent and checked by a package script"
+
+# Relative to the package snapshot, not to your project.
+skills_dir: ./skills
+
+stages:
+  - id: draft
+    name: "Draft release notes"
+    description: |
+      Write RELEASE_NOTES.md in the project root: a short summary and a bullet list of the
+      changes since the last tag, taken from the git history.
+    command: demo-review-writer
+    agents: [planning, implementation]
+    skills: [review-checklist]
+    assistants:
+      - profile: demo-review-reviewer
+
+  - id: check
+    name: "Check release notes"
+    depends_on: [draft]
+    # The script runs from your project; the package files live in $AFM_PIPELINE_DIR.
+    script: |
+      "$AFM_PIPELINE_DIR/scripts/check-notes.sh" RELEASE_NOTES.md
