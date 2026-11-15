@@ -83,6 +83,9 @@ afm run --pipeline github.com/akopichin/afm-pipelines//pipelines/dev-pipeline@v2
 
 In a pipeline source, `//` separates the Git repository from the package folder:
 `afm-pipelines` is the repository, `pipelines/dev-pipeline` is the folder inside it.
+The format is `<repo>//<subdir>@<ref>`. Keep both slashes before `pipelines`:
+using a single slash makes AFM fetch the package folder as a repository and fails
+with `repository not found`.
 
 That is the one-command **run**, not a one-command provider setup. Before the
 first run, check the package's effective roles and missing requirements without
