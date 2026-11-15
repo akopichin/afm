@@ -52,6 +52,15 @@ func TestBuildSnapshotCopiesOnlyDeclaredResources(t *testing.T) {
 			t.Errorf("%s must not be copied", absent)
 		}
 	}
+	for _, dir := range []string{".", "skills", "skills/a", "scripts"} {
+		info, err := os.Stat(filepath.Join(snap.Dir, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o555 {
+			t.Errorf("directory %s mode = %v", dir, info.Mode().Perm())
+		}
+	}
 	if info, _ := os.Stat(filepath.Join(snap.Dir, "scripts/run.sh")); info.Mode().Perm() != 0o555 {
 		t.Errorf("exec script mode = %v", info.Mode().Perm())
 	}

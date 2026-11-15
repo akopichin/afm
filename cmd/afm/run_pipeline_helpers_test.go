@@ -29,8 +29,10 @@ func (pf *pipelineFixture) writeOptions(content string) string {
 // what the engine accepts, so preflight must not call the profile unknown.
 func TestPipelineResumeAcceptsSavedTeamMemberWithoutOptionsProfile(t *testing.T) {
 	pf := newPipelineFixture(t)
+	binDir := writeFakeCodexHelper(t, "pass", "Saved team member.")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	dir := pf.writePackage("tpkg", "pkgflow", map[string]string{"flow.yaml": pf.teamFlow("opt-p")})
-	options := pf.writeOptions("collaboration:\n  profiles:\n    opt-p: {title: Optional}\n")
+	options := pf.writeOptions("collaboration:\n  profiles:\n    opt-p: {title: Optional, command: codex-as-claude}\n")
 	if code, _, stderr := pf.runAfm("--pipeline", dir, "--pipeline-options", options); code != 0 {
 		t.Fatalf("first start: code=%d %s", code, stderr)
 	}

@@ -87,14 +87,14 @@ func BuildSnapshot(srcRoot string, m Manifest, cacheRoot string) (Snapshot, erro
 		return Snapshot{}, fmt.Errorf("publish snapshot: %w", err)
 	}
 	published = true
-	return snap, nil
+	return snap, os.Chmod(final, 0o555)
 }
 
 func reuseExisting(snap Snapshot) error {
 	if _, err := VerifySnapshot(snap.Dir); err != nil {
 		return fmt.Errorf("existing snapshot is damaged (remove %s to rebuild it): %w", snap.Dir, err)
 	}
-	return nil
+	return os.Chmod(snap.Dir, 0o555)
 }
 
 // VerifySnapshot recomputes the content hash of dir and checks that it is the directory's own name.
@@ -315,6 +315,10 @@ func makeReadOnly(dir string) error {
 		return fmt.Errorf("make snapshot read-only: %w", err)
 	}
 	for _, rel := range slices.Backward(dirs) {
+		// macOS requires the staging root to remain writable until it is renamed into place.
+		if rel == "." {
+			continue
+		}
 		if err := root.Chmod(rel, 0o555); err != nil {
 			return fmt.Errorf("make snapshot read-only: %w", err)
 		}

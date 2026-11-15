@@ -3,6 +3,13 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-15
+
+### Fix:
+
+- Publish pipeline snapshots on macOS before locking their root directory, preserving read-only permissions on the completed snapshot.
+- Use an admissible read-only adapter in the pipeline team resume regression test so it also exercises saved profiles on Linux hosts.
+
 ## 2026-11-14
 
 ### Fix:
