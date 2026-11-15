@@ -3,6 +3,8 @@ package server
 import (
 	"net/http"
 	"time"
+
+	"github.com/akopichin/afm/pkg/usageview"
 )
 
 // Wire contract of GET /api/usage/analytics; the dashboard parses testdata/usage-analytics, keep them in sync.
@@ -10,44 +12,28 @@ import (
 // ForMode drops, so a mode that hides them has no such key at any depth.
 
 // UsageAnalyticsMode is the display mode the server computed from accounting.enabled and show_money.
-type UsageAnalyticsMode string
+type UsageAnalyticsMode = usageview.Mode
 
 const (
-	UsageModeFull     UsageAnalyticsMode = "full"
-	UsageModeNoMoney  UsageAnalyticsMode = "no_money"
-	UsageModeTimeOnly UsageAnalyticsMode = "time_only"
+	UsageModeFull     = usageview.ModeFull
+	UsageModeNoMoney  = usageview.ModeNoMoney
+	UsageModeTimeOnly = usageview.ModeTimeOnly
 )
-
-func (m UsageAnalyticsMode) HasMoney() bool  { return m == UsageModeFull }
-func (m UsageAnalyticsMode) HasTokens() bool { return m != UsageModeTimeOnly }
 
 // UsageMetric is a quantity the client can compare and sort by.
-type UsageMetric string
+type UsageMetric = usageview.Metric
 
 const (
-	UsageMetricCost      UsageMetric = "cost"
-	UsageMetricAgentTime UsageMetric = "agent_time"
-	UsageMetricTokens    UsageMetric = "tokens"
+	UsageMetricCost      = usageview.MetricCost
+	UsageMetricAgentTime = usageview.MetricAgentTime
+	UsageMetricTokens    = usageview.MetricTokens
 )
-
-// Metrics lists the metrics available in the mode, in the order the client shows them.
-func (m UsageAnalyticsMode) Metrics() []UsageMetric {
-	metrics := make([]UsageMetric, 0, 3)
-	if m.HasMoney() {
-		metrics = append(metrics, UsageMetricCost)
-	}
-	metrics = append(metrics, UsageMetricAgentTime)
-	if m.HasTokens() {
-		metrics = append(metrics, UsageMetricTokens)
-	}
-	return metrics
-}
 
 type (
 	UsageView  string
 	UsageGroup string
 	UsageScope string
-	UsageSort  string
+	UsageSort  = usageview.Sort
 	UsageDir   string
 )
 
@@ -64,30 +50,75 @@ const (
 	UsageScopeRunWide      UsageScope = "run_wide"
 	UsageScopeUnattributed UsageScope = "unattributed"
 
-	UsageSortCost    UsageSort = "cost"
-	UsageSortTokens  UsageSort = "tokens"
-	UsageSortTime    UsageSort = "time" // agent time in breakdown rows, duration in jobs
-	UsageSortJobs    UsageSort = "jobs"
-	UsageSortName    UsageSort = "name"
-	UsageSortModel   UsageSort = "model"
-	UsageSortStarted UsageSort = "started"
+	UsageSortCost    = usageview.SortCost
+	UsageSortTokens  = usageview.SortTokens
+	UsageSortTime    = usageview.SortTime
+	UsageSortJobs    = usageview.SortJobs
+	UsageSortName    = usageview.SortName
+	UsageSortModel   = usageview.SortModel
+	UsageSortStarted = usageview.SortStarted
 
 	UsageDirAsc  UsageDir = "asc"
 	UsageDirDesc UsageDir = "desc"
 )
 
-// AllowsSort reports whether the mode has the data the sort key orders by; the endpoint answers
-// 400 for a sort the mode cannot serve.
-func (m UsageAnalyticsMode) AllowsSort(sort UsageSort) bool {
-	switch sort {
-	case UsageSortCost:
-		return m.HasMoney()
-	case UsageSortTokens:
-		return m.HasTokens()
-	default:
-		return true
-	}
-}
+type (
+	UsageHealth       = usageview.Health
+	UsageCompleteness = usageview.Completeness
+	UsageCoverage     = usageview.Coverage
+	UsageMetrics      = usageview.Metrics
+	UsageSpend        = usageview.Spend
+	UsageTime         = usageview.Time
+	UsageTokens       = usageview.Tokens
+	UsageTokenCounts  = usageview.TokenCounts
+	UsageMoney        = usageview.Money
+	UsageAgent        = usageview.Agent
+	UsageModelRef     = usageview.ModelRef
+	UsageStageRef     = usageview.StageRef
+	UsageScopes       = usageview.Scopes
+	UsageCatalog      = usageview.Catalog
+	UsageRow          = usageview.Row
+	UsageJob          = usageview.Job
+	UsageTimeline     = usageview.Timeline
+	UsageInterval     = usageview.Interval
+)
+
+const (
+	UsageStoreOK          = usageview.StoreOK
+	UsageStoreUnavailable = usageview.StoreUnavailable
+	UsageStoreAbsent      = usageview.StoreAbsent
+	UsageStoreDisabled    = usageview.StoreDisabled
+
+	UsageCoverageFull    = usageview.CoverageFull
+	UsageCoveragePartial = usageview.CoveragePartial
+	UsageCoverageUnknown = usageview.CoverageUnknown
+
+	UsageAgentStage       = usageview.AgentStage
+	UsageAgentHelper      = usageview.AgentHelper
+	UsageAgentRunAgent    = usageview.AgentRunAgent
+	UsageAgentVerify      = usageview.AgentVerify
+	UsageAgentAssistant   = usageview.AgentAssistant
+	UsageAgentRunOverhead = usageview.AgentRunOverhead
+	UsageAgentUnknown     = usageview.AgentUnknown
+
+	UsageSourceObserved = usageview.SourceObserved
+	UsageSourceHint     = usageview.SourceHint
+	UsageSourceLegacy   = usageview.SourceLegacy
+	UsageSourceMixed    = usageview.SourceMixed
+
+	UsageModelSingle  = usageview.ModelSingle
+	UsageModelMixed   = usageview.ModelMixed
+	UsageModelUnknown = usageview.ModelUnknown
+
+	UsageJobRunning     = usageview.JobRunning
+	UsageJobOK          = usageview.JobOK
+	UsageJobError       = usageview.JobError
+	UsageJobInterrupted = usageview.JobInterrupted
+	UsageJobIdleTimeout = usageview.JobIdleTimeout
+	UsageJobUsageLimit  = usageview.JobUsageLimit
+	UsageJobCancelled   = usageview.JobCancelled
+	UsageJobYielded     = usageview.JobYielded
+)
 
 // UsageAnalyticsStatus is the analytics part of /api/status: enough to open the details, to notice changes
 // (the revision is opaque, compared for equality) and to label the overview without a request. Models and
@@ -125,42 +156,6 @@ type UsageAnalytics struct {
 	Charts    *UsageCharts    `json:"charts,omitempty"`
 }
 
-const (
-	UsageStoreOK          = "ok"
-	UsageStoreUnavailable = "unavailable"
-	UsageStoreAbsent      = "absent"   // legacy run: no agent-jobs.jsonl
-	UsageStoreDisabled    = "disabled" // accounting is off, usage.jsonl is not read
-)
-
-// UsageHealth reports the two stores behind the response: usage.jsonl and agent-jobs.jsonl.
-type UsageHealth struct {
-	Usage string `json:"usage"`
-	Jobs  string `json:"jobs"`
-	// StartFailedJobs counts attempts that never started a process; they are not jobs and carry no time.
-	StartFailedJobs int `json:"start_failed_jobs,omitempty"`
-}
-
-const (
-	UsageCoverageFull    = "full"
-	UsageCoveragePartial = "partial"
-	UsageCoverageUnknown = "unknown"
-)
-
-// UsageCompleteness has no Tokens in time_only and no Price outside full.
-type UsageCompleteness struct {
-	Time   UsageCoverage  `json:"time"`
-	Tokens *UsageCoverage `json:"tokens,omitempty"`
-	Price  *UsageCoverage `json:"price,omitempty"`
-}
-
-// UsageCoverage counts jobs with a known and an unknown value. Reasons are machine-readable.
-type UsageCoverage struct {
-	Status  string   `json:"status"`
-	Known   int      `json:"known"`
-	Unknown int      `json:"unknown"`
-	Reasons []string `json:"reasons,omitempty"`
-}
-
 // UsageQuery echoes the applied parameters after defaults and normalization. Limit is set for jobs only.
 type UsageQuery struct {
 	View    UsageView  `json:"view"`
@@ -174,159 +169,9 @@ type UsageQuery struct {
 	Limit   int        `json:"limit,omitempty"`
 }
 
-// UsageMetrics are the numbers of one group of jobs: a row, a filtered set or the run.
-type UsageMetrics struct {
-	Jobs       int       `json:"jobs"`
-	ActiveJobs int       `json:"active_jobs"`
-	AgentTime  UsageTime `json:"agent_time"`
-	UsageSpend
-}
-
-// UsageSpend holds the data that exists only in some modes. It is embedded, so Tokens and Money
-// appear next to their siblings.
-type UsageSpend struct {
-	Tokens *UsageTokens `json:"tokens,omitempty"`
-	Money  *UsageMoney  `json:"money,omitempty"`
-}
-
-// UsageTime sums the measured durations. DurationMS is null when no job has a measured duration;
-// running jobs count with their elapsed time at as_of.
-type UsageTime struct {
-	DurationMS   *int64 `json:"duration_ms"`
-	MeasuredJobs int    `json:"measured_jobs"`
-	UnknownJobs  int    `json:"unknown_jobs"`
-}
-
-// UsageTokens sums the tokens of metered jobs. Counts is null when none is metered. For legacy usage
-// the job counters count usage records, because such records have no job.
-type UsageTokens struct {
-	Counts        *UsageTokenCounts `json:"counts"`
-	MeteredJobs   int               `json:"metered_jobs"`
-	UnmeteredJobs int               `json:"unmetered_jobs"`
-	PendingJobs   int               `json:"pending_jobs"` // running, usage not reported yet
-}
-
-// UsageTokenCounts uses the accounting convention: Total = uncached input + cache read + cache
-// writes + output; ReasoningOutput is a part of Output.
-type UsageTokenCounts struct {
-	UncachedInput   uint64 `json:"uncached_input"`
-	CacheRead       uint64 `json:"cache_read"`
-	CacheWrite5m    uint64 `json:"cache_write_5m"`
-	CacheWrite1h    uint64 `json:"cache_write_1h"`
-	CacheWriteOther uint64 `json:"cache_write_other"`
-	Output          uint64 `json:"output"`
-	ReasoningOutput uint64 `json:"reasoning_output"`
-	Total           uint64 `json:"total"`
-}
-
-// UsageMoney sums the price of priced jobs. EstimatedCostUSD is null when none is priced.
-type UsageMoney struct {
-	EstimatedCostUSD *float64 `json:"estimated_cost_usd"`
-	PricedJobs       int      `json:"priced_jobs"`
-	UnpricedJobs     int      `json:"unpriced_jobs"`
-}
-
-const (
-	UsageAgentStage       = "stage"
-	UsageAgentHelper      = "helper"
-	UsageAgentRunAgent    = "run_agent"
-	UsageAgentVerify      = "verify"
-	UsageAgentAssistant   = "assistant"
-	UsageAgentRunOverhead = "run_overhead"
-	UsageAgentUnknown     = "unknown"
-)
-
-// UsageAgent is a participant of the run. ID is the stable key; Title is a label only.
-type UsageAgent struct {
-	ID              string `json:"id"`
-	Kind            string `json:"kind"`
-	Title           string `json:"title"`
-	OutsideRunTotal bool   `json:"outside_run_total,omitempty"`
-}
-
-// UsageModelRef identifies a model by channel and model ID. ColorOrdinal is the order in which the
-// model first appeared in the run; the client maps it to a color.
-type UsageModelRef struct {
-	Key          string `json:"key"`
-	Channel      string `json:"channel"`
-	Model        string `json:"model"`
-	ColorOrdinal *int   `json:"color_ordinal"`
-}
-
-type UsageStageRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-}
-
-// UsageScopes tells which scope filters would find anything.
-type UsageScopes struct {
-	RunWide      bool `json:"run_wide"`
-	Unattributed bool `json:"unattributed"`
-}
-
-type UsageCatalog struct {
-	Stages []UsageStageRef `json:"stages"`
-	Agents []UsageAgent    `json:"agents"`
-	Models []UsageModelRef `json:"models"`
-	Scopes UsageScopes     `json:"scopes"`
-}
-
-const (
-	UsageSourceObserved = "observed" // reported by the agent stream
-	UsageSourceHint     = "hint"     // taken from the configuration
-	UsageSourceLegacy   = "legacy"   // recorded before the source was kept
-	UsageSourceMixed    = "mixed"    // rows only: jobs differ
-
-	UsageModelSingle  = "single"
-	UsageModelMixed   = "mixed"
-	UsageModelUnknown = "unknown"
-)
-
-// UsageRow is a breakdown or comparison row: one model or one agent with all its jobs.
-type UsageRow struct {
-	Key   string `json:"key"`
-	Label string `json:"label"`
-	// Agent is set in agent rows. Model is set in model rows and in agent rows with a single model;
-	// it is null for the Unknown model bucket and for agents with mixed or unknown models.
-	Agent       *UsageAgent    `json:"agent,omitempty"`
-	Model       *UsageModelRef `json:"model"`
-	ModelState  string         `json:"model_state,omitempty"` // agent rows only
-	ModelSource string         `json:"model_source,omitempty"`
-	// Agents is set in model rows: how many distinct agents ran this model within the query scope.
-	Agents int `json:"agents,omitempty"`
-	UsageMetrics
-}
-
 type UsageBreakdown struct {
 	Group UsageGroup `json:"group"`
 	Rows  []UsageRow `json:"rows"`
-}
-
-const (
-	UsageJobRunning     = "running"
-	UsageJobOK          = "ok"
-	UsageJobError       = "error"
-	UsageJobInterrupted = "interrupted"
-	UsageJobIdleTimeout = "idle_timeout"
-	UsageJobUsageLimit  = "usage_limit"
-	UsageJobCancelled   = "cancelled"
-	UsageJobYielded     = "yielded"
-)
-
-// UsageJob is one agent job. DurationMS is null when the end is unknown and, for a running job, the
-// elapsed time at as_of. RunOffsetMS is null when the job has no place on the run timeline.
-type UsageJob struct {
-	ID          string         `json:"id"`
-	Title       string         `json:"title"`
-	Agent       UsageAgent     `json:"agent"`
-	StageID     string         `json:"stage_id,omitempty"` // empty for run-wide jobs
-	Model       *UsageModelRef `json:"model"`
-	ModelSource string         `json:"model_source,omitempty"`
-	Status      string         `json:"status"`
-	StartedAt   time.Time      `json:"started_at"`
-	RunOffsetMS *int64         `json:"run_offset_ms"`
-	DurationMS  *int64         `json:"duration_ms"`
-	UsageSpend
 }
 
 const (
@@ -361,30 +206,6 @@ type UsageCharts struct {
 	Timeline   UsageTimeline `json:"timeline"`
 }
 
-// UsageTimeline lists placed jobs only. Total counts them before the Limit cut; Truncated says the
-// cut happened; Unplaced counts jobs that have no place on the run timeline.
-type UsageTimeline struct {
-	RangeStartMS int64           `json:"range_start_ms"`
-	RangeEndMS   int64           `json:"range_end_ms"`
-	Intervals    []UsageInterval `json:"intervals"`
-	Total        int             `json:"total"`
-	Limit        int             `json:"limit"`
-	Truncated    bool            `json:"truncated,omitempty"`
-	Unplaced     int             `json:"unplaced"`
-}
-
-// UsageInterval is one job on the run timeline; the agent and model are resolved through the catalog.
-type UsageInterval struct {
-	JobID       string `json:"job_id"`
-	Title       string `json:"title"`
-	AgentID     string `json:"agent_id"`
-	ModelKey    string `json:"model_key,omitempty"`
-	StageID     string `json:"stage_id,omitempty"`
-	Status      string `json:"status"`
-	RunOffsetMS int64  `json:"run_offset_ms"`
-	DurationMS  int64  `json:"duration_ms"`
-}
-
 // UsageErrorCode is the machine-readable part of an error answer.
 type UsageErrorCode string
 
@@ -411,61 +232,27 @@ type UsageAnalyticsError struct {
 func (r UsageAnalytics) ForMode(mode UsageAnalyticsMode) UsageAnalytics {
 	r.Mode = mode
 	r.Metrics = mode.Metrics()
-	if !mode.HasTokens() {
-		// time_only means accounting is off: usage.jsonl is not read at all.
-		r.Health.Usage = UsageStoreDisabled
-		r.Completeness.Tokens = nil
-	}
-	if !mode.HasMoney() {
-		r.Completeness.Price = nil
-	}
-	r.Totals = r.Totals.forMode(mode)
+	r.Health = r.Health.ForMode(mode)
+	r.Completeness = r.Completeness.ForMode(mode)
+	r.Totals = r.Totals.ForMode(mode)
 	if r.OutsideRunTotal != nil {
-		outside := r.OutsideRunTotal.forMode(mode)
+		outside := r.OutsideRunTotal.ForMode(mode)
 		r.OutsideRunTotal = &outside
 	}
 	if r.Breakdown != nil {
 		breakdown := *r.Breakdown
-		breakdown.Rows = rowsForMode(breakdown.Rows, mode)
+		breakdown.Rows = usageview.RowsForMode(breakdown.Rows, mode)
 		r.Breakdown = &breakdown
 	}
 	if r.Jobs != nil {
 		page := *r.Jobs
-		page.Items = make([]UsageJob, len(r.Jobs.Items))
-		for i, job := range r.Jobs.Items {
-			job.UsageSpend = job.forMode(mode)
-			page.Items[i] = job
-		}
+		page.Items = usageview.JobsForMode(page.Items, mode)
 		r.Jobs = &page
 	}
 	if r.Charts != nil {
 		charts := *r.Charts
-		charts.Comparison = rowsForMode(charts.Comparison, mode)
+		charts.Comparison = usageview.RowsForMode(charts.Comparison, mode)
 		r.Charts = &charts
 	}
 	return r
-}
-
-func (s UsageSpend) forMode(mode UsageAnalyticsMode) UsageSpend {
-	if !mode.HasTokens() {
-		s.Tokens = nil
-	}
-	if !mode.HasMoney() {
-		s.Money = nil
-	}
-	return s
-}
-
-func (m UsageMetrics) forMode(mode UsageAnalyticsMode) UsageMetrics {
-	m.UsageSpend = m.UsageSpend.forMode(mode)
-	return m
-}
-
-func rowsForMode(rows []UsageRow, mode UsageAnalyticsMode) []UsageRow {
-	out := make([]UsageRow, len(rows))
-	for i, row := range rows {
-		row.UsageMetrics = row.forMode(mode)
-		out[i] = row
-	}
-	return out
 }

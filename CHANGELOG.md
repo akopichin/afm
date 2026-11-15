@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Extend `afm report`: `--format json` (`schema_version: 1`) next to the markdown default, `--stage <id>` to limit it to one stage, the complete list of agent jobs, and figures equal to the dashboard Cost tab. With accounting display off it now prints the time-only report instead of nothing. Exit code 3 also covers an unusable agent-jobs journal. See `docs/accounting.md`.
 - Reorganize the README around reusable pipeline packages, real-run evidence, cost exploration and budget controls. Add a synthetic playground with development, review and refactor scenarios.
 - Add visual playground reports and a captioned video tour covering cost charts, budget controls and run recovery, with scripts to reproduce the recording, a playground walkthrough and a new documentation navigation entry.
 

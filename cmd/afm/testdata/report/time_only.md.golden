@@ -1,0 +1,44 @@
+# Cost report: flow-20261101-100000
+
+Flow: — · Status: finished · Scope: whole run · As of: 2030-01-02T03:04:05Z
+
+## Summary
+
+- Run elapsed: 2m1s
+- Stage work: 2m0s · waiting: 0s · paused: 0s
+- Agent jobs: 3 · agent time: 1m30s
+- Completeness: time full
+
+## Stages
+
+| Stage | Status (duration) |
+|---|---|
+| build | done (1m0s) |
+| test | done (1m0s) |
+
+## Models
+
+| Model | Jobs | Agent time |
+|---|---|---|
+| claude-sonnet-4-5 | 2 | 1m0s |
+| internal-model | 1 | 30s |
+
+## Agents
+
+| Agent | Role | Jobs | Agent time |
+|---|---|---|---|
+| build | Stage agent | 2 | 1m0s |
+| test | Stage agent | 1 | 30s |
+
+## Agent jobs
+
+| Job | Agent | Stage | Model | Status | Started | Duration |
+|---|---|---|---|---|---|---|
+| build · job 1 | build | build | claude-sonnet-4-5 | ok | 2026-11-01T10:00:10Z | 30s |
+| build · job 2 | build | build | internal-model | ok | 2026-11-01T10:00:50Z | 30s |
+| test · job 1 | test | test | claude-sonnet-4-5 | ok | 2026-11-01T10:01:30Z | 30s |
+
+## Diagnostics
+
+None.
+

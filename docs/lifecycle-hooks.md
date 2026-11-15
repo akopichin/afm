@@ -239,6 +239,25 @@ echo "$payload" | jq '.data.analytics.timing.total_ms'
 echo "$payload" | jq '.data.analytics.usage.tokens.total'
 ```
 
+### Reading the full report from a hook
+
+A hook can call `afm report "$AFM_RUN_DIR" --format json` to get the whole run
+report (see [`afm report`](accounting.md#afm-report)). It is a snapshot at the
+time of the command and can differ from the event's own snapshot.
+
+The hook gets the minimal environment, so variables of the shell that started
+afm are not visible. Give the binary path, `--dir` (or `AFM_ACCOUNTING*` through
+`inherit_env`) and the output path explicitly in the command:
+
+```yaml
+hooks:
+  - id: final-report
+    events: [flow_finished]
+    command: "/usr/local/bin/afm --dir /work/project report \"$AFM_RUN_DIR\" --format json > /work/out/report.json"
+```
+
+In [Docker mode](#docker-mode) the image must contain this version of afm.
+
 ## Secrets and the hook environment
 
 A hook often needs a token or webhook URL. Declare it in the hook's `env` map —

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/pkg/usageview"
 )
 
 // UsageAnalyticsSource is the read model behind GET /api/usage/analytics; *accounting.Analytics satisfies it.
@@ -19,28 +20,13 @@ type UsageAnalyticsSource interface {
 	Facts() *accounting.Facts
 }
 
-// UsageModeFor maps the accounting display switches to the analytics mode. Hiding accounting leaves the
-// agent time, which is measured regardless of accounting.
+// UsageModeFor maps the accounting display switches to the analytics mode.
 func UsageModeFor(accountingEnabled, showMoney bool) UsageAnalyticsMode {
-	switch {
-	case !accountingEnabled:
-		return UsageModeTimeOnly
-	case showMoney:
-		return UsageModeFull
-	default:
-		return UsageModeNoMoney
-	}
+	return usageview.ModeFor(accountingEnabled, showMoney)
 }
 
 // usageModeOrClosed keeps an unset or unknown mode from exposing more than the least permissive one.
-func usageModeOrClosed(mode UsageAnalyticsMode) UsageAnalyticsMode {
-	switch mode {
-	case UsageModeFull, UsageModeNoMoney, UsageModeTimeOnly:
-		return mode
-	default:
-		return UsageModeTimeOnly
-	}
-}
+func usageModeOrClosed(mode UsageAnalyticsMode) UsageAnalyticsMode { return mode.OrClosed() }
 
 const (
 	usageDefaultLimit = 10
@@ -137,26 +123,26 @@ func (s *Server) usageResponse(values url.Values) (UsageAnalytics, error) {
 		View:         p.view,
 		AsOf:         asOf,
 		Revision:     revision,
-		Health:       usageHealth(facts.Health()),
-		Completeness: usageCompleteness(sel.Completeness()),
+		Health:       usageview.NewHealth(facts.Health()),
+		Completeness: usageview.NewCompleteness(sel.Completeness()),
 		Query:        p.echo(),
-		Totals:       usageMetrics(sel.Totals()),
-		Catalog:      usageCatalog(facts.Catalog()),
+		Totals:       usageview.NewMetrics(sel.Totals()),
+		Catalog:      usageview.NewCatalog(facts.Catalog()),
 	}
 	if outside := sel.Outside(); outside != nil {
-		m := usageMetrics(*outside)
+		m := usageview.NewMetrics(*outside)
 		resp.OutsideRunTotal = &m
 	}
 
 	sortKey, desc := accounting.SortKey(p.sort), p.dir == UsageDirDesc
 	switch p.view {
 	case UsageViewBreakdown:
-		resp.Breakdown = &UsageBreakdown{Group: p.group, Rows: usageRows(sel.Rows(accounting.Group(p.group), sortKey, desc))}
+		resp.Breakdown = &UsageBreakdown{Group: p.group, Rows: usageview.NewRows(sel.Rows(accounting.Group(p.group), sortKey, desc))}
 	case UsageViewCharts:
 		resp.Charts = &UsageCharts{
 			Group:      p.group,
-			Comparison: usageRows(sel.Rows(accounting.Group(p.group), sortKey, desc)),
-			Timeline:   usageTimeline(sel.Timeline(usageTimelineMax)),
+			Comparison: usageview.NewRows(sel.Rows(accounting.Group(p.group), sortKey, desc)),
+			Timeline:   usageview.NewTimeline(sel.Timeline(usageTimelineMax)),
 		}
 	default: // UsageViewJobs: the parser admits no other view
 		page, err := s.usageJobsPage(facts, sel, p, revision, asOf, offset)
@@ -189,7 +175,7 @@ func (s *Server) usageJobsPage(facts *accounting.Facts, sel *accounting.Selectio
 	end := min(offset+p.limit, total)
 	page := &UsageJobsPage{Items: make([]UsageJob, 0, end-offset), Total: total, Limit: p.limit, Focus: focus}
 	for _, item := range items[offset:end] {
-		page.Items = append(page.Items, usageJob(item))
+		page.Items = append(page.Items, usageview.NewJob(item))
 	}
 	if end < total {
 		page.NextCursor = p.sealCursor(revision, s.usageMode, usageCursor{offset: end, asOf: asOf})

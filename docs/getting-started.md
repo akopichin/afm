@@ -177,7 +177,7 @@ Or in real time via the [web dashboard](dashboard.md) — stages, progress bar,
 event feed, logs.
 
 Once a run has recorded token usage, `afm check` also shows a per-stage token/cost
-summary and `afm report` renders a full markdown cost breakdown — see
+summary and `afm report` renders a full markdown cost breakdown (or JSON with `--format json`) — see
 [Cost accounting](accounting.md) (and how to turn the display off).
 
 ## Skills for Claude Code and Codex

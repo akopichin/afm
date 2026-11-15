@@ -312,14 +312,8 @@ the estimated cost, and `AFM_ACCOUNTING_SHOW_MONEY=1 afm report` shows it.
 
 - `afm check` — an `EST. COST` column per stage plus a `TOTAL` line; a
   coverage note (`2 unmetered, 1 unpriced`) when the total isn't `full`.
-- `afm report [run]` — a full markdown report: per-stage token/cost table,
-  a `Run overhead` section (end-of-run pipelines like agent memory, which
-  aren't attributed to any stage), a grand `Total`, and a `Coverage and
-  pricing` appendix (rate provenance, unmetered/unpriced invocations,
-  reported-vs-estimated mismatches). If `usage.jsonl` is missing, the report
-  still renders the stage table with a `No usage data` note; if it's corrupt
-  or unreadable, it renders a self-contained blockquote explaining why (no
-  invented totals) and exits with a non-zero status.
+- `afm report [run]` — a markdown report by default, or JSON with
+  `--format json`; see [`afm report`](#afm-report) below.
 
 **Dashboard:**
 
@@ -342,6 +336,74 @@ the estimated cost, and `AFM_ACCOUNTING_SHOW_MONEY=1 afm report` shows it.
 All three CLI and dashboard totals are computed from the same
 `pkg/accounting` helpers (`Coverage`, `DisplayCost`, `CoverageIssue`) — they
 are byte-identical for the same run, by construction, not by convention.
+
+## `afm report`
+
+```bash
+afm report [run] [--format markdown|json] [--stage <id>]
+```
+
+`run` is a run id or a path; without it the latest run is used. The command
+reads the run's files only: it writes nothing and takes no lock, so it is safe
+on a running run, and what it prints is a **snapshot** taken at `as_of`.
+
+- **`--format`** — `markdown` (default) or `json`. Any other value is an error.
+- **`--stage <id>`** — limits the report to one stage by its exact ID: that
+  stage's cost row and its agent jobs, timing and models. An unknown ID is an
+  error and prints nothing. Budgets stay run-wide; the ledger run total, run
+  overhead and unattributed usage are left out of a stage report.
+- **Modes** — `full`, `no_money` and `time_only` follow `accounting.enabled` and
+  `accounting.show_money` (see below). `no_money` drops every money figure;
+  `time_only` also drops tokens and the `cost` block, keeping jobs and agent
+  time.
+- **Budgets** — a separate run-wide reading (`budgets.scope: run_wide`), shown
+  as the dashboard shows it: tokens for a token limit, money only for a money
+  limit. If it can't be read, the block carries `unavailable_reason`.
+
+Each block of the report has one named source, so numbers match the dashboard
+**Cost** tab:
+
+| Block | Source |
+|---|---|
+| `cost`, per-stage rows, run overhead, `unattributed` | usage ledger (`usage.jsonl` invocations), with coverage issues and reported-vs-estimated mismatches |
+| `analytics` | agent-jobs journal (Facts): totals, models, agents, **all** jobs, timeline, completeness and health |
+| `stage_time` | events log, grouped as in [Stage time](dashboard.md#stage-time) |
+
+### Offline and live reading
+
+The report can't tell whether a process is still alive. A job that has no
+finish record keeps its recorded status (`interrupted`, duration `null`) and is
+annotated `end_recorded: false`, `liveness: "unknown"`; the diagnostics get
+`open_jobs_without_end`. Open stage and run intervals are reported as
+`{kind, since}` and are never added to a sum. For a running run, read the
+dashboard for live state.
+
+### Exit codes
+
+| Situation | Stdout | Exit |
+|---|---|---|
+| Usage ledger corrupt or unreadable (`full`, `no_money`) | report with diagnostics | `3` |
+| Agent-jobs journal unusable (missing or corrupt header, unsupported version, I/O failure) | report with diagnostics | `3` |
+| Journal degraded (bad or conflicting lines), Assistant journal errors | report with diagnostics | `0` |
+| No journal (a run from before agent jobs) | report with explicit gaps | `0` |
+| `time_only` with a corrupt usage ledger | report | `0` |
+| Budgets unreadable | `unavailable_reason` in the report | `0` |
+| `events.jsonl` corrupt or unsupported | nothing | error |
+| Unknown `--format` or `--stage` | nothing | error |
+
+With exit `3` a short reason goes to stderr.
+
+### JSON overview
+
+`schema_version` is `1`. Top-level keys: `as_of`, `mode`, `run`, `scope`,
+`sources` (state and reason of each input), `stages`, `stage_time`, `cost`
+(absent in `time_only`), `analytics`, `budgets` and `diagnostics`. Gaps are
+explicit states and diagnostics, never zeros.
+
+```bash
+afm report "$RUN" --format json | jq '.cost.total.tokens.total'
+afm report "$RUN" --stage build --format json | jq '.analytics.jobs[].status'
+```
 
 ## Turning the display off
 
@@ -371,8 +433,8 @@ disk, so switching display back on reveals past runs too:
 `AFM_ACCOUNTING=1 afm report <run>` renders a run recorded while the display
 was off. With the display off, the dashboard omits every cost field from
 `/api/status` (no tile/tab/rail), `afm check` falls back to its pre-accounting
-columns, and `afm report` prints nothing to stdout plus a one-line hint on
-stderr, exiting `0`.
+columns, and `afm report` prints the time-only report (no tokens or money)
+plus a one-line hint on stderr, exiting `0`.
 
 ## Showing tokens without money: `accounting.show_money`
 
@@ -410,7 +472,8 @@ With money **off** (the default) but accounting on:
 - **`afm report`** — omits every `$`/Est. Cost figure while still printing all
   token output (per-stage, overhead, totals, and the coverage appendix, which
   still notes reported-vs-estimated mismatches by fact even without the
-  numbers).
+  numbers). In JSON the money keys (`money`, `price`, `rates`, `*_usd`) are
+  absent, except under `budgets`.
 
 With money on, everything described earlier under "Where cost shows up" applies
 as written.

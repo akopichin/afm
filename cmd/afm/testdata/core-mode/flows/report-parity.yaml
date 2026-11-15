@@ -1,0 +1,9 @@
+name: core-report
+stages:
+  - id: build
+    agents: [auto]
+    command: __REPORT_AGENT__
+  - id: ship
+    agents: [auto]
+    command: __REPORT_AGENT__
+    depends_on: [build]

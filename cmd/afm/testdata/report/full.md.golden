@@ -1,0 +1,70 @@
+# Cost report: flow-20261101-100000
+
+Flow: — · Status: finished · Scope: whole run · As of: 2030-01-02T03:04:05Z
+
+## Summary
+
+- Run elapsed: 2m1s
+- Stage work: 2m0s · waiting: 0s · paused: 0s
+- Agent jobs: 3 · agent time: 1m30s
+- Agent tokens: 5,100 (metered jobs 3, unmetered 0)
+- Agent estimated cost: $0.5000+ (priced jobs 2, unpriced 1)
+- Completeness: time full · tokens full · price partial
+
+## Stages
+
+| Stage | Phases (invocations) | Model(s) | Uncached In | Cache Read | Cache Write | Output | Total Tokens | Est. Cost | Status (duration) |
+|---|---|---|---|---|---|---|---|---|---|
+| build | implementation×1, review×1 | claude-sonnet-4-5, internal-model | 2000 | 1000 | 0 | 400 | 3400 | $0.2500+ | done (1m0s) |
+| test | implementation×1 | claude-sonnet-4-5 | 1000 | 500 | 0 | 200 | 1700 | $0.2500 | done (1m0s) |
+
+## Run overhead
+
+None.
+
+## Total
+
+The whole usage ledger, counted in invocations.
+
+Invocations: 3 (implementation×2, review×1). Tokens: 5100 total (uncached in 3000, cache read 1500, cache write 0, output 600). Estimated cost: $0.5000+.
+
+## Coverage and pricing
+
+Rates used:
+
+- `claude/claude-sonnet-4-5` (source: builtin, as of: 2026-01-01)
+
+Unpriced invocations (metered, no rate resolved):
+
+- build/review: channel=claude model=internal-model (×1)
+
+Reported vs. estimated cost mismatches:
+
+- test/implementation: reported $0.9000 vs. estimated $0.2500 (reported_cost_differs_from_estimate)
+
+## Models
+
+| Model | Jobs | Agent time | Tokens | Est. cost |
+|---|---|---|---|---|
+| claude-sonnet-4-5 | 2 | 1m0s | 3,400 | $0.5000 |
+| internal-model | 1 | 30s | 1,700 | — |
+
+## Agents
+
+| Agent | Role | Jobs | Agent time | Tokens | Est. cost |
+|---|---|---|---|---|---|
+| build | Stage agent | 2 | 1m0s | 3,400 | $0.2500+ |
+| test | Stage agent | 1 | 30s | 1,700 | $0.2500 |
+
+## Agent jobs
+
+| Job | Agent | Stage | Model | Status | Started | Duration | Tokens | Est. cost |
+|---|---|---|---|---|---|---|---|---|
+| build · job 1 | build | build | claude-sonnet-4-5 | ok | 2026-11-01T10:00:10Z | 30s | 1,700 | $0.2500 |
+| build · job 2 | build | build | internal-model | ok | 2026-11-01T10:00:50Z | 30s | 1,700 | — |
+| test · job 1 | test | test | claude-sonnet-4-5 | ok | 2026-11-01T10:01:30Z | 30s | 1,700 | $0.2500 |
+
+## Diagnostics
+
+None.
+

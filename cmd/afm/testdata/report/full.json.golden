@@ -1,0 +1,595 @@
+{
+  "schema_version": 1,
+  "as_of": "2030-01-02T03:04:05Z",
+  "mode": "full",
+  "run": {
+    "id": "flow-20261101-100000",
+    "flow": "",
+    "status": "finished",
+    "started_at": "2026-11-01T10:00:00Z",
+    "ended_at": "2026-11-01T10:02:01Z",
+    "elapsed_ms": 121000
+  },
+  "scope": {
+    "kind": "all"
+  },
+  "sources": {
+    "usage": {
+      "state": "ok"
+    },
+    "jobs": {
+      "state": "ok"
+    },
+    "assistant_usage": {
+      "state": "absent"
+    },
+    "assistant_jobs": {
+      "state": "absent"
+    },
+    "budgets": {
+      "state": "ok"
+    }
+  },
+  "stages": [
+    {
+      "id": "build",
+      "status": "done",
+      "timing": {
+        "started": true,
+        "complete": true,
+        "work_ms": 60000,
+        "approval_ms": 0,
+        "helpers_ms": 0,
+        "backoff_ms": 0,
+        "scheduling_ms": 0,
+        "paused_ms": 0
+      }
+    },
+    {
+      "id": "test",
+      "status": "done",
+      "timing": {
+        "started": true,
+        "complete": true,
+        "work_ms": 60000,
+        "approval_ms": 0,
+        "helpers_ms": 0,
+        "backoff_ms": 0,
+        "scheduling_ms": 0,
+        "paused_ms": 0
+      }
+    }
+  ],
+  "stage_time": {
+    "working_ms": 120000,
+    "waiting_ms": 0,
+    "paused_ms": 0,
+    "incomplete_stages": []
+  },
+  "cost": {
+    "unit": "invocations",
+    "state": "ok",
+    "stages": [
+      {
+        "stage_id": "build",
+        "invocations": 2,
+        "metered": 2,
+        "unmetered": 0,
+        "unpriced": 1,
+        "models": [
+          "claude-sonnet-4-5",
+          "internal-model"
+        ],
+        "phases": {
+          "implementation": 1,
+          "review": 1
+        },
+        "tokens": {
+          "uncached_input": 2000,
+          "cache_read": 1000,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_write_other": 0,
+          "cache_write_total": 0,
+          "output": 400,
+          "reasoning_output": 0,
+          "total": 3400,
+          "cache_hit_ratio": 0.3333333333333333
+        },
+        "money": {
+          "display_cost": "$0.2500+",
+          "coverage": "partial",
+          "estimated_cost_usd": 0.25,
+          "priced_invocations": 1
+        }
+      },
+      {
+        "stage_id": "test",
+        "invocations": 1,
+        "metered": 1,
+        "unmetered": 0,
+        "unpriced": 0,
+        "models": [
+          "claude-sonnet-4-5"
+        ],
+        "phases": {
+          "implementation": 1
+        },
+        "tokens": {
+          "uncached_input": 1000,
+          "cache_read": 500,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_write_other": 0,
+          "cache_write_total": 0,
+          "output": 200,
+          "reasoning_output": 0,
+          "total": 1700,
+          "cache_hit_ratio": 0.3333333333333333
+        },
+        "money": {
+          "display_cost": "$0.2500",
+          "coverage": "full",
+          "estimated_cost_usd": 0.25,
+          "priced_invocations": 1
+        }
+      }
+    ],
+    "total": {
+      "invocations": 3,
+      "metered": 3,
+      "unmetered": 0,
+      "unpriced": 1,
+      "models": [
+        "claude-sonnet-4-5",
+        "internal-model"
+      ],
+      "phases": {
+        "implementation": 2,
+        "review": 1
+      },
+      "tokens": {
+        "uncached_input": 3000,
+        "cache_read": 1500,
+        "cache_write_5m": 0,
+        "cache_write_1h": 0,
+        "cache_write_other": 0,
+        "cache_write_total": 0,
+        "output": 600,
+        "reasoning_output": 0,
+        "total": 5100,
+        "cache_hit_ratio": 0.3333333333333333
+      },
+      "money": {
+        "display_cost": "$0.5000+",
+        "coverage": "partial",
+        "estimated_cost_usd": 0.5,
+        "priced_invocations": 2
+      }
+    },
+    "coverage_issues": [
+      {
+        "kind": "unpriced",
+        "attribution": {
+          "kind": "stage",
+          "stage_id": "build"
+        },
+        "phase": "review",
+        "channel": "claude",
+        "model": "internal-model",
+        "reason": "",
+        "count": 1
+      }
+    ],
+    "rates": [
+      {
+        "key": "claude/claude-sonnet-4-5",
+        "source": "builtin",
+        "as_of": "2026-01-01"
+      }
+    ],
+    "reported_vs_estimated": [
+      {
+        "attribution": {
+          "kind": "stage",
+          "stage_id": "test"
+        },
+        "phase": "implementation",
+        "money": {
+          "reported_usd": 0.9,
+          "estimated_usd": 0.25
+        }
+      }
+    ]
+  },
+  "analytics": {
+    "health": {
+      "usage": "ok",
+      "jobs": "ok"
+    },
+    "completeness": {
+      "time": {
+        "status": "full",
+        "known": 3,
+        "unknown": 0
+      },
+      "tokens": {
+        "status": "full",
+        "known": 3,
+        "unknown": 0
+      },
+      "price": {
+        "status": "partial",
+        "known": 2,
+        "unknown": 1,
+        "reasons": [
+          "unpriced_model"
+        ]
+      }
+    },
+    "totals": {
+      "jobs": 3,
+      "active_jobs": 0,
+      "agent_time": {
+        "duration_ms": 90000,
+        "measured_jobs": 3,
+        "unknown_jobs": 0
+      },
+      "tokens": {
+        "counts": {
+          "uncached_input": 3000,
+          "cache_read": 1500,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_write_other": 0,
+          "output": 600,
+          "reasoning_output": 0,
+          "total": 5100
+        },
+        "metered_jobs": 3,
+        "unmetered_jobs": 0,
+        "pending_jobs": 0
+      },
+      "money": {
+        "estimated_cost_usd": 0.5,
+        "priced_jobs": 2,
+        "unpriced_jobs": 1
+      }
+    },
+    "catalog": {
+      "stages": [],
+      "agents": [
+        {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "build"
+        },
+        {
+          "id": "stage:test",
+          "kind": "stage",
+          "title": "test"
+        }
+      ],
+      "models": [
+        {
+          "key": "claude/claude-sonnet-4-5",
+          "channel": "claude",
+          "model": "claude-sonnet-4-5",
+          "color_ordinal": 0
+        },
+        {
+          "key": "claude/internal-model",
+          "channel": "claude",
+          "model": "internal-model",
+          "color_ordinal": 1
+        }
+      ],
+      "scopes": {
+        "run_wide": false,
+        "unattributed": false
+      }
+    },
+    "models": [
+      {
+        "key": "claude/claude-sonnet-4-5",
+        "label": "claude-sonnet-4-5",
+        "model": {
+          "key": "claude/claude-sonnet-4-5",
+          "channel": "claude",
+          "model": "claude-sonnet-4-5",
+          "color_ordinal": 0
+        },
+        "model_source": "legacy",
+        "agents": 2,
+        "jobs": 2,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 60000,
+          "measured_jobs": 2,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": {
+            "uncached_input": 2000,
+            "cache_read": 1000,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 400,
+            "reasoning_output": 0,
+            "total": 3400
+          },
+          "metered_jobs": 2,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 0.5,
+          "priced_jobs": 2,
+          "unpriced_jobs": 0
+        }
+      },
+      {
+        "key": "claude/internal-model",
+        "label": "internal-model",
+        "model": {
+          "key": "claude/internal-model",
+          "channel": "claude",
+          "model": "internal-model",
+          "color_ordinal": 1
+        },
+        "model_source": "legacy",
+        "agents": 1,
+        "jobs": 1,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 30000,
+          "measured_jobs": 1,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": {
+            "uncached_input": 1000,
+            "cache_read": 500,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 200,
+            "reasoning_output": 0,
+            "total": 1700
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": null,
+          "priced_jobs": 0,
+          "unpriced_jobs": 1
+        }
+      }
+    ],
+    "agents": [
+      {
+        "key": "stage:build",
+        "label": "build",
+        "agent": {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "build"
+        },
+        "model": null,
+        "model_state": "mixed",
+        "model_source": "legacy",
+        "jobs": 2,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 60000,
+          "measured_jobs": 2,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": {
+            "uncached_input": 2000,
+            "cache_read": 1000,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 400,
+            "reasoning_output": 0,
+            "total": 3400
+          },
+          "metered_jobs": 2,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 0.25,
+          "priced_jobs": 1,
+          "unpriced_jobs": 1
+        }
+      },
+      {
+        "key": "stage:test",
+        "label": "test",
+        "agent": {
+          "id": "stage:test",
+          "kind": "stage",
+          "title": "test"
+        },
+        "model": {
+          "key": "claude/claude-sonnet-4-5",
+          "channel": "claude",
+          "model": "claude-sonnet-4-5",
+          "color_ordinal": 0
+        },
+        "model_state": "single",
+        "model_source": "legacy",
+        "jobs": 1,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 30000,
+          "measured_jobs": 1,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": {
+            "uncached_input": 1000,
+            "cache_read": 500,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 200,
+            "reasoning_output": 0,
+            "total": 1700
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 0.25,
+          "priced_jobs": 1,
+          "unpriced_jobs": 0
+        }
+      }
+    ],
+    "jobs": [
+      {
+        "id": "j1",
+        "title": "build · job 1",
+        "agent": {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "build"
+        },
+        "stage_id": "build",
+        "model": {
+          "key": "claude/claude-sonnet-4-5",
+          "channel": "claude",
+          "model": "claude-sonnet-4-5",
+          "color_ordinal": 0
+        },
+        "model_source": "legacy",
+        "status": "ok",
+        "started_at": "2026-11-01T10:00:10Z",
+        "run_offset_ms": null,
+        "duration_ms": 30000,
+        "tokens": {
+          "counts": {
+            "uncached_input": 1000,
+            "cache_read": 500,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 200,
+            "reasoning_output": 0,
+            "total": 1700
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 0.25,
+          "priced_jobs": 1,
+          "unpriced_jobs": 0
+        }
+      },
+      {
+        "id": "j2",
+        "title": "build · job 2",
+        "agent": {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "build"
+        },
+        "stage_id": "build",
+        "model": {
+          "key": "claude/internal-model",
+          "channel": "claude",
+          "model": "internal-model",
+          "color_ordinal": 1
+        },
+        "model_source": "legacy",
+        "status": "ok",
+        "started_at": "2026-11-01T10:00:50Z",
+        "run_offset_ms": null,
+        "duration_ms": 30000,
+        "tokens": {
+          "counts": {
+            "uncached_input": 1000,
+            "cache_read": 500,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 200,
+            "reasoning_output": 0,
+            "total": 1700
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": null,
+          "priced_jobs": 0,
+          "unpriced_jobs": 1
+        }
+      },
+      {
+        "id": "j3",
+        "title": "test · job 1",
+        "agent": {
+          "id": "stage:test",
+          "kind": "stage",
+          "title": "test"
+        },
+        "stage_id": "test",
+        "model": {
+          "key": "claude/claude-sonnet-4-5",
+          "channel": "claude",
+          "model": "claude-sonnet-4-5",
+          "color_ordinal": 0
+        },
+        "model_source": "legacy",
+        "status": "ok",
+        "started_at": "2026-11-01T10:01:30Z",
+        "run_offset_ms": null,
+        "duration_ms": 30000,
+        "tokens": {
+          "counts": {
+            "uncached_input": 1000,
+            "cache_read": 500,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 200,
+            "reasoning_output": 0,
+            "total": 1700
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 0.25,
+          "priced_jobs": 1,
+          "unpriced_jobs": 0
+        }
+      }
+    ],
+    "timeline": {
+      "range_start_ms": 0,
+      "range_end_ms": 0,
+      "intervals": [],
+      "total": 0,
+      "limit": 3,
+      "unplaced": 3
+    }
+  },
+  "budgets": {
+    "scope": "run_wide"
+  },
+  "diagnostics": []
+}

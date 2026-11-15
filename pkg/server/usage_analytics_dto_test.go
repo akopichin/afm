@@ -61,7 +61,7 @@ func fixtureJobs() map[string]UsageJob {
 		"j1": {
 			ID: "job-1", Title: "Build · planning", Agent: agentBuild, StageID: "build", Model: &modelOpus, ModelSource: UsageSourceObserved,
 			Status: UsageJobOK, StartedAt: time.Date(2026, 10, 31, 11, 0, 0, 0, time.UTC), RunOffsetMS: new(int64(0)), DurationMS: new(int64(120000)),
-			UsageSpend: UsageSpend{
+			Spend: UsageSpend{
 				Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 1000, CacheRead: 5000, CacheWrite5m: 400, Output: 600}, 1, 0, 0),
 				Money:  &UsageMoney{EstimatedCostUSD: new(0.42), PricedJobs: 1},
 			},
@@ -69,7 +69,7 @@ func fixtureJobs() map[string]UsageJob {
 		"j2": {
 			ID: "job-2", Title: "Build · implementation", Agent: agentBuild, StageID: "build", Model: &modelOpus, ModelSource: UsageSourceObserved,
 			Status: UsageJobOK, StartedAt: time.Date(2026, 10, 31, 11, 2, 10, 0, time.UTC), RunOffsetMS: new(int64(130000)), DurationMS: new(int64(300000)),
-			UsageSpend: UsageSpend{
+			Spend: UsageSpend{
 				Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 3000, CacheRead: 20000, CacheWrite5m: 1000, Output: 2000}, 1, 0, 0),
 				Money:  &UsageMoney{EstimatedCostUSD: new(1.35), PricedJobs: 1},
 			},
@@ -77,7 +77,7 @@ func fixtureJobs() map[string]UsageJob {
 		"j3": {
 			ID: "job-3", Title: "Review the diff", Agent: agentReviewer, StageID: "build", Model: &modelGPT, ModelSource: UsageSourceObserved,
 			Status: UsageJobOK, StartedAt: time.Date(2026, 10, 31, 11, 3, 20, 0, time.UTC), RunOffsetMS: new(int64(200000)), DurationMS: new(int64(90000)),
-			UsageSpend: UsageSpend{
+			Spend: UsageSpend{
 				Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 4000, Output: 1000, ReasoningOutput: 300}, 1, 0, 0),
 				Money:  &UsageMoney{UnpricedJobs: 1},
 			},
@@ -85,7 +85,7 @@ func fixtureJobs() map[string]UsageJob {
 		"j4": {
 			ID: "job-4", Title: "Verify · step 1", Agent: agentVerify, StageID: "review", Model: &modelGPT, ModelSource: UsageSourceObserved,
 			Status: UsageJobOK, StartedAt: time.Date(2026, 10, 31, 11, 6, 40, 0, time.UTC), RunOffsetMS: new(int64(400000)), DurationMS: new(int64(60000)),
-			UsageSpend: UsageSpend{
+			Spend: UsageSpend{
 				Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 2000, Output: 500}, 1, 0, 0),
 				Money:  &UsageMoney{EstimatedCostUSD: new(0.15), PricedJobs: 1},
 			},
@@ -94,19 +94,19 @@ func fixtureJobs() map[string]UsageJob {
 		"j5": {
 			ID: "job-5", Title: "Review · implementation", Agent: agentReview, StageID: "review", Model: &modelGLM, ModelSource: UsageSourceHint,
 			Status: UsageJobRunning, StartedAt: time.Date(2026, 10, 31, 11, 8, 0, 0, time.UTC), RunOffsetMS: new(int64(480000)), DurationMS: new(int64(240000)),
-			UsageSpend: UsageSpend{Tokens: unknownTokens(0, 1), Money: &UsageMoney{}},
+			Spend: UsageSpend{Tokens: unknownTokens(0, 1), Money: &UsageMoney{}},
 		},
 		// Assistant jobs are outside the run total and get no place on the run timeline.
 		"j6": {
 			ID: "job-6", Title: "Assistant · job 1", Agent: agentAssistant, Status: UsageJobOK,
 			StartedAt: time.Date(2026, 10, 31, 11, 9, 0, 0, time.UTC), DurationMS: new(int64(15000)),
-			UsageSpend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}},
+			Spend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}},
 		},
 		// Interrupted by a crash: the end is unknown, so no duration and no place on the timeline.
 		"j7": {
 			ID: "job-7", Title: "Build · implementation", Agent: agentBuild, StageID: "build", Model: &modelOpus, ModelSource: UsageSourceObserved,
 			Status: UsageJobInterrupted, StartedAt: time.Date(2026, 10, 31, 11, 10, 0, 0, time.UTC),
-			UsageSpend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}},
+			Spend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}},
 		},
 	}
 }
@@ -121,44 +121,44 @@ var (
 	// metrics of the jobs run for every agent / model, matching fixtureJobs above.
 	metricsBuild = UsageMetrics{
 		Jobs: 3, AgentTime: timeMetric(420000, 2, 1),
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 4000, CacheRead: 25000, CacheWrite5m: 1400, Output: 2600}, 2, 1, 0),
 			Money:  &UsageMoney{EstimatedCostUSD: new(1.77), PricedJobs: 2},
 		},
 	}
 	metricsReviewer = UsageMetrics{
 		Jobs: 1, AgentTime: timeMetric(90000, 1, 0),
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 4000, Output: 1000, ReasoningOutput: 300}, 1, 0, 0),
 			Money:  &UsageMoney{UnpricedJobs: 1},
 		},
 	}
 	metricsVerify = UsageMetrics{
 		Jobs: 1, AgentTime: timeMetric(60000, 1, 0),
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 2000, Output: 500}, 1, 0, 0),
 			Money:  &UsageMoney{EstimatedCostUSD: new(0.15), PricedJobs: 1},
 		},
 	}
 	metricsReview = UsageMetrics{
 		Jobs: 1, ActiveJobs: 1, AgentTime: timeMetric(240000, 1, 0),
-		UsageSpend: UsageSpend{Tokens: unknownTokens(0, 1), Money: &UsageMoney{}},
+		Spend: UsageSpend{Tokens: unknownTokens(0, 1), Money: &UsageMoney{}},
 	}
 	metricsAssistant = UsageMetrics{
 		Jobs: 1, AgentTime: timeMetric(15000, 1, 0),
-		UsageSpend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}},
+		Spend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}},
 	}
 	// opus is the build agent alone; gpt is reviewer + verify.
 	metricsGPT = UsageMetrics{
 		Jobs: 2, AgentTime: timeMetric(150000, 2, 0),
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 6000, Output: 1500, ReasoningOutput: 300}, 2, 0, 0),
 			Money:  &UsageMoney{EstimatedCostUSD: new(0.15), PricedJobs: 1, UnpricedJobs: 1},
 		},
 	}
 	metricsRunTotal = UsageMetrics{
 		Jobs: 6, ActiveJobs: 1, AgentTime: timeMetric(810000, 5, 1),
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 10000, CacheRead: 25000, CacheWrite5m: 1400, Output: 4100, ReasoningOutput: 300}, 4, 1, 1),
 			Money:  &UsageMoney{EstimatedCostUSD: new(1.92), PricedJobs: 3, UnpricedJobs: 1},
 		},
@@ -166,11 +166,11 @@ var (
 )
 
 func modelRow(ref UsageModelRef, source string, agents int, m UsageMetrics) UsageRow {
-	return UsageRow{Key: ref.Key, Label: ref.Model, Model: &ref, ModelSource: source, Agents: agents, UsageMetrics: m}
+	return UsageRow{Key: ref.Key, Label: ref.Model, Model: &ref, ModelSource: source, Agents: agents, Metrics: m}
 }
 
 func agentRow(a UsageAgent, ref UsageModelRef, source string, m UsageMetrics) UsageRow {
-	return UsageRow{Key: a.ID, Label: a.Title, Agent: &a, Model: &ref, ModelState: UsageModelSingle, ModelSource: source, UsageMetrics: m}
+	return UsageRow{Key: a.ID, Label: a.Title, Agent: &a, Model: &ref, ModelState: UsageModelSingle, ModelSource: source, Metrics: m}
 }
 
 // Rows are sorted by agent time, high to low; the Assistant row stays last.
@@ -183,7 +183,7 @@ func fixtureModelRows() []UsageRow {
 }
 
 func fixtureAgentRows() []UsageRow {
-	assistant := UsageRow{Key: agentAssistant.ID, Label: agentAssistant.Title, Agent: &agentAssistant, ModelState: UsageModelUnknown, UsageMetrics: metricsAssistant}
+	assistant := UsageRow{Key: agentAssistant.ID, Label: agentAssistant.Title, Agent: &agentAssistant, ModelState: UsageModelUnknown, Metrics: metricsAssistant}
 	return []UsageRow{
 		agentRow(agentBuild, modelOpus, UsageSourceObserved, metricsBuild),
 		agentRow(agentReview, modelGLM, UsageSourceHint, metricsReview),
@@ -300,20 +300,20 @@ func fixtureFocusFilteredOut() UsageAnalytics {
 func fixtureLegacyBreakdown() UsageAnalytics {
 	build := UsageMetrics{
 		AgentTime: UsageTime{},
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 5000, CacheRead: 10000, Output: 2000}, 2, 0, 0),
 			Money:  &UsageMoney{EstimatedCostUSD: new(0.8), PricedJobs: 2},
 		},
 	}
 	review := UsageMetrics{
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 2000, Output: 500}, 1, 0, 0),
 			Money:  &UsageMoney{EstimatedCostUSD: new(0.2), PricedJobs: 1},
 		},
 	}
-	unattributed := UsageMetrics{UsageSpend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}}}
+	unattributed := UsageMetrics{Spend: UsageSpend{Tokens: unknownTokens(1, 0), Money: &UsageMoney{}}}
 	total := UsageMetrics{
-		UsageSpend: UsageSpend{
+		Spend: UsageSpend{
 			Tokens: fixtureTokens(UsageTokenCounts{UncachedInput: 7000, CacheRead: 10000, Output: 2500}, 3, 1, 0),
 			Money:  &UsageMoney{EstimatedCostUSD: new(1.0), PricedJobs: 3},
 		},
@@ -322,7 +322,7 @@ func fixtureLegacyBreakdown() UsageAnalytics {
 	rows := []UsageRow{
 		agentRow(agentBuild, modelOpus, UsageSourceLegacy, build),
 		agentRow(agentReview, modelGLM, UsageSourceLegacy, review),
-		{Key: unknownAgent.ID, Label: unknownAgent.Title, Agent: &unknownAgent, ModelState: UsageModelUnknown, UsageMetrics: unattributed},
+		{Key: unknownAgent.ID, Label: unknownAgent.Title, Agent: &unknownAgent, ModelState: UsageModelUnknown, Metrics: unattributed},
 	}
 	r := fixtureBase(UsageViewBreakdown)
 	r.Health = UsageHealth{Usage: UsageStoreOK, Jobs: UsageStoreAbsent}
