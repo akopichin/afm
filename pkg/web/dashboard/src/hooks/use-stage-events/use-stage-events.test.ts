@@ -355,10 +355,13 @@ describe('useStageEvents', () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([...rawNoSeq(1004, 2964), rawStatus, ...rawNoSeq(2965, 3000)])))
       const live = [...liveNoSeq(1304, 3193), liveStatus, ...liveNoSeq(3194, 3300)]
       const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
-      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(3300))
-      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
-      const pos = order.indexOf('S')
-      expect(order.slice(pos + 1)).toEqual(Array.from({ length: 3300 - 2965 + 1 }, (_, i) => 2965 + i))
+      // The live tail already contains 3300 before history arrives; wait for the merged order.
+      await waitFor(() => {
+        const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+        const pos = order.indexOf('S')
+        expect(pos).toBeGreaterThanOrEqual(0)
+        expect(order.slice(pos + 1)).toEqual(Array.from({ length: 3300 - 2965 + 1 }, (_, i) => 2965 + i))
+      })
     })
 
     it('F16: a seq-less status high in history but first in live keeps older live actions before history', async () => {
@@ -368,13 +371,14 @@ describe('useStageEvents', () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([...rawNoSeq(3001, 3212), rawStatus, ...rawNoSeq(3213, 3300)])))
       const live = [liveStatus, ...liveNoSeq(2832, 3300)]
       const { result } = renderHook(() => useStageEvents('s1', live, 'run-a'))
-      await waitFor(() => expect(nOf(result.current[result.current.length - 1])).toBe(3300))
-      const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
-      const pos = order.indexOf('S')
-      expect(order.slice(pos)).toEqual(['S', ...Array.from({ length: 3300 - 3213 + 1 }, (_, i) => 3213 + i)])
-      const nums = order.filter((x): x is number => x !== 'S')
-      expect(nums[0]).toBe(2832)
-      expect(nums.every((n, i) => i === 0 || n > (nums[i - 1] as number))).toBe(true)
+      await waitFor(() => {
+        const order = result.current.map((e) => (e.type === 'stage_status_changed' ? 'S' : nOf(e)))
+        const pos = order.indexOf('S')
+        expect(order.slice(pos)).toEqual(['S', ...Array.from({ length: 3300 - 3213 + 1 }, (_, i) => 3213 + i)])
+        const nums = order.filter((x): x is number => x !== 'S')
+        expect(nums[0]).toBe(2832)
+        expect(nums.every((n, i) => i === 0 || n > (nums[i - 1] as number))).toBe(true)
+      })
     })
 
     it('F17: a single outlier anchor keeps live-only events in the tail after history', async () => {
