@@ -25,4 +25,4 @@ require (
 
 require github.com/akopichin/afm-engine v1.1.2
 
-require github.com/akopichin/afm/contracts v0.2.0
+require github.com/akopichin/afm/contracts v0.3.0

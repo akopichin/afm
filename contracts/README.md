@@ -26,6 +26,33 @@ the public contracts revision before an engine version that requires it. Local
 unpublished revisions can be tested with a workspace or a local module proxy;
 that does not make them downloadable from GitHub.
 
+## Conditional approval (v0.3.0)
+
+`control` defines `ApprovalSnapshot`, `ApprovalRevision`, `ApproveExpectedRequest`
+and `ApproveExpectedResult`. The revision is an opaque string identifying the
+reviewed plan bytes and one durable approval generation within a run/stage.
+Clients must echo it unchanged; it is neither an authorization token nor a
+client-computed hash. Unrelated stage events must not invalidate it.
+
+An engine implementing this contract must read consistent plan content and
+revision, then check the run, stage, revision and allowed state atomically with
+the durable approval transition. A new approval generation or changed reviewed
+content invalidates the old revision. Replay must preserve the association.
+Legacy runs without a provable association report `approval_unavailable`.
+
+`ApproveExpectedRequest.Validate` checks required identifiers only. It is not
+an implementation of the atomic guard. Rejections return an error; a successful
+result identifies the committed transition and approved revision. The new
+codes are `approval_stale`, `approval_run_changed`, and `approval_unavailable`;
+existing engine categories still handle invalid input/state, pauses, shutdown
+and storage failures. A repeated request after a lost response may conflict:
+this contract does not promise durable request deduplication.
+
+This release only publishes additive value types. Existing `Approve(stageID)`
+semantics are unchanged, and publishing or pinning these types does not enable
+conditional approval or MCP. Consumers must wait for an engine implementation
+before advertising that capability.
+
 ## Budgets
 
 Spend limits are declared with an optional `budget` block (`tokens`, `money`,
