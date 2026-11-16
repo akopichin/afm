@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 
+	"github.com/akopichin/afm/contracts/control"
 	"github.com/akopichin/afm/contracts/state"
 )
 
@@ -30,6 +31,14 @@ type StageActions interface {
 	// Answer records the user's answer to the stage agent's question.
 	Answer(stageID, phase, qID, answer string, fromOptions bool) error
 	CancelDialog(stageID string) error
+}
+
+// ApprovalActions is the conditional approval of a plan: the snapshot a client reviewed and the approve that
+// applies only while that snapshot is still current. It is optional apart from StageActions so existing
+// StageActions implementations keep compiling; the implementation is engine.StageControl.
+type ApprovalActions interface {
+	ApprovalSnapshot(ctx context.Context, stageID string) (control.ApprovalSnapshot, error)
+	ApproveExpected(ctx context.Context, req control.ApproveExpectedRequest) (control.ApproveExpectedResult, error)
 }
 
 // SecondaryActions are dashboard commands that are optional as a group: lifecycle hook retry/skip.

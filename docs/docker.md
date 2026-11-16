@@ -248,6 +248,14 @@ the same bare `-e NAME` transport as other autoShim agents, and secret values ne
 appear in the command line. The image must contain this version of afm: an older
 image rejects the launch record. See [Pipeline packages](pipelines.md).
 
+## MCP in Docker
+
+`afm run --mcp` works in the container: `/mcp` is on the published API port, so a
+host MCP client uses `http://127.0.0.1:<port>/mcp` or
+`afm mcp serve --connect http://127.0.0.1:<port>`. The endpoint has no
+authentication and agents in the container can reach it too; see
+[MCP](mcp.md#local-access) before enabling write groups.
+
 ## Project file browser
 
 Inside a running Docker container the dashboard header can show a folder-icon button

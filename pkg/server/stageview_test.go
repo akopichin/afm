@@ -38,7 +38,7 @@ func TestBuildStageViews_OrdersAndComputesCapabilities(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]StageConfig{"a": {Interactive: true, AutoApprove: true}}, nil)
+	views := BuildStageViews(rs, runDir, map[string]StageConfig{"a": {Interactive: true, AutoApprove: true}}, nil)
 
 	if len(views) != 2 || views[0].ID != "b" || views[1].ID != "a" {
 		t.Fatalf("order not preserved: %+v", views)
@@ -88,7 +88,7 @@ func TestBuildStageViews_HidesPlanForPendingAndScriptStages(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]StageConfig{
+	views := BuildStageViews(rs, runDir, map[string]StageConfig{
 		"script-running": {IsScript: true},
 		"script-done":    {IsScript: true},
 		"script-failed":  {IsScript: true},
@@ -133,7 +133,7 @@ func TestBuildStageViews_ShowDialogOnlyWithContent(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil)
+	views := BuildStageViews(rs, runDir, nil, nil)
 	byID := map[string]StageView{}
 	for _, v := range views {
 		byID[v.ID] = v
@@ -206,7 +206,7 @@ func TestBuildStageViews_IsScriptAndPausedFrom(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]StageConfig{"a": {IsScript: true}}, nil)
+	views := BuildStageViews(rs, runDir, map[string]StageConfig{"a": {IsScript: true}}, nil)
 
 	a, b := views[0], views[1]
 	if !a.IsScript {
@@ -239,7 +239,7 @@ func TestBuildStageViews_AutonomousPausedShowsPlan(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, nil, nil)
+	views := BuildStageViews(rs, runDir, nil, nil)
 
 	if !views[0].ShowPlan {
 		t.Errorf("autonomous stage paused: ShowPlan should be true (Continue button lives in PlanPanel), got %+v", views[0])
@@ -266,7 +266,7 @@ func TestBuildStageViews_AutonomousQuotaWaitShowsPlan(t *testing.T) {
 			}
 			rs := state.RunState{StageOrder: []string{"a"}, Stages: map[string]state.StageState{"a": stage}}
 
-			views := buildStageViews(rs, runDir, nil, nil)
+			views := BuildStageViews(rs, runDir, nil, nil)
 
 			if views[0].ShowPlan != wantPlan[name] {
 				t.Errorf("ShowPlan = %v, want %v for %+v", views[0].ShowPlan, wantPlan[name], views[0])
@@ -287,7 +287,7 @@ func TestBuildStageViews_IncludesButtons(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]StageConfig{"a": {Buttons: []string{"Run linter", "Rebuild"}}}, nil)
+	views := BuildStageViews(rs, runDir, map[string]StageConfig{"a": {Buttons: []string{"Run linter", "Rebuild"}}}, nil)
 
 	if !equalSlices(views[0].Buttons, []string{"Run linter", "Rebuild"}) {
 		t.Errorf("Buttons = %v, want [Run linter Rebuild]", views[0].Buttons)
@@ -307,7 +307,7 @@ func TestBuildStageViews_NameFromRuntimeConfig(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, map[string]StageConfig{"added": {Name: "Hardening"}}, nil)
+	views := BuildStageViews(rs, runDir, map[string]StageConfig{"added": {Name: "Hardening"}}, nil)
 
 	if views[0].Name != "From flow" || views[1].Name != "Hardening" {
 		t.Errorf("names = %q, %q; want From flow, Hardening", views[0].Name, views[1].Name)
@@ -332,7 +332,7 @@ func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 		"a": {DisplayCost: "$0.12", Coverage: "full"},
 	}
 
-	views := buildStageViews(rs, runDir, nil, stageCosts)
+	views := BuildStageViews(rs, runDir, nil, stageCosts)
 	byID := map[string]StageView{}
 	for _, v := range views {
 		byID[v.ID] = v
@@ -467,7 +467,7 @@ func TestBuildStageViews_VerifyIndicatorFromNotices(t *testing.T) {
 			"build": {Status: state.StatusFailed},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil)
+	views := BuildStageViews(rs, runDir, nil, nil)
 	v := findStage(views, "build").Verify
 	if v == nil || v.Phase != "needs_changes" || v.Step != 1 || v.Command != "codex" {
 		t.Fatalf("verify view = %+v, want {1 codex needs_changes}", v)
@@ -489,7 +489,7 @@ func TestBuildStageViews_VerifyAcceptedStalemate(t *testing.T) {
 			"build": {Status: state.StatusDone},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil)
+	views := BuildStageViews(rs, runDir, nil, nil)
 	v := findStage(views, "build").Verify
 	if v == nil || v.Phase != "accepted_stalemate" || v.Step != 1 || v.Command != "codex" {
 		t.Fatalf("verify view = %+v, want {1 codex accepted_stalemate}", v)
@@ -511,7 +511,7 @@ func TestBuildStageViews_VerifyReRunReturnsRunning(t *testing.T) {
 			"build": {Status: state.StatusRunning},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil)
+	views := BuildStageViews(rs, runDir, nil, nil)
 	v := findStage(views, "build").Verify
 	if v == nil || v.Phase != "running" || v.Step != 2 || v.Command != "codex" {
 		t.Fatalf("verify view = %+v, want {2 codex running}", v)
@@ -531,7 +531,7 @@ func TestBuildStageViews_NoVerifyNotices_NilVerify(t *testing.T) {
 			"build": {Status: state.StatusDone},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil)
+	views := BuildStageViews(rs, runDir, nil, nil)
 	if v := findStage(views, "build").Verify; v != nil {
 		t.Fatalf("verify view = %+v, want nil", v)
 	}
@@ -562,7 +562,7 @@ func TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon(t *testing.T) {
 			"other": {Status: state.StatusFailed},
 		},
 	}
-	views := buildStageViews(rs, runDir, nil, nil)
+	views := BuildStageViews(rs, runDir, nil, nil)
 
 	v := findStage(views, "build").Verify
 	if v == nil || v.Phase != "pass" || v.Step != 1 || v.Command != "codex" {
@@ -586,7 +586,7 @@ func stageViewsByID(t *testing.T, stages map[string]state.StageState) map[string
 	slices.Sort(ids)
 	rs := state.RunState{StageOrder: ids, Stages: stages}
 	out := map[string]StageView{}
-	for _, v := range buildStageViews(rs, t.TempDir(), nil, nil) {
+	for _, v := range BuildStageViews(rs, t.TempDir(), nil, nil) {
 		out[v.ID] = v
 	}
 	return out
@@ -693,7 +693,7 @@ func TestBuildStageViews_QuotaSurvivesReplayFromJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { reopened.Close() })
-	views := buildStageViews(reopened.Snapshot(), runDir, nil, nil)
+	views := BuildStageViews(reopened.Snapshot(), runDir, nil, nil)
 	if len(views) != 1 || views[0].Quota == nil || views[0].Quota.Provider != "claude" || !views[0].Quota.Until.Equal(until) || views[0].Quota.Source != "text" {
 		t.Fatalf("replayed view = %+v", views)
 	}

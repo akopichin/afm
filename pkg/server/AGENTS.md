@@ -43,3 +43,20 @@ Display-order — стабильный топологический порядо
 - Git metadata и worktree-ссылки проверяются общей политикой workspace; не
   обходи secure resolver ради diff/search. Файловый API остаётся GET-only.
 - Linux-tagged workspace-тесты выполняй на Linux/Docker: macOS их не покрывает.
+
+## MCP и условное approval
+
+Пользовательское поведение: [MCP](../../docs/mcp.md). Инварианты сервиса —
+[mcpserver](../mcpserver/AGENTS.md).
+
+- `/mcp` регистрируется всегда: без маршрута SPA-fallback отдал бы HTML. Выключенный
+  MCP отвечает 404 `mcp_disabled`. Типизированный nil `*Service` в `Config.MCP`
+  выглядел бы как включённый MCP: присваивай поле только когда он включён.
+- `/mcp` и `/api/stages/{id}/approval` идут через `localGuard`: loopback `Host`,
+  отсутствующий или same-origin `Origin`, лимит тела. Bind-адрес ничего не доказывает —
+  контейнер слушает все интерфейсы. Группы разрешений — не аутентификация.
+- `Shutdown` сначала вызывает `MCPHandler.Close`, затем `http.Server.Shutdown`: иначе
+  открытые стримы и wait блокируют остановку.
+- `POST /approval` — строгий: без `expected_revision` и `run_id` approve не происходит и
+  не откатывается к legacy `/approve`. Публичный API пакета меняй только добавлением:
+  им пользуется модуль `integration/afm` закреплённого engine.

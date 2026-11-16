@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -41,6 +42,13 @@ type EventStream interface {
 	SubscriberDroppedCount(id uint64) uint64
 }
 
+// MCPHandler serves /mcp. Close must release every request and stream it holds, because Shutdown calls it
+// before the run's state is closed.
+type MCPHandler interface {
+	http.Handler
+	Close(ctx context.Context) error
+}
+
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
 	runDir             string
@@ -69,6 +77,8 @@ type Server struct {
 	graphActions       GraphActions                 // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
 	agentMesh          AgentMeshActions             // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
 	mesh               MeshActions                  // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
+	mcp                MCPHandler                   // nil = /mcp answers 404 mcp_disabled
+	approval           ApprovalActions              // условное approval; nil = capability off (/api/stages/{id}/approval 404)
 	budgets            BudgetActions                // лимиты расходов; nil = capability off (/api/budgets* 404)
 	budgetExport       BudgetExportCheck            // проверка «Save to flow.yaml»; nil = save_to_yaml недоступен
 	ownerWaits         OwnerWaitActions             // owner wait recovery; nil, or without ownerTokenDigest = its two routes 404
@@ -100,7 +110,7 @@ func (s *Server) ConnectedClients() int {
 }
 
 // stageConfigs returns ONE consistent snapshot of every stage's static config — callers building a response
-// that spans multiple stages (handleStatus/buildStageViews) must call this exactly once and reuse the
+// that spans multiple stages (handleStatus/BuildStageViews) must call this exactly once and reuse the
 // result (see RuntimeStageProvider's doc comment).
 func (s *Server) stageConfigs() map[string]StageConfig {
 	if s.stages == nil {
@@ -124,6 +134,15 @@ type StageConfig struct {
 	IsScript    bool
 	DependsOn   []string
 	Buttons     []string // Labels only; the orchestrator resolves prompts on click.
+	// Artifacts are the files the stage declares in flow.yaml, so a reader can tell which ones to expose.
+	Artifacts []DeclaredArtifact
+}
+
+// DeclaredArtifact is one artifact a stage declares; Path is the flow.yaml value, where "./" means the stage's
+// run directory.
+type DeclaredArtifact struct {
+	Name string
+	Path string
 }
 
 // RuntimeStageProvider is the dashboard's one source of per-stage static configuration (T8.3). Unlike a bare
@@ -133,7 +152,7 @@ type StageConfig struct {
 // needing to know anything about registries or revisions.
 //
 // A single call must return every stage's config computed from ONE consistent registry revision: a caller
-// building a response that joins several stages (buildStageViews) must call StageConfigs() exactly ONCE and
+// building a response that joins several stages (BuildStageViews) must call StageConfigs() exactly ONCE and
 // reuse the result, never once per stage — otherwise two stages in the same response could be drawn from two
 // different registry revisions (TestStatusRead_NeverMixesTwoGraphVersions).
 type RuntimeStageProvider interface {
@@ -196,6 +215,10 @@ type Config struct {
 	Mesh MeshActions
 	// Budgets — spending limits of the run; nil = capability off (/api/budgets* 404).
 	Budgets BudgetActions
+	// MCP serves /mcp; nil keeps the route registered but answering 404 mcp_disabled.
+	MCP MCPHandler
+	// Approval — conditional approval (GET/POST /api/stages/{id}/approval); nil = capability off (404).
+	Approval ApprovalActions
 	// BudgetExport describes whether a limit can be saved to the flow file; nil leaves the yaml block out.
 	BudgetExport BudgetExportCheck
 	// OwnerWaits and OwnerToken enable the owner's wait recovery routes under /api/mesh/stages/{id}; both are
@@ -272,6 +295,8 @@ func New(cfg Config) *Server {
 		graphActions:       cfg.GraphActions,
 		agentMesh:          cfg.AgentMesh,
 		mesh:               cfg.Mesh,
+		mcp:                cfg.MCP,
+		approval:           cfg.Approval,
 		budgets:            cfg.Budgets,
 		budgetExport:       cfg.BudgetExport,
 		ownerWaits:         cfg.OwnerWaits,
@@ -343,6 +368,8 @@ func New(cfg Config) *Server {
 		mux.HandleFunc("/api/budgets/", s.routeBudgets)
 	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
+	// Always registered: otherwise the UI's SPA fallback would answer /mcp with HTML.
+	mux.HandleFunc("/mcp", s.routeMCP)
 	if s.ui != nil {
 		mux.Handle("/", s.ui)
 	} else {
@@ -372,6 +399,8 @@ func (s *Server) routeStages(w http.ResponseWriter, r *http.Request) {
 		s.handlePlan(w, r)
 	case strings.HasSuffix(path, "/approve") && r.Method == http.MethodPost:
 		s.handleApprove(w, r)
+	case strings.HasSuffix(path, "/approval") && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		s.routeApproval(w, r)
 	case strings.HasSuffix(path, "/revise") && r.Method == http.MethodPost:
 		s.handleRevise(w, r)
 	case strings.HasSuffix(path, "/note") && r.Method == http.MethodPost:
@@ -426,10 +455,24 @@ func (s *Server) Start() (string, error) {
 	return ln.Addr().String(), nil
 }
 
+// routeMCP serves /mcp under the local guard, or 404 mcp_disabled when MCP is off.
+func (s *Server) routeMCP(w http.ResponseWriter, r *http.Request) {
+	if s.mcp == nil {
+		writeFlowError(w, http.StatusNotFound, "mcp_disabled")
+		return
+	}
+	localGuard(s.mcp).ServeHTTP(w, r)
+}
+
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownOnce.Do(func() { close(s.done) })
-	err := s.httpSrv.Shutdown(ctx)
+	// MCP streams and waits must end first, or http.Server.Shutdown would block on them.
+	var mcpErr error
+	if s.mcp != nil {
+		mcpErr = s.mcp.Close(ctx)
+	}
+	err := errors.Join(mcpErr, s.httpSrv.Shutdown(ctx))
 	if s.workspace != nil {
 		_ = s.workspace.Close()
 	}

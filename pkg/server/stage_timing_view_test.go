@@ -15,7 +15,7 @@ func timingViewOf(t *testing.T, tm state.StageTiming) *StageTimingView {
 		StageOrder: []string{"s1"},
 		Stages:     map[string]state.StageState{"s1": {Status: state.StatusRunning, Timing: tm}},
 	}
-	views := buildStageViews(rs, t.TempDir(), nil, nil)
+	views := BuildStageViews(rs, t.TempDir(), nil, nil)
 	if len(views) != 1 || views[0].Timing == nil {
 		t.Fatalf("views = %+v, want one view with timing", views)
 	}
@@ -95,7 +95,7 @@ func TestBuildStageViews_TimingOpenAbsentAfterEndRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	live := buildStageViews(store.Snapshot(), runDir, nil, nil)[0].Timing
+	live := BuildStageViews(store.Snapshot(), runDir, nil, nil)[0].Timing
 	if live == nil || !live.Started || live.Open == nil || live.Open.Kind != string(state.TimeWork) {
 		t.Fatalf("live timing = %+v, want started with open work", live)
 	}
@@ -103,7 +103,7 @@ func TestBuildStageViews_TimingOpenAbsentAfterEndRun(t *testing.T) {
 	if err := store.EndRun("interrupted"); err != nil {
 		t.Fatal(err)
 	}
-	ended := buildStageViews(store.Snapshot(), runDir, nil, nil)[0].Timing
+	ended := BuildStageViews(store.Snapshot(), runDir, nil, nil)[0].Timing
 	if ended == nil || !ended.Started || ended.Open != nil {
 		t.Fatalf("ended timing = %+v, want started without open", ended)
 	}

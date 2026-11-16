@@ -1,0 +1,11 @@
+name: mcp-two-questions
+max_parallel: 2
+stages:
+  - id: alpha
+    agents: [planning, implementation]
+    interactive: true
+    command: __ASK_AGENT__
+  - id: beta
+    agents: [planning, implementation]
+    interactive: true
+    command: __ASK_AGENT__

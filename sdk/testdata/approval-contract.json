@@ -1,0 +1,23 @@
+{
+  "snapshot": {
+    "run_id": "run-1",
+    "stage_id": "plan",
+    "revision": "rev-1",
+    "plan_markdown": "# Plan\n"
+  },
+  "approve_request": {
+    "run_id": "run-1",
+    "expected_revision": "rev-1"
+  },
+  "approve_result": {
+    "run_id": "run-1",
+    "stage_id": "plan",
+    "approved_revision": "rev-1",
+    "transition_seq": 7
+  },
+  "error_codes": {
+    "stale": "approval_stale",
+    "run_changed": "approval_run_changed",
+    "unavailable": "approval_unavailable"
+  }
+}

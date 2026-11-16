@@ -157,6 +157,7 @@ func newRootCmd() *cobra.Command {
 		newBrowserCmd(),
 		newAgentCmd(),
 		newStageCmd(),
+		newMCPCmd(),
 		newSchemaCmd(),
 		newStopHookCmd(),
 	)

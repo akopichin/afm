@@ -30,6 +30,7 @@ type fakeCfg struct {
 	ExitNow      int    `json:"exit_now"`      // print a line and exit with this code at once
 	Delay        int    `json:"delay_ms"`      // sleep before serving
 	DieBySignal  bool   `json:"die_by_signal"` // on SIGINT die of SIGTERM instead of exiting
+	ApprovalRev  string `json:"approval_rev"`  // serves /api/stages/<id>/approval for this plan revision
 }
 
 const fakeEnv = "AFM_FAKE_CFG"
@@ -121,6 +122,9 @@ func runFakeAfm(cfg fakeCfg) int {
 		}
 		_, _ = fmt.Fprintf(w, `{"protocol_version":%d,"mode":%q,"run_id":%q,"ready":%t}`, proto, mode, runID, ready)
 	})
+	if cfg.ApprovalRev != "" {
+		mux.HandleFunc("/api/stages/{id}/approval", fakeApproval(runID, cfg.ApprovalRev))
+	}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT)
 	srv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: mux, ReadHeaderTimeout: 5 * time.Second}
@@ -145,6 +149,33 @@ func runFakeAfm(cfg fakeCfg) int {
 		return cfg.ExitCode
 	}
 	return 0
+}
+
+// fakeApproval serves the conditional-approval endpoints for one plan revision: a different expected
+// revision is a stale conflict, as in the real server.
+func fakeApproval(runID, revision string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stage := r.PathValue("id")
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{"run_id": runID, "stage_id": stage, "revision": revision, "plan_markdown": "# plan"})
+			return
+		}
+		var req struct {
+			RunID            string `json:"run_id"`
+			ExpectedRevision string `json:"expected_revision"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RunID != runID {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = fmt.Fprint(w, `{"error":"approval_run_changed"}`)
+			return
+		}
+		if req.ExpectedRevision != revision {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = fmt.Fprint(w, `{"error":"approval_stale"}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"run_id": runID, "stage_id": stage, "approved_revision": revision, "transition_seq": 7})
+	}
 }
 
 // useFakeAfm points a new Client at this test binary acting as afm.

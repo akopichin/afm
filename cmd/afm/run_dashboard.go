@@ -33,6 +33,10 @@ var (
 func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 	configs := make(map[string]server.StageConfig, len(stages))
 	for _, s := range stages {
+		declared := make([]server.DeclaredArtifact, 0, len(s.Artifacts))
+		for _, a := range s.Artifacts {
+			declared = append(declared, server.DeclaredArtifact{Name: a.Name, Path: a.Path})
+		}
 		configs[s.ID] = server.StageConfig{
 			Name:        s.Name,
 			Interactive: s.Interactive,
@@ -40,6 +44,7 @@ func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 			IsScript:    s.IsScript(),
 			DependsOn:   s.DependsOn,
 			Buttons:     s.Buttons.Labels(),
+			Artifacts:   declared,
 		}
 	}
 	return configs
@@ -213,13 +218,20 @@ func startServer(cfg config.Config, sc server.Config, run dashboardSurface, laun
 	// Listener addresses such as [::]:port are replaced with a client-facing URL.
 	_, port, _ := net.SplitHostPort(addr)
 	dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local server is http
+	mcpLine := ""
+	if sc.MCP != nil {
+		mcpLine = fmt.Sprintf("  mcp: %s/mcp\n", dashURL)
+	}
 	if launch == launchCore {
 		if announce {
-			_, _ = fmt.Fprintf(os.Stdout, "\n  api: %s\n\n", dashURL)
+			_, _ = fmt.Fprintf(os.Stdout, "\n  api: %s\n%s\n", dashURL, mcpLine)
 		}
 		return srv, dashURL, nil
 	}
 	printDashboardURL(os.Stdout, dashURL, announce && !cfg.Server.IsOpenBrowser(), dashboardColorEnabled())
+	if announce {
+		_, _ = fmt.Fprint(os.Stdout, mcpLine)
+	}
 	if announce && cfg.Server.IsOpenBrowser() {
 		openBrowser(dashURL)
 	}

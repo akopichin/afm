@@ -118,6 +118,7 @@ Linux-only код и тесты (например, `pkg/server/workspace`) тр�
 | Lifecycle-хуки | [lifecyclehooks](contracts/lifecyclehooks/AGENTS.md) | [Lifecycle hooks](docs/lifecycle-hooks.md) |
 | Memory: live и rebuild | [memorypipeline](docs/engine.md) | [Agent memory](docs/agent-memory.md) |
 | Managed Chrome | [browser](contracts/browser/AGENTS.md) | [Browser](docs/browser.md) |
+| MCP endpoint и мост | [mcpserver](pkg/mcpserver/AGENTS.md) | [MCP](docs/mcp.md) |
 
 Формат флоу — [flow-reference](docs/flow-reference.md), автономный трек —
 [autonomous-track](docs/autonomous-track.md), script-стадии —

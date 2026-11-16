@@ -63,6 +63,32 @@ fmt.Println(status.RunState) // finished, failed or interrupted
 Core keeps running after the result, so `Run.Wait` does not return until
 `Shutdown`. Details and errors are in the SDK README.
 
+## Conditional approval
+
+`Run.Approve` approves whatever plan is waiting. To approve only a plan the caller
+has read, use `ApprovalSnapshot` and `ApproveExpected`
+(`GET`/`POST /api/stages/<id>/approval`):
+
+```go
+snap, err := run.ApprovalSnapshot(ctx, "plan")
+if err != nil {
+	return err
+}
+// Show snap.PlanMarkdown to a reviewer, then:
+_, err = run.ApproveExpected(ctx, "plan", afmsdk.ApproveExpectedRequest{
+	RunID:            snap.RunID,
+	ExpectedRevision: snap.Revision,
+})
+var refused *afmsdk.ApprovalError
+if errors.As(err, &refused) && refused.Code == afmsdk.ApprovalCodeStale {
+	// The plan was revised after it was read: read it again.
+}
+```
+
+Refusals are `*afmsdk.ApprovalError` with `ApprovalCodeStale`,
+`ApprovalCodeRunChanged` or `ApprovalCodeUnavailable`. The same operation backs
+the [MCP](mcp.md#approving-a-plan) approve tool.
+
 ## Budgets
 
 `Budgets`, `Budget`, `UpdateBudget` and `ResumeBudget` read and change the

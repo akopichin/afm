@@ -161,9 +161,9 @@ type VerifyView struct {
 	Phase string `json:"phase"`
 }
 
-// buildStageViews joins event-log state, static configuration and on-disk artifacts. Ordering is
+// BuildStageViews joins event-log state, static configuration and on-disk artifacts. Ordering is
 // display-only: rs.StageOrder remains unchanged.
-func buildStageViews(rs state.RunState, runDir string, stages map[string]StageConfig, stageCosts map[string]*accounting.CostView) []StageView {
+func BuildStageViews(rs state.RunState, runDir string, stages map[string]StageConfig, stageCosts map[string]*accounting.CostView) []StageView {
 	order := topoOrder(rs.StageOrder, stages)
 	views := make([]StageView, 0, len(order))
 	verifyByStage := latestVerifyByStage(runDir)

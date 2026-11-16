@@ -1,10 +1,12 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	implgraph "github.com/akopichin/afm-engine/testkit/orchestrator/graph"
 	"github.com/akopichin/afm/contracts/flow"
+	"github.com/akopichin/afm/pkg/server"
 )
 
 // T8.6 — on restart/resume, the stage registry must be restored from this run's own durable
@@ -89,5 +91,13 @@ func TestRestart_DashboardConfigBuiltAfterRegistry(t *testing.T) {
 	}
 	if len(buildCfg.Buttons) != 1 || buildCfg.Buttons[0] != "Run linter" {
 		t.Fatalf("dashboard config built from the edited stages, not the registry-restored ones: %+v", buildCfg)
+	}
+}
+
+func TestDashboardStageConfigCarriesDeclaredArtifacts(t *testing.T) {
+	cfg := dashboardStageConfig([]flow.Stage{{ID: "a", Artifacts: []flow.Artifact{{Name: "report", Path: "./r.md"}}}})
+	want := []server.DeclaredArtifact{{Name: "report", Path: "./r.md"}}
+	if !reflect.DeepEqual(cfg["a"].Artifacts, want) {
+		t.Fatalf("Artifacts = %+v, want %+v", cfg["a"].Artifacts, want)
 	}
 }

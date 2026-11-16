@@ -39,7 +39,7 @@ func TestHistory_DozensOfAssistantsDoNotMakeStatusPollScanAllLogs(t *testing.T) 
 	// Attach "dozens" of required tasks to the SAME stage — all but the last already closed their gate
 	// (completed, no verdict needed for this projection path), the LAST one failed and is what the barrier is
 	// actually waiting on. Deliberately NOT creating <dir>/assistants/<taskID>/* at all for ANY of them: if
-	// buildStageViews ever needed to open/read a task's on-disk log to answer "is this stage blocked", this
+	// BuildStageViews ever needed to open/read a task's on-disk log to answer "is this stage blocked", this
 	// test would fail outright (file not found) rather than merely run slow — a stronger, non-flaky guarantee
 	// than a wall-clock timing assertion.
 	for i := 0; i < taskCount; i++ {
@@ -70,7 +70,7 @@ func TestHistory_DozensOfAssistantsDoNotMakeStatusPollScanAllLogs(t *testing.T) 
 	}
 
 	rs := store.Snapshot()
-	views := buildStageViews(rs, dir, map[string]StageConfig{stageID: {}}, nil)
+	views := BuildStageViews(rs, dir, map[string]StageConfig{stageID: {}}, nil)
 
 	var view *StageView
 	for i := range views {

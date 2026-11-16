@@ -30,7 +30,7 @@ func TestRestart_DisplayOrderRecomputedFromSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Same trivial DependsOn mapping cmd/afm's dashboardStageConfig does — buildStageViews/topoOrder only
+	// Same trivial DependsOn mapping cmd/afm's dashboardStageConfig does — BuildStageViews/topoOrder only
 	// ever reads StageConfig.DependsOn, not the full flow.Stage.
 	stages := make(map[string]StageConfig, len(materialized))
 	for _, s := range materialized {
@@ -46,7 +46,7 @@ func TestRestart_DisplayOrderRecomputedFromSnapshot(t *testing.T) {
 		},
 	}
 
-	views := buildStageViews(rs, runDir, stages, nil)
+	views := BuildStageViews(rs, runDir, stages, nil)
 	got := make([]string, len(views))
 	for i, v := range views {
 		got[i] = v.ID

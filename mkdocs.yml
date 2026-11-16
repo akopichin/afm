@@ -64,6 +64,7 @@ nav:
       - Spending budgets: budgets.md
       - Dashboard: dashboard.md
       - Core mode (API only): core-mode.md
+      - MCP for AI clients: mcp.md
       - Engine and 3.x builds: engine.md
       - Telegram bot: telegram-bot.md
       - Helpers and collaboration: collaboration.md

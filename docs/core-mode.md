@@ -66,6 +66,12 @@ connection dropping.
 Restarting `afm run --mode core` on the same flow resumes the run as usual; see
 [Stage lifecycle](stage-lifecycle.md).
 
+## MCP
+
+Add `--mcp` to serve the [Model Context Protocol](mcp.md) on `/mcp` of the same
+port, read-only unless `--mcp-allow` names write groups. It needs the port above and
+works in dashboard mode too.
+
 ## Docker
 
 With `docker.enabled: true` core re-executes into the container like any run, and

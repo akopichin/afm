@@ -1013,3 +1013,50 @@ func TestIntegration_CoreBudgetHoldUpdateResume(t *testing.T) {
 		t.Errorf("unknown scope err = %v, want 404 budget_unknown_scope", err)
 	}
 }
+
+// Conditional approval: a plan revised after the snapshot makes the old revision stale, the new one applies.
+func TestIntegration_CoreConditionalApproval(t *testing.T) {
+	fx := newCoreFixture(t, "manual.yaml", nil)
+	ctx := coreTestContext(t)
+	run := fx.start(ctx)
+	waitForStageStatus(ctx, t, run, "build", StageAwaitingApproval, 30*time.Second)
+
+	first, err := run.ApprovalSnapshot(ctx, "build")
+	if err != nil {
+		t.Fatalf("ApprovalSnapshot: %v", err)
+	}
+	if first.StageID != "build" || first.Revision == "" || first.PlanMarkdown == "" {
+		t.Fatalf("first snapshot = %+v, want stage build with a revision and plan", first)
+	}
+
+	if err := run.Revise(ctx, "build", "add more tests"); err != nil {
+		t.Fatalf("Revise: %v", err)
+	}
+	var second ApprovalSnapshot
+	waitUntil(t, "a new approval revision", func() bool {
+		snapshot, err := run.ApprovalSnapshot(ctx, "build")
+		second = snapshot
+		return err == nil && snapshot.Revision != first.Revision
+	})
+
+	_, err = run.ApproveExpected(ctx, "build", ApproveExpectedRequest{RunID: first.RunID, ExpectedRevision: first.Revision})
+	var approvalErr *ApprovalError
+	if !errors.As(err, &approvalErr) || approvalErr.Code != ApprovalCodeStale {
+		t.Fatalf("approve of the old revision = %v, want ApprovalError %q", err, ApprovalCodeStale)
+	}
+	if n := fx.agentRuns("build:implementation"); n != 0 {
+		t.Fatalf("implementation ran %d times after a stale approve, want 0", n)
+	}
+
+	result, err := run.ApproveExpected(ctx, "build", ApproveExpectedRequest{RunID: second.RunID, ExpectedRevision: second.Revision})
+	if err != nil {
+		t.Fatalf("approve of the current revision: %v", err)
+	}
+	if result.ApprovedRevision != second.Revision || result.StageID != "build" || result.TransitionSeq == 0 {
+		t.Errorf("result = %+v, want revision %q applied with a transition seq", result, second.Revision)
+	}
+	requireResult(ctx, t, run, RunStateFinished)
+	if n := fx.agentRuns("build:implementation"); n != 1 {
+		t.Errorf("implementation ran %d times, want 1", n)
+	}
+}

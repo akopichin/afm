@@ -49,6 +49,7 @@ type cycleLoop struct {
 	loadFlow func() (*flow.Flow, error)
 	// binder связывает каждый ран пакета с его снимком; nil вне --pipeline.
 	binder *pipelineBinder
+	mcp    mcpSettings
 }
 
 // run проходит флоу и, пока включён repeat, повторяет его после каждого успешного рана. Единственный
@@ -66,6 +67,7 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 		flowPath:        l.flowPath,
 		runName:         runNameFor(l.worktreeName, f.Name),
 		pipeline:        l.binder,
+		mcp:             l.mcp,
 	}
 	if config.ReExecedIntoContainer() {
 		var err error

@@ -28,20 +28,34 @@ const (
 	keyStatus  = "status"
 )
 
+// EngineErrorInfo is the transport-neutral form of a failed engine command, shared by REST and MCP so both
+// report the same status, kind and code for the same failure.
+type EngineErrorInfo struct {
+	Status  int
+	Kind    string
+	Code    string
+	Message string
+}
+
+// ClassifyEngineError maps a command error to its HTTP status, kind, stable code and message. An error that
+// is not an *engine.Error is internal.
+func ClassifyEngineError(err error) EngineErrorInfo {
+	var ce *engine.Error
+	if !errors.As(err, &ce) {
+		return EngineErrorInfo{Status: http.StatusInternalServerError, Kind: string(engine.KindInternal), Message: err.Error()}
+	}
+	return EngineErrorInfo{Status: commandErrorStatus(ce.Kind), Kind: string(ce.Kind), Code: ce.Code, Message: ce.Message}
+}
+
 // writeCommandError renders a failed engine command: a machine-readable Code as the JSON error body,
 // anything else as the plain message, with the HTTP status of the error kind.
 func writeCommandError(w http.ResponseWriter, err error) {
-	var ce *engine.Error
-	if !errors.As(err, &ce) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	info := ClassifyEngineError(err)
+	if info.Code != "" {
+		writeFlowError(w, info.Status, info.Code)
 		return
 	}
-	status := commandErrorStatus(ce.Kind)
-	if ce.Code != "" {
-		writeFlowError(w, status, ce.Code)
-		return
-	}
-	http.Error(w, ce.Message, status)
+	http.Error(w, info.Message, info.Status)
 }
 
 func commandErrorStatus(kind engine.Kind) int {
@@ -140,6 +154,8 @@ type capabilities struct {
 	// Budgets — подключён ли /api/budgets*; BudgetExport — можно ли сохранять лимит в flow.yaml.
 	Budgets      bool `json:"budgets"`
 	BudgetExport bool `json:"budget_export"`
+	// ConditionalApproval — подключены ли GET/POST /api/stages/{id}/approval.
+	ConditionalApproval bool `json:"conditional_approval"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -174,7 +190,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.CoverageIssues = bundle.Issues
 		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData, ShowMoney: s.showMoney}
 	}
-	resp.Stages = buildStageViews(rs, s.runDir, s.stageConfigs(), stageCosts)
+	resp.Stages = BuildStageViews(rs, s.runDir, s.stageConfigs(), stageCosts)
 	for _, view := range resp.Stages {
 		if v := view.Verify; v != nil {
 			v.CommandName = verifyCommandName(v.Kind, v.Command, s.commandName)
@@ -185,6 +201,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp.Capabilities.Collaboration = s.assistantProfiles != nil
 	resp.Capabilities.AddStage = s.graphActions != nil
 	resp.Capabilities.Budgets = s.budgets != nil
+	resp.Capabilities.ConditionalApproval = s.approval != nil
 	resp.Capabilities.BudgetExport = s.budgets != nil && s.budgetExport != nil
 	if s.usageAnalytics != nil {
 		resp.Capabilities.UsageAnalytics = true
@@ -600,6 +617,9 @@ func extractStageID(path, prefix, suffix string) string {
 
 // isValidStageID rejects path traversal and special characters in stage IDs.
 func isValidStageID(id string) bool { return engine.ValidStageID(id) }
+
+// ValidStageID reports whether id is a safe stage identifier, the check every command applies.
+func ValidStageID(id string) bool { return isValidStageID(id) }
 
 // safeArtifactNameRe restricts artifact filenames to a safe single component:
 // alphanumerics, dash, underscore, dot. Mirrors safeStageIDRe.

@@ -17,6 +17,7 @@ import (
 	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/contracts/lifecyclehooks"
 	"github.com/akopichin/afm/contracts/worktree"
+	"github.com/akopichin/afm/pkg/mcpserver"
 	"github.com/akopichin/afm/pkg/pipeline"
 	"github.com/akopichin/afm/pkg/server"
 )
@@ -42,6 +43,7 @@ type runOptions struct {
 	pipeline *pipelineBinder
 	// containerBrowser — дескриптор browser из transport, прочитанный один раз за процесс (только в контейнере).
 	containerBrowser *browser.Descriptor
+	mcp              mcpSettings
 }
 
 func newRunCmd() *cobra.Command {
@@ -54,6 +56,8 @@ func newRunCmd() *cobra.Command {
 	var worktreeClear bool
 	var worktreeClearForce bool
 	var worktreeName string
+	var mcpFlag bool
+	var mcpAllow string
 	var pf pipelineFlags
 
 	cmd := &cobra.Command{
@@ -88,6 +92,10 @@ func newRunCmd() *cobra.Command {
 				return err
 			}
 			if err := launch.validate(cfg); err != nil {
+				return err
+			}
+			mcp, err := parseMCPSettings(mcpFlag, mcpAllow, cfg)
+			if err != nil {
 				return err
 			}
 
@@ -190,6 +198,7 @@ func newRunCmd() *cobra.Command {
 				requireApproval: requireApproval,
 				exitOnFail:      resolvedExitOnFail,
 				forceNewRun:     mode != worktree.ClearNone,
+				mcp:             mcp,
 			}
 			if plan != nil {
 				loop.forceNewRun = loop.forceNewRun || plan.forceNew
@@ -206,6 +215,8 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "agent idle timeout")
 	cmd.Flags().IntVar(&port, "port", 0, "dashboard port (0=use config)")
 	cmd.Flags().StringVar(&modeFlag, "mode", "", "launch mode: dashboard (HTTP API and Web UI, default) or core (HTTP API only)")
+	cmd.Flags().BoolVar(&mcpFlag, "mcp", false, "serve MCP (read-only unless --mcp-allow) on /mcp of the HTTP API; needs a port")
+	cmd.Flags().StringVar(&mcpAllow, "mcp-allow", "", "MCP write permissions, comma-separated: reply,stages,approve,budget; requires --mcp")
 	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "fail if a stage plan needs approval but no dashboard is running")
 	cmd.Flags().BoolVar(&exitOnFail, "exit-on-fail", false, "stop the run and exit 1 when a stage fails (env: AFM_EXIT_ON_FAIL)")
 	cmd.Flags().BoolVar(&worktreeClear, "worktree-clear", false, "recreate the flow worktree, discarding uncommitted changes but keeping its branch and commits; also starts a fresh run")
@@ -346,6 +357,30 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	}
 	if exporter != nil {
 		serverCfg.BudgetExport = exporter
+	}
+	if run.Capabilities().ConditionalApproval {
+		serverCfg.Approval = run.Stages()
+	}
+	// Assigned only when enabled: a nil *Service in the interface would look like a mounted MCP endpoint.
+	if opts.mcp.enabled {
+		svc, err := mcpserver.New(mcpserver.Config{
+			RunDir:        serverCfg.RunDir,
+			Reader:        read,
+			Events:        read.Events(),
+			Stages:        serverCfg.Stages,
+			Commands:      run.Stages(),
+			Approval:      serverCfg.Approval,
+			Budgets:       run.Budgets(),
+			Cost:          serverCfg.Accounting,
+			ShowMoney:     cfg.Accounting.ShowMoneyEnabled(),
+			RedactSecrets: read.RedactSecrets,
+			Groups:        opts.mcp.groups,
+			Version:       version,
+		})
+		if err != nil {
+			return cycleResult{}, fmt.Errorf("mcp: %w", err)
+		}
+		serverCfg.MCP = svc
 	}
 	srv, agentAPIURL, err := startServer(cfg, serverCfg, runSurface{run.Mesh(), run.Graph(), run.Flow()}, opts.launch, opts.cycle <= 1)
 	if err != nil {

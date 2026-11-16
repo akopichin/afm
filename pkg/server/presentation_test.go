@@ -247,7 +247,7 @@ func TestBuildStageViews_LegacyVerifyNoticeHasNoName(t *testing.T) {
 	appendVerifyNotice(t, runDir, "build", string(bus.EventVerifyStarted), map[string]any{"step": 1, "kind": "agent", "command": "codex"})
 	rs := state.RunState{StageOrder: []string{"build"}, Stages: map[string]state.StageState{"build": {Status: state.StatusRunning}}}
 
-	v := findStage(buildStageViews(rs, runDir, nil, nil), "build").Verify
+	v := findStage(BuildStageViews(rs, runDir, nil, nil), "build").Verify
 
 	if v == nil || v.Name != "" || v.Kind != "agent" {
 		t.Fatalf("verify view = %+v, want kind agent without a name", v)
