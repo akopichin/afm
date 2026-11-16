@@ -7,6 +7,9 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Upgrade afm-engine to v1.2.1: increase the fixed helper prompt limit from
+  200 KiB to 2 MiB, allowing larger inline stage inputs.
+
 - Add MCP for AI clients: `afm run --mcp` serves read-only tools and resources on `/mcp` of the HTTP API (core and dashboard), and `--mcp-allow=reply,stages,approve,budget` enables changes group by group. Plan approval is strict: the client approves the exact revision it read, otherwise `approval_stale`. `afm mcp serve --connect <url>` bridges stdio clients to a running run. See `docs/mcp.md`.
 - Add `GET`/`POST /api/stages/{id}/approval` and Go SDK `ApprovalSnapshot` and `ApproveExpected` to approve only a plan the caller has read. Uses afm-engine v1.2.0.
 
