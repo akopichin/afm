@@ -32,6 +32,6 @@ require (
 require github.com/akopichin/afm-engine v1.2.1
 
 require (
-	github.com/akopichin/afm/contracts v0.3.0
+	github.com/akopichin/afm/contracts v0.3.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 )
