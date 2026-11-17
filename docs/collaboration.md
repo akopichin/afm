@@ -307,6 +307,12 @@ When collaboration is disabled, afm warns about declared helpers and runs the
 stage without attaching them. This also lets `AFM_COLLABORATION=0` temporarily
 disable a flow's helpers.
 
+Before a stage first starts, the dashboard previews its declared helpers as a hub
+in the stage rail; see
+[Declared helpers before a stage starts](dashboard.md#declared-helpers-before-a-stage-starts).
+The preview only reads the declaration: no tasks are created, and for stages with
+planning it disappears when planning begins, not when helpers attach.
+
 ### Declared helper loops
 
 An `on_message` helper entry can add `loop: { every, prompt }` (fields and limits:

@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/akopichin/afm-engine/engine"
+	"github.com/akopichin/afm/contracts/assistants"
 	"github.com/akopichin/afm/contracts/config"
 	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/pkg/server"
@@ -30,7 +32,7 @@ var (
 	_ server.FlowActions      = engine.FlowReview(nil)
 )
 
-func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
+func dashboardStageConfig(stages []flow.Stage, profileTitle func(string) string) map[string]server.StageConfig {
 	configs := make(map[string]server.StageConfig, len(stages))
 	for _, s := range stages {
 		declared := make([]server.DeclaredArtifact, 0, len(s.Artifacts))
@@ -45,21 +47,70 @@ func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 			DependsOn:   s.DependsOn,
 			Buttons:     s.Buttons.Labels(),
 			Artifacts:   declared,
+			Assistants:  declaredAssistants(s.Assistants, profileTitle),
 		}
 	}
 	return configs
+}
+
+// declaredAssistants reduces a stage's flow.yaml helpers to the dashboard DTO. Empty trigger and mode get the
+// defaults Attach applies, which the engine keeps internal.
+func declaredAssistants(in flow.StageAssistants, profileTitle func(string) string) []server.DeclaredAssistant {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]server.DeclaredAssistant, 0, len(in))
+	for _, a := range in {
+		name := strings.TrimSpace(a.Title)
+		if name == "" {
+			name = profileTitle(a.Profile)
+		}
+		item := server.DeclaredAssistant{Profile: a.Profile, Name: name, Trigger: a.Trigger, Mode: a.Mode}
+		if item.Trigger == "" {
+			item.Trigger = assistants.TriggerOneShot
+		}
+		if item.Mode == "" {
+			item.Mode = assistants.ModeAdvisory
+		}
+		if a.Loop != nil {
+			item.LoopEvery = a.Loop.Every
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// profileRegistry is the collaboration profile registry, nil when the run has no collaboration setup.
+func profileRegistry(c *engine.Collaboration) *assistants.Registry {
+	if c == nil {
+		return nil
+	}
+	return c.Registry
+}
+
+// profileTitles resolves a profile's display title, falling back to its ID; a nil registry only has IDs.
+func profileTitles(reg *assistants.Registry) func(string) string {
+	return func(id string) string {
+		if reg != nil {
+			if p, ok := reg.Get(assistants.ProfileID(id)); ok && strings.TrimSpace(p.Title) != "" {
+				return strings.TrimSpace(p.Title)
+			}
+		}
+		return id
+	}
 }
 
 // registryStageProvider implements server.RuntimeStageProvider by re-deriving the dashboard-facing config
 // from the run's runtime registry on EVERY call, so stages added during the run reach the dashboard without
 // a restart.
 type registryStageProvider struct {
-	reader interface{ StageConfigs() []flow.Stage }
+	reader   interface{ StageConfigs() []flow.Stage }
+	profiles *assistants.Registry // nil: helper names fall back to the profile ID
 }
 
 // StageConfigs implements server.RuntimeStageProvider.
 func (p registryStageProvider) StageConfigs() map[string]server.StageConfig {
-	return dashboardStageConfig(p.reader.StageConfigs())
+	return dashboardStageConfig(p.reader.StageConfigs(), profileTitles(p.profiles))
 }
 
 // dashboardSurface is the part of the run the dashboard commands and the agent API reach through.

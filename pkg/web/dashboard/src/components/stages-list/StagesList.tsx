@@ -9,6 +9,7 @@ import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import { AssistantTaskRow } from '../assistants'
 import { QuotaCountdown } from './QuotaCountdown'
 import { StageBudgetBadge } from '../budget-dialog/StageBudgetBadge'
+import { StageOrbit, isOrbitVisible } from '../stage-orbit'
 
 type StagesListProps = {
   stages: Stage[]
@@ -35,6 +36,10 @@ type StagesListProps = {
   onSelectTask?: (stageId: string, taskId: string) => void
   // statusAvailable — свежесть /api/status из useStatus: пока он устарел, счётчик ожидания лимита замирает.
   statusAvailable?: boolean
+  // collaborationEnabled — capabilities.collaboration: без неё хаб объявленных помощников не показывается.
+  collaborationEnabled?: boolean
+  // runEpoch — смена рана пересоздаёт орбиты, чтобы не оставлять открытое состояние от прошлого рана.
+  runEpoch?: number
 }
 
 // verifyBadgeGlyph/verifyBadgeTitle — единая точка презентации индикатора: один нейтральный глиф "AI
@@ -116,6 +121,7 @@ export function canAttachHelper(stage: Stage, collaborationEnabled: boolean): bo
 export function StagesList({
   stages, times, selectedStageId, onSelect, progressDone, progressTotal, accounting,
   version, assistants, selectedTaskId, onSelectTask, canAddStage = false, onAddStage, statusAvailable = true,
+  collaborationEnabled = false, runEpoch = 0,
 }: StagesListProps): ReactElement {
   // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -286,6 +292,14 @@ export function StagesList({
             )}
             {awaitingAssistantsBlocked && (
               <span className="assistants-blocked-badge" title="A required helper task needs your decision">⚠</span>
+            )}
+            {isOrbitVisible(stage, collaborationEnabled) && stage.declaredAssistants !== undefined && (
+              <StageOrbit
+                key={`${runEpoch}:${stage.id}`}
+                stageId={stage.id}
+                assistants={stage.declaredAssistants}
+                selectedStageId={selectedStageId}
+              />
             )}
             <StageBudgetBadge stageId={stage.id} />
             {stage.preNote !== '' && (

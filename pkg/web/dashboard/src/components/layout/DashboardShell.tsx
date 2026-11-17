@@ -17,6 +17,9 @@ type DashboardShellProps = {
 // DashboardShell — оболочка тела дашборда: слева рейл стадий, справа единый воркспейс. Раскладка — CSS
 // grid. Ширина рейла и мобильная шторка (≤900px) — тот же usePanelResize, что у People и Team: ширина
 // клампится так, чтобы воркспейсу осталось место, и горизонтального скролла нет.
+// Клики по этим элементам внутри строки стадии не означают выбор стадии и не закрывают шторку.
+const RAIL_KEEP_OPEN_SELECTOR = '.assistant-toggle, .stage-orbit'
+
 export function DashboardShell({ rail, tabs, workspace, feedFocus = false, onRailDrawerChange }: DashboardShellProps): ReactElement {
   const [railOpen, setRailOpen] = useState(false)
   const resize = usePanelResize({
@@ -78,11 +81,11 @@ export function DashboardShell({ rail, tabs, workspace, feedFocus = false, onRai
 
   // Клик по строке стадии (или строке помощника) внутри шторки = выбор сделан → закрываем её. Клик по
   // развернуть-свернуть ветки помощников (.assistant-toggle — живёт и на самой стадии, и на любом узле-помощнике
-  // с детьми) НЕ закрывает — иначе ветка схлопнулась бы вместе со шторкой.
+  // с детьми) и по орбите объявленных помощников НЕ закрывает — иначе они схлопнулись бы вместе со шторкой.
   function onRailClickCapture(e: MouseEvent<HTMLElement>): void {
     if (!railOpen) return
     const target = e.target as HTMLElement
-    if (target.closest('.assistant-toggle') !== null) return
+    if (target.closest(RAIL_KEEP_OPEN_SELECTOR) !== null) return
     if (target.closest('[data-stage-id]') !== null || target.closest('[data-task-id]') !== null) {
       setRailOpen(false)
     }

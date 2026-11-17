@@ -40,6 +40,7 @@ right. The selected stage's Feed can also show a People panel on wide screens.
   for completed stages), each stage's `id` (its `name` as a tooltip), a human-readable status
   line, and, in the rail head, the
   run progress (`done / total`). Attached helper tasks appear beneath their stage;
+  a stage that has not started yet shows a [declared-helpers hub](#declared-helpers-before-a-stage-starts);
   **+ Stage** is available when a live stage can be added. A stage using
   [AI-verify](verify.md) shows a small
   verify-status badge next to its status line; it's a durable field computed
@@ -135,6 +136,23 @@ it is not shown as a disabled button. In that state `/api/status` reports
 `capabilities.add_stage: false`, and `/api/run/graph/preview` and
 `/api/run/graph/commit` return HTTP 404. The setting takes effect when afm
 starts or resumes the run.
+
+### Declared helpers before a stage starts
+
+A stage that has never started and declares `assistants:` in `flow.yaml` shows a
+small dashed hub in its rail row, with the number of declared helpers. Hover,
+focus or tap the hub to open an orbit of helper circles with their initials; hover
+or focus a circle for a tooltip with the helper name and trigger, for example
+`QA gate · On stage completion · Required` (`· every 5m` for a loop). Up to four
+helpers are shown at once; with five or more, three circles plus a **+N** circle
+that pages through the rest. Escape or a tap outside closes the orbit.
+
+The orbit is a preview: no helper tasks exist yet, so nothing can be selected or
+changed. The hub disappears when the stage first starts, including its planning
+phase (helpers of a stage with planning attach only after plan approval); from
+then on the attached helper tasks appear beneath the stage as usual. Stages
+without declared helpers show no hub, and the hub is not shown when
+[collaboration](collaboration.md) is disabled.
 
 ## Usage-limit waits
 

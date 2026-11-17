@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test } from 'vitest'
 import { DashboardShell } from './DashboardShell'
+import { StageOrbit } from '../stage-orbit'
 
 // Переводит matchMedia в «мобильный» режим (matches=true) для теста шторки.
 function mockMobile(matches: boolean): void {
@@ -170,6 +171,33 @@ describe('DashboardShell rail drawer', () => {
   })
 })
 
+describe('DashboardShell: орбита объявленных помощников не закрывает шторку', () => {
+  test('tap по хабу и спутнику внутри строки стадии оставляет drawer открытым', () => {
+    const { container } = render(
+      <DashboardShell
+        rail={
+          <div data-stage-id="s1" className="stage-item">
+            <button type="button" className="stage-row">Stage one</button>
+            <span className="stage-orbit">
+              <button type="button" className="stage-orbit-hub">Hub</button>
+              <span className="stage-orbit-layer"><button type="button" className="stage-orbit-satellite">Sat</button></span>
+            </span>
+          </div>
+        }
+        tabs={<div>tabs</div>}
+        workspace={<div>workspace</div>}
+      />,
+    )
+    const body = container.querySelector('.dashboard-body') as HTMLElement
+    fireEvent.click(screen.getByLabelText('Toggle stages'))
+    fireEvent.click(screen.getByText('Hub'))
+    fireEvent.click(screen.getByText('Sat'))
+    expect(body.classList.contains('rail-open')).toBe(true)
+    fireEvent.click(screen.getByText('Stage one'))
+    expect(body.classList.contains('rail-open')).toBe(false)
+  })
+})
+
 describe('DashboardShell rail drawer — mobile a11y', () => {
   afterEach(() => {
     // Возвращаем desktop-заглушку из setup.ts.
@@ -248,6 +276,29 @@ describe('DashboardShell rail drawer — mobile a11y', () => {
 
     fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(last)
+  })
+
+  test('Tab wraps from the roving satellite of a real open orbit, ignoring tabindex=-1 satellites', () => {
+    mockMobile(true)
+    const helpers = Array.from({ length: 4 }, (_, i) => ({ profile: `p${i}`, name: `Helper ${i}`, trigger: 'one_shot' as const, mode: 'advisory' as const }))
+    const { container } = render(
+      <DashboardShell
+        rail={
+          <div className="stage-item" data-stage-id="s1">
+            <button type="button" className="stage-row">Stage one</button>
+            <StageOrbit stageId="s1" assistants={helpers} />
+          </div>
+        }
+        tabs={<div>tabs</div>}
+        workspace={<div>workspace</div>}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('Toggle stages'))
+    fireEvent.click(screen.getByRole('button', { name: /declared for s1/ }))
+    const sats = Array.from(container.querySelectorAll<HTMLElement>('.stage-orbit-satellite'))
+    act(() => { sats[0]!.focus() })
+    expect(fireEvent.keyDown(sats[0]!, { key: 'Tab' })).toBe(false)
+    expect(document.activeElement).toBe(container.querySelector('.stage-row'))
   })
 
   test('before the first status (no stages yet) the open drawer takes focus itself and Tab cannot leave it', () => {

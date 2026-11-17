@@ -821,6 +821,34 @@ describe('useStatus', () => {
     expect(byId.get('f')?.quota).toMatchObject({ provider: 'claude', source: 'text', pauseReason: '' }) // неизвестные enum → безопасные значения
   })
 
+  test('парсит declared_assistants: битые элементы отброшены, старый сервер и пустой список дают undefined', () => {
+    const { stages } = normalizeStatus({
+      stages: [
+        {
+          id: 'a', status: 'pending',
+          declared_assistants: [
+            { profile: 'reviewer', name: 'Code reviewer', trigger: 'checkpoints', mode: 'required', loop_every: '5m' },
+            { profile: 'scribe', name: '', trigger: 'on_full_moon' },
+            { profile: '', name: 'no profile', trigger: 'one_shot', mode: 'advisory' },
+            { profile: 'x' },
+            'oops',
+          ],
+        },
+        { id: 'b', status: 'pending' },
+        { id: 'c', status: 'pending', declared_assistants: [] },
+        { id: 'd', status: 'pending', declared_assistants: 'oops' },
+      ],
+    })
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('a')?.declaredAssistants).toEqual([
+      { profile: 'reviewer', name: 'Code reviewer', trigger: 'checkpoints', mode: 'required', loopEvery: '5m' },
+      { profile: 'scribe', name: 'scribe', trigger: 'on_full_moon', mode: 'advisory', loopEvery: undefined },
+    ])
+    expect(byId.get('b')?.declaredAssistants).toBeUndefined()
+    expect(byId.get('c')?.declaredAssistants).toBeUndefined()
+    expect(byId.get('d')?.declaredAssistants).toBeUndefined()
+  })
+
   test('парсит timing по Go-контракту StageTimingView, мусор и отсутствие дают undefined', () => {
     const { stages } = normalizeStatus({
       stages: [

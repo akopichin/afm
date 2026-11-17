@@ -3,6 +3,7 @@ import { attachAssistant, type AttachHelperRequest } from '../../api/run-client'
 import { describeExecutor, describeUnavailable, executorTitle, type AssistantProfile } from '../../types/assistant-profile'
 import { useUnknownCommandName } from '../../lib/executor-label'
 import { useModalDialog } from '../../lib/focus-trap'
+import { HELPER_TRIGGERS, HELPER_TRIGGER_LABELS } from '../../lib/helper-trigger'
 
 export type AttachHelperDialogProps = {
   stageId: string
@@ -99,10 +100,9 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
               <label className="attach-helper-field">
                 <span>Trigger</span>
                 <select value={trigger} onChange={(e) => setTrigger(e.target.value as AttachHelperRequest['trigger'])}>
-                  <option value="one_shot">One shot</option>
-                  <option value="on_completion">On stage completion</option>
-                  <option value="checkpoints">At checkpoints</option>
-                  <option value="on_message">On message</option>
+                  {HELPER_TRIGGERS.map((value) => (
+                    <option key={value} value={value}>{HELPER_TRIGGER_LABELS[value]}</option>
+                  ))}
                 </select>
               </label>
             </div>

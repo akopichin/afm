@@ -852,3 +852,77 @@ test('stage time shares the status line, distinguishes pending from zero and sta
   expect(started).toHaveAccessibleDescription('Stage time 0s')
   expect(started.querySelector('[aria-live]')).toBeNull()
 })
+
+describe('StagesList: орбита объявленных помощников', () => {
+  const declared = [
+    { profile: 'reviewer', name: 'Reviewer', trigger: 'checkpoints', mode: 'required' },
+    { profile: 'scribe', name: 'Scribe', trigger: 'one_shot', mode: 'advisory' },
+  ]
+  const pendingStage: Stage = {
+    ...railStage, id: 'p', status: 'pending', timing: { started: false, complete: true }, declaredAssistants: declared,
+  }
+  const renderList = (stage: Stage, props: { collaborationEnabled?: boolean; assistants?: Record<string, StageAssistantsSummary> } = {}) =>
+    render(
+      <StagesList
+        stages={[stage]} selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED}
+        collaborationEnabled={props.collaborationEnabled ?? true} assistants={props.assistants}
+      />,
+    )
+
+  test('хаб с числом деклараций у никогда не стартовавшей стадии, вне .stage-row', () => {
+    renderList(pendingStage)
+    const hub = screen.getByRole('button', { name: '2 helpers declared for p' })
+    expect(hub.closest('.stage-actions')).not.toBeNull()
+    expect(hub.closest('.stage-row')).toBeNull()
+    expect(hub).toHaveTextContent('2')
+  })
+
+  test.each([
+    ['collaboration выключена', pendingStage, false],
+    ['стадия уже стартовала', { ...pendingStage, timing: { started: true, complete: false } } as Stage, true],
+    ['нет timing', { ...pendingStage, timing: undefined } as Stage, true],
+    ['нет деклараций', { ...pendingStage, declaredAssistants: undefined } as Stage, true],
+  ])('нет хаба: %s', (_name, stage, enabled) => {
+    renderList(stage, { collaborationEnabled: enabled })
+    expect(document.querySelector('.stage-orbit')).toBeNull()
+  })
+
+  test('сосуществует с переключателем ветки помощников, клик по хабу не выбирает стадию', () => {
+    const onSelect = vi.fn()
+    render(
+      <StagesList
+        stages={[pendingStage]} selectedStageId={null} onSelect={onSelect} accounting={ACCOUNTING_UNSUPPORTED}
+        collaborationEnabled assistants={{ p: summaryOf([makeTask()]) }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '2 helpers declared for p' }))
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /helper tasks for p/ })).toBeInTheDocument()
+  })
+
+  test('после первого старта хаб исчезает, дерево задач остаётся', () => {
+    const { rerender } = renderList(pendingStage, { assistants: { p: summaryOf([makeTask()]) } })
+    expect(document.querySelector('.stage-orbit')).not.toBeNull()
+    rerender(
+      <StagesList
+        stages={[{ ...pendingStage, status: 'running', timing: { started: true, complete: false } }]}
+        selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED} collaborationEnabled
+        assistants={{ p: summaryOf([makeTask()]) }}
+      />,
+    )
+    expect(document.querySelector('.stage-orbit')).toBeNull()
+    expect(screen.getByRole('button', { name: /helper tasks for p/ })).toBeInTheDocument()
+  })
+
+  test('смена runEpoch пересоздаёт орбиту: открытое состояние не переживает смену рана', () => {
+    const { rerender } = render(
+      <StagesList stages={[pendingStage]} selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED} collaborationEnabled runEpoch={1} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '2 helpers declared for p' }))
+    expect(screen.getByRole('group', { name: /Helpers declared/ })).toBeInTheDocument()
+    rerender(
+      <StagesList stages={[pendingStage]} selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED} collaborationEnabled runEpoch={2} />,
+    )
+    expect(screen.queryByRole('group', { name: /Helpers declared/ })).toBeNull()
+  })
+})

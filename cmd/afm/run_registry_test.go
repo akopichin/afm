@@ -84,10 +84,10 @@ func TestRestart_DashboardConfigBuiltAfterRegistry(t *testing.T) {
 		t.Fatalf("resumed run: %v", err)
 	}
 
-	cfg := dashboardStageConfig(stages)
+	cfg := dashboardStageConfig(stages, profileTitles(nil))
 	buildCfg, ok := cfg["build"]
 	if !ok {
-		t.Fatal(`dashboardStageConfig(stages)["build"] missing`)
+		t.Fatal(`dashboardStageConfig(stages, profileTitles(nil))["build"] missing`)
 	}
 	if len(buildCfg.Buttons) != 1 || buildCfg.Buttons[0] != "Run linter" {
 		t.Fatalf("dashboard config built from the edited stages, not the registry-restored ones: %+v", buildCfg)
@@ -95,7 +95,7 @@ func TestRestart_DashboardConfigBuiltAfterRegistry(t *testing.T) {
 }
 
 func TestDashboardStageConfigCarriesDeclaredArtifacts(t *testing.T) {
-	cfg := dashboardStageConfig([]flow.Stage{{ID: "a", Artifacts: []flow.Artifact{{Name: "report", Path: "./r.md"}}}})
+	cfg := dashboardStageConfig([]flow.Stage{{ID: "a", Artifacts: []flow.Artifact{{Name: "report", Path: "./r.md"}}}}, profileTitles(nil))
 	want := []server.DeclaredArtifact{{Name: "report", Path: "./r.md"}}
 	if !reflect.DeepEqual(cfg["a"].Artifacts, want) {
 		t.Fatalf("Artifacts = %+v, want %+v", cfg["a"].Artifacts, want)

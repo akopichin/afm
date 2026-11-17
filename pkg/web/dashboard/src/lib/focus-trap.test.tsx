@@ -1,7 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, describe, expect, test } from 'vitest'
-import { useModalDialog } from './focus-trap'
+import { useModalDialog, visibleFocusables } from './focus-trap'
 
 function Dialog({ returnFocus }: { returnFocus?: () => HTMLElement | null }) {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -66,5 +66,14 @@ describe('useModalDialog focus keeper', () => {
     opener.remove()
     await Promise.resolve()
     expect(other).toHaveFocus()
+  })
+})
+
+describe('visibleFocusables', () => {
+  test('skips tabindex=-1 buttons so roving satellites are not trap boundaries', () => {
+    const root = document.createElement('div')
+    root.innerHTML = '<button id="a">a</button><button id="b" tabindex="-1">b</button><button id="c" tabindex="0">c</button>'
+    document.body.append(root)
+    expect(visibleFocusables(root).map((el) => el.id)).toEqual(['a', 'c'])
   })
 })

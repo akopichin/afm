@@ -7,6 +7,8 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Show declared stage helpers in the dashboard before a stage starts: a hub in the stage rail opens an orbit of helper circles with name and trigger tooltips. `GET /api/status` stage views gain `declared_assistants` when collaboration is enabled. See `docs/dashboard.md`.
+
 - Upgrade afm-engine to v1.2.1: increase the fixed helper prompt limit from
   200 KiB to 2 MiB, allowing larger inline stage inputs.
 

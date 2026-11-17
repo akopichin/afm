@@ -426,3 +426,119 @@
 .stage-status-line .stage-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Time hangs on the row's right edge, at the same inset as .stage-actions: an even column that takes no width from the status. */
 .stage-time { position: absolute; right: 8px; color: var(--text-muted); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* === Stage orbit: declared helpers of a stage that has not started yet === */
+.stage-orbit {
+  display: inline-flex;
+  align-items: center;
+}
+.stage-orbit-hub {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  box-sizing: border-box;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px dashed var(--control-border);
+  border-radius: 50%;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.stage-orbit-hub::after {
+  /* Hit area of 28px (44px on coarse pointers) around the 26px visual circle. */
+  content: "";
+  position: absolute;
+  inset: -2px;
+}
+.stage-orbit-hub:hover,
+.stage-orbit[data-open="true"] .stage-orbit-hub {
+  color: var(--text-primary);
+  border-style: solid;
+}
+.stage-orbit-count {
+  font-variant-numeric: tabular-nums;
+}
+.stage-orbit-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* Fixed layer anchored at the hub centre: not clipped by the rail's scroll area. */
+.stage-orbit-layer {
+  --orbit-sat: 30px;
+  position: fixed;
+  width: 0;
+  height: 0;
+  z-index: 60;
+}
+/* The open hub sits above the layer: bridge strips start at its centre, but its hit area must stay the hub's. */
+.stage-orbit[data-open="true"] .stage-orbit-hub { z-index: 61; }
+.stage-orbit-bridge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin-top: calc(var(--orbit-sat) * -0.4);
+  transform-origin: 0 50%;
+}
+.stage-orbit-satellite {
+  position: absolute;
+  left: calc(var(--orbit-dx) - var(--orbit-sat) / 2);
+  top: calc(var(--orbit-dy) - var(--orbit-sat) / 2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: var(--orbit-sat);
+  height: var(--orbit-sat);
+  padding: 0;
+  border: 1px dashed var(--control-border);
+  border-radius: 50%;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  animation: orbitIn 0.16s ease-out backwards;
+  animation-delay: var(--orbit-delay, 0ms);
+}
+.stage-orbit-satellite:hover,
+.stage-orbit-satellite:focus-visible {
+  border-style: solid;
+}
+.stage-orbit-tooltip {
+  position: absolute;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+@keyframes orbitIn {
+  from { opacity: 0; transform: translate(calc(-1 * var(--orbit-dx)), calc(-1 * var(--orbit-dy))) scale(0.6); }
+  to   { opacity: 1; transform: none; }
+}
+@media (pointer: coarse) {
+  .stage-orbit-layer { --orbit-sat: 44px; }
+  .stage-orbit-hub::after { inset: -10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-orbit-satellite { animation: none; animation-delay: 0ms; }
+}

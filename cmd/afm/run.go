@@ -336,7 +336,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		Description: f.Description,
 		// The dashboard reads stage config from the runtime registry on every call, not a map frozen
 		// at startup.
-		Stages:            registryStageProvider{reader: read},
+		Stages:            registryStageProvider{reader: read, profiles: profileRegistry(collab)},
 		Store:             read,
 		UIBus:             read.Events(),
 		RedactSecrets:     read.RedactSecrets,

@@ -43,6 +43,35 @@ export type Stage = {
   quota?: StageQuota
   // timing — учёт времени стадии (Go StageView.Timing). undefined — старый сервер без поля.
   timing?: StageTiming
+  // declaredAssistants — помощники из `assistants:` flow YAML (Go StageView.DeclaredAssistants). undefined — старый
+  // сервер, collaboration выключена или объявлений нет.
+  declaredAssistants?: DeclaredAssistant[]
+}
+
+// DeclaredAssistant — один объявленный помощник стадии. trigger/mode — строки сервера: неизвестное значение
+// показывается как есть, а не отбрасывается.
+export type DeclaredAssistant = {
+  profile: string
+  name: string
+  trigger: string
+  mode: string
+  loopEvery?: string
+}
+
+// parseDeclaredAssistants отбрасывает битые элементы; пустой результат — undefined (нечего показывать).
+export function parseDeclaredAssistants(raw: unknown): DeclaredAssistant[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const list: DeclaredAssistant[] = []
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue
+    const obj = item as Record<string, unknown>
+    if (typeof obj.profile !== 'string' || obj.profile === '' || typeof obj.trigger !== 'string') continue
+    const name = typeof obj.name === 'string' && obj.name !== '' ? obj.name : obj.profile
+    const mode = typeof obj.mode === 'string' ? obj.mode : 'advisory'
+    const loopEvery = typeof obj.loop_every === 'string' && obj.loop_every !== '' ? obj.loop_every : undefined
+    list.push({ profile: obj.profile, name, trigger: obj.trigger, mode, loopEvery })
+  }
+  return list.length > 0 ? list : undefined
 }
 
 // StageQuota — малый общий вид quota-парковки стадии или helper-задачи (сервер отдаёт RFC3339 в UTC; не вся

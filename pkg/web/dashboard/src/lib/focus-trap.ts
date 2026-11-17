@@ -5,11 +5,12 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef, type Ref
 export const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
 
-// visibleFocusables возвращает РЕАЛЬНО видимые фокусируемые элементы: FOCUSABLE_SELECTOR ловит и скрытые
-// CSS-ом узлы, на которых .focus — no-op, и фокус остался бы снаружи модалки.
+// visibleFocusables возвращает РЕАЛЬНО видимые Tab-достижимые элементы: FOCUSABLE_SELECTOR ловит и скрытые
+// CSS-ом узлы, на которых .focus — no-op, и фокус остался бы снаружи модалки; кнопки с tabindex=-1
+// (roving-слоты) не являются границами цикла Tab.
 export function visibleFocusables(root: HTMLElement): HTMLElement[] {
   const all = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-  return all.filter((el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : true))
+  return all.filter((el) => el.getAttribute('tabindex') !== '-1').filter((el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : true))
 }
 
 // trapTab замыкает Tab/Shift+Tab внутри root: с последнего элемента — на первый и обратно. Фокус на самом

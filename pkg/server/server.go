@@ -136,6 +136,18 @@ type StageConfig struct {
 	Buttons     []string // Labels only; the orchestrator resolves prompts on click.
 	// Artifacts are the files the stage declares in flow.yaml, so a reader can tell which ones to expose.
 	Artifacts []DeclaredArtifact
+	// Assistants are the helpers the stage declares in flow.yaml, in YAML order, reduced to what a reader shows.
+	Assistants []DeclaredAssistant
+}
+
+// DeclaredAssistant is one helper a stage declares, with Trigger and Mode already defaulted. It carries no
+// instruction, skills, budget or loop prompt: the dashboard only names the helper.
+type DeclaredAssistant struct {
+	Profile   string             `json:"profile"`
+	Name      string             `json:"name"`
+	Trigger   assistants.Trigger `json:"trigger"`
+	Mode      assistants.Mode    `json:"mode"`
+	LoopEvery string             `json:"loop_every,omitempty"`
 }
 
 // DeclaredArtifact is one artifact a stage declares; Path is the flow.yaml value, where "./" means the stage's

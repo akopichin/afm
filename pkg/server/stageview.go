@@ -57,6 +57,8 @@ type StageView struct {
 	Quota *QuotaView `json:"quota,omitempty"`
 	// Timing is the stage's time ledger; it does not depend on accounting.
 	Timing *StageTimingView `json:"timing,omitempty"`
+	// DeclaredAssistants are the helpers flow.yaml declares for the stage; absent while collaboration is off.
+	DeclaredAssistants []DeclaredAssistant `json:"declared_assistants,omitempty"`
 }
 
 // StageTimingView is the client form of state.StageTiming. The sums are present only for a started stage with
@@ -210,6 +212,7 @@ func BuildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 			AwaitingAssistantsBlocked: awaitingAssistantsBlocked,
 			Quota:                     NewQuotaView(implorchestrator.StageQuota(st)),
 			Timing:                    newStageTimingView(st.Timing),
+			DeclaredAssistants:        cfg.Assistants,
 		})
 	}
 	return views

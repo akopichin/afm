@@ -191,8 +191,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData, ShowMoney: s.showMoney}
 	}
 	resp.Stages = BuildStageViews(rs, s.runDir, s.stageConfigs(), stageCosts)
-	for _, view := range resp.Stages {
-		if v := view.Verify; v != nil {
+	for i := range resp.Stages {
+		// Declarations are part of the collaboration capability, like /api/assistant-profiles.
+		if s.assistantProfiles == nil {
+			resp.Stages[i].DeclaredAssistants = nil
+		}
+		if v := resp.Stages[i].Verify; v != nil {
 			v.CommandName = verifyCommandName(v.Kind, v.Command, s.commandName)
 		}
 	}

@@ -772,6 +772,8 @@ export function App(): ReactElement {
                 canAddStage={capabilities.addStage}
                 onAddStage={() => setAddStageOpen(true)}
                 statusAvailable={statusAvailable}
+                collaborationEnabled={capabilities.collaboration}
+                runEpoch={runEpoch}
               />
             }
             tabs={
