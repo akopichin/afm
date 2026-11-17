@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,8 +52,21 @@ func TestMain(m *testing.M) {
 		os.Exit(runMain([]string{"check"})) //nolint:revive // deliberate custom exit code, see comment above
 		return
 	}
-	// Process-wide throwaway HOME: runs started from tests publish themselves under ~/.afm/active-runs, and that
-	// must never be the developer's real registry.
+	// Keep nested Go builds on the original caches when HOME is isolated, including private modules.
+	goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	out, err := exec.Command(goBin, "env", "-json", "GOMODCACHE", "GOCACHE").Output()
+	var caches map[string]string
+	if err == nil {
+		err = json.Unmarshal(out, &caches)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(9) //nolint:revive // deliberate custom exit code, see comment above
+	}
+	for key, value := range caches {
+		_ = os.Setenv(key, value)
+	}
+	// Runs publish themselves under ~/.afm/active-runs; tests must never use the developer's registry.
 	home, err := os.MkdirTemp("", "afm-test-home-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -63,6 +77,15 @@ func TestMain(m *testing.M) {
 	// No explicit os.Exit(m.Run()) needed: the `go test` runner applies
 	// m.Run()'s exit code automatically once TestMain returns (Go 1.15+).
 	m.Run()
+}
+
+func TestGoModuleCacheSurvivesIsolatedHome(t *testing.T) {
+	goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	cmd := exec.Command(goBin, "list", "-mod=readonly", "-find", "github.com/akopichin/afm-engine/engine")
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "GOPROXY=off", "GOSUMDB=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("private module lookup with isolated HOME and downloads disabled: %v\n%s", err, out)
+	}
 }
 
 func TestExitError_ProcessExitCode(t *testing.T) {
