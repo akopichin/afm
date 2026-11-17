@@ -930,6 +930,7 @@ describe('ThreadConversation in Run conversations mode', () => {
       const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
       render(<Harness />)
       await loaded('Question q1')
+      await waitFor(() => expect(observedIds()).toEqual(['q1']))
       see('q1', 100)
       expect(document.querySelectorAll('.is-new-agent-message')).toHaveLength(0)
       hidden.mockReturnValue(false)
