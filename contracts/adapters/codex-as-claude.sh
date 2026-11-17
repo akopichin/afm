@@ -259,8 +259,96 @@ emit_afm_final() {
           end' "$1"
 }
 
+# exec --json omits subscription quota; query the account without starting a model turn.
+# A missing/older app-server must never prevent the actual agent from running.
+emit_limit_warning() {
+    command -v python3 >/dev/null 2>&1 || return 0
+    python3 - "${CODEX_BIN:-codex}" <<'PY_QUOTA' 2>/dev/null || true
+import json
+import math
+import os
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+process = None
+try:
+    process = subprocess.Popen(
+        [sys.argv[1], "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    deadline = time.monotonic() + 10
+    pending = b""
+
+    def send(message):
+        process.stdin.write(json.dumps(message).encode() + b"\n")
+        process.stdin.flush()
+
+    send({"id": 1, "method": "initialize", "params": {
+        "clientInfo": {"name": "afm-quota-warning", "version": "1"}}})
+    response = None
+    while time.monotonic() < deadline and response is None:
+        if not selector.select(max(0, deadline - time.monotonic())):
+            break
+        chunk = os.read(process.stdout.fileno(), 65536)
+        if not chunk:
+            break
+        pending += chunk
+        if len(pending) > 1048576:
+            break
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            message = json.loads(line)
+            if message.get("id") == 1:
+                if "error" in message:
+                    raise ValueError("initialize failed")
+                send({"method": "initialized", "params": {}})
+                send({"id": 2, "method": "account/rateLimits/read"})
+            elif message.get("id") == 2:
+                response = message.get("result", {})
+                break
+
+    snapshot = (response or {}).get("rateLimits") or {}
+    for name in ("primary", "secondary"):
+        window = snapshot.get(name) or {}
+        used = window.get("usedPercent")
+        if type(used) not in (int, float) or not math.isfinite(used) or not 90 <= used <= 100:
+            continue
+        minutes = window.get("windowDurationMins")
+        label = {300: "five_hour", 10080: "weekly"}.get(minutes, name)
+        info = {"status": "allowed_warning", "rateLimitType": label, "utilization": used / 100}
+        reset = window.get("resetsAt")
+        if type(reset) in (int, float) and math.isfinite(reset) and reset > 0:
+            info["resetsAt"] = reset
+        print(json.dumps({"type": "rate_limit_event", "rate_limit_info": info}), flush=True)
+except (OSError, ValueError, TypeError, AttributeError):
+    pass
+finally:
+    if process is not None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+PY_QUOTA
+}
+
 if [[ "$CODEX_VERIFY" == "1" && "${AFM_STREAM_EXTENSION:-}" == "1" ]]; then
     printf '%s\n' '{"type":"system","subtype":"afm_stream","version":1}'
+    emit_limit_warning
     # PIPESTATUS[1] is codex's own status; errexit is off so a malformed line cannot stop the stream.
     set +e
     printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" | {
@@ -272,6 +360,7 @@ if [[ "$CODEX_VERIFY" == "1" && "${AFM_STREAM_EXTENSION:-}" == "1" ]]; then
     codex_exit=${PIPESTATUS[1]}
     set -e
 
+    emit_limit_warning
     extract_usage "$out_file"
     extract_failure "$out_file"
     resolved_model=$(resolve_codex_model)
@@ -289,11 +378,13 @@ fi
 
 if [[ "$CODEX_VERIFY" == "1" ]]; then
     # --- verify mode: UNCHANGED aggregation path ---
+    emit_limit_warning
     set +e
     printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" > "$out_file"
     codex_exit=$?
     set -e
 
+    emit_limit_warning
     final_text=""
     while IFS= read -r line; do
         ev_type=$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null) || continue
@@ -341,6 +432,8 @@ if [[ "$CODEX_VERIFY" == "1" ]]; then
     exit 0
 fi
 
+emit_limit_warning
+
 # Capture Codex's PIPESTATUS[1] with errexit suspended while teeing and translating each line.
 set +e
 printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" | {
@@ -352,6 +445,7 @@ printf '%s' "$prompt" | "${CODEX_BIN:-codex}" "${codex_args[@]}" | {
 codex_exit=${PIPESTATUS[1]}
 set -e
 
+emit_limit_warning
 extract_usage "$out_file"
 extract_failure "$out_file"
 resolved_model=$(resolve_codex_model)

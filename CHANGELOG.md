@@ -3,6 +3,14 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-17
+
+### Fix:
+
+- Show yellow Codex subscription-quota warnings in the dashboard when a reported
+  window is at least 90% used. The adapter checks account quota before and after
+  each turn; unavailable quota information does not interrupt the agent.
+
 ## 2026-11-16
 
 ### Improvement:

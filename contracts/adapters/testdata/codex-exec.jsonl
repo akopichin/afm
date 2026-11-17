@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a1e8e9-3d12-7922-9821-48302252ed9d"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll write the required probe summary to the stage file."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"cat > '/fixture/probe/execution_summary.md' <<'EOF'\n## Summary\nPROBE_OK\n\n## Changes\n- /fixture/probe/execution_summary.md\n\n## Result\nPROBE_OK\nEOF\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"cat > '/fixture/probe/execution_summary.md' <<'EOF'\n## Summary\nPROBE_OK\n\n## Changes\n- /fixture/probe/execution_summary.md\n\n## Result\nPROBE_OK\nEOF\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"PROBE_OK"}}
+{"type":"turn.completed","usage":{"input_tokens":42762,"cached_input_tokens":33024,"cache_write_input_tokens":0,"output_tokens":224,"reasoning_output_tokens":20}}
