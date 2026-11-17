@@ -12,6 +12,8 @@ argv_file="$tmp/argv"
 fake_codex="$tmp/fakecodex"
 cat >"$fake_codex" <<'EOF'
 #!/usr/bin/env bash
+# Account probing is separate from the exec argv under test.
+if [[ "${1:-}" == "app-server" ]]; then exit 1; fi
 # --help probe: do NOT advertise --output-last-message.
 for a in "$@"; do
   if [ "$a" = "--help" ]; then echo "usage: codex exec"; exit 0; fi
