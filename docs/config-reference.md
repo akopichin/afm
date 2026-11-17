@@ -201,6 +201,19 @@ The wait and its wake time survive a restart. Work using the same provider
 shares the hold, so it waits without consuming another refusal. A normal
 temporary rate-limit or transport error still follows the [retry policy](stage-lifecycle.md).
 
+Codex adapters check subscription quota before and after each agent turn using
+`codex app-server`, because `codex exec --json` does not include that information.
+A reported window at least 90% used produces a yellow dashboard warning, including
+the reset time when available. These checks do not start a model turn or consume
+reset credits. Repeated warnings for the same provider, window and reset are
+shown once per run. A long-running turn that crosses the threshold is checked
+again when it finishes.
+
+Quota checks require `python3` and an app-server version supporting
+`account/rateLimits/read`. Each check has a ten-second response deadline; missing
+tools, unavailable subscription data and request failures leave the agent running
+normally. A warning alone does not pause work or establish quota exhaustion.
+
 ## Reasoning effort
 
 `client.reasoning` sets the reasoning (thinking) effort for the default claude

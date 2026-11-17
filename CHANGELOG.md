@@ -13,9 +13,18 @@ older ones further down. Dates follow the commits that shipped each change.
 - Extend `afm mcp serve --connect` to connect to an `afm serve` host as well as a single run.
 - **Breaking:** `/mcp` is now served by default whenever the run has an HTTP API, with every permission group. Earlier, `/mcp` needed `--mcp` and was read-only without `--mcp-allow`. Use `--mcp-allow read` for the old behavior or `--mcp-off` to disable it. See `docs/mcp.md`.
 
+### Fix:
+
+- Show yellow Codex subscription-quota warnings in the dashboard when a reported
+  window is at least 90% used. The adapter checks account quota before and after
+  each turn; unavailable quota information does not interrupt the agent.
+
 ## 2026-11-16
 
 ### Improvement:
+
+- Upgrade afm-engine to v1.2.1: increase the fixed helper prompt limit from
+  200 KiB to 2 MiB, allowing larger inline stage inputs.
 
 - Add MCP for AI clients: `afm run --mcp` serves read-only tools and resources on `/mcp` of the HTTP API (core and dashboard), and `--mcp-allow=reply,stages,approve,budget` enables changes group by group. Plan approval is strict: the client approves the exact revision it read, otherwise `approval_stale`. `afm mcp serve --connect <url>` bridges stdio clients to a running run. See `docs/mcp.md`.
 - Add `GET`/`POST /api/stages/{id}/approval` and Go SDK `ApprovalSnapshot` and `ApproveExpected` to approve only a plan the caller has read. Uses afm-engine v1.2.0.

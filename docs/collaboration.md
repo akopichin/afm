@@ -92,6 +92,18 @@ versions are not checked.
 waits until the stage agent yields or finishes; waiting in the mesh yields the
 slot, so there is no deadlock.
 
+### Helper prompt size
+
+The full assembled prompt for each helper turn is limited to **2 MiB
+(2,097,152 bytes)**. This includes role and task instructions, the parent stage's
+plan and inline input artifacts, previous results, messages and service sections.
+A larger prompt fails before the helper process starts. The limit is fixed and
+independent of the model's context window.
+
+For large input artifacts, `inline: false` passes a file path instead of the
+file contents. `runtime_context: isolated` controls the process environment;
+it does not remove inherited input artifacts from the prompt.
+
 ### Runtime context
 
 `runtime_context` sets what environment a helper's process gets. It is
