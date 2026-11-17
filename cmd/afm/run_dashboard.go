@@ -227,6 +227,12 @@ var hostBrowserOpener = launchHostBrowserOpener
 // which the caller hands to the run as its agent API address. Core mounts no Web UI and opens no tab. announce —
 // вкладку открывают и URL печатают один раз за процесс (первый цикл); следующий цикл поднимает сервер тихо.
 func startServer(cfg config.Config, sc server.Config, run dashboardSurface, launch launchMode, announce bool) (*server.Server, string, error) {
+	return startServerOn(cfg, sc, run, launch, announce, nil)
+}
+
+// startServerOn is startServer serving on ln when the caller opened the socket earlier; nil listens on the port
+// from cfg. The listener belongs to the server from the call on.
+func startServerOn(cfg config.Config, sc server.Config, run dashboardSurface, launch launchMode, announce bool, ln net.Listener) (*server.Server, string, error) {
 	// One delivery per process: a later dashboard of a repeated run reaches the operator through the terminal.
 	tokenPipe := ownerTokenPipe
 	ownerTokenPipe = nil
@@ -258,7 +264,13 @@ func startServer(cfg config.Config, sc server.Config, run dashboardSurface, laun
 		sc.OwnerWaits = ownerWaitActions{run}
 	}
 	srv := server.New(sc)
-	addr, err := srv.Start()
+	var addr string
+	var err error
+	if ln != nil {
+		addr, err = srv.StartOn(ln)
+	} else {
+		addr, err = srv.Start()
+	}
 	if err != nil {
 		_ = srv.Shutdown(context.Background())
 		if launch == launchCore {

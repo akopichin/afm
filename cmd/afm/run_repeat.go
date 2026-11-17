@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"reflect"
 
 	"github.com/akopichin/afm-engine/engine"
@@ -31,6 +32,8 @@ type cycleResult struct {
 	Completed bool
 	// Budget — как бюджет повлиял на ран; не nil запрещает следующий цикл repeat.
 	Budget *engine.BudgetOutcome
+	// Task — задача, с которой прошёл ран: следующий цикл получает её же, даже если её взяли из task.md.
+	Task string
 }
 
 // cycleLoop — всё, что неизменно между циклами одного процесса `afm run`.
@@ -50,6 +53,11 @@ type cycleLoop struct {
 	// binder связывает каждый ран пакета с его снимком; nil вне --pipeline.
 	binder *pipelineBinder
 	mcp    mcpSettings
+	task   string // начальная задача --task; пусто — задачу продолженного рана читает executeFlow
+	// instanceID, registrar и listener живут весь процесс; listener отдаётся только первому циклу.
+	instanceID string
+	registrar  *runRegistrar
+	listener   net.Listener
 }
 
 // run проходит флоу и, пока включён repeat, повторяет его после каждого успешного рана. Единственный
@@ -68,6 +76,10 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 		runName:         runNameFor(l.worktreeName, f.Name),
 		pipeline:        l.binder,
 		mcp:             l.mcp,
+		task:            l.task,
+		instanceID:      l.instanceID,
+		registrar:       l.registrar,
+		listener:        l.listener,
 	}
 	if config.ReExecedIntoContainer() {
 		var err error
@@ -86,6 +98,7 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 			return next.continues()
 		}
 		res, err := executeCycle(ctx, f, cycleConfig(l.cfg, f, l.cliMaxParallel), hooks, opts)
+		opts.listener = nil // the first cycle's server owned it; later cycles listen on the pinned port themselves
 		if res.RunID != "" && !res.Resumed {
 			created = append(created, res.RunID)
 		}
@@ -131,6 +144,7 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 		f, hooks = next.flow, next.hooks
 		opts.forceNewRun = true // продолжать можно только ран первого входа процесса
 		opts.previousRunID = res.RunID
+		opts.task = res.Task
 		fmt.Printf("afm: starting cycle %d\n", completed+1)
 	}
 }

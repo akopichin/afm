@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/serve.schema.json",
+  "title": "afm serve configuration",
+  "description": "Schema for ~/.afm/serve.yaml, the allowlist of projects and pipelines that afm serve may start runs from.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "projects": {
+      "type": "array",
+      "description": "Directories a run may be started in.",
+      "items": { "$ref": "#/definitions/project" }
+    },
+    "pipelines": {
+      "type": "array",
+      "description": "Pipeline packages a run may be started from.",
+      "items": { "$ref": "#/definitions/pipeline" }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounds on concurrent runs started by the host.",
+      "properties": {
+        "max_running": { "type": "integer", "minimum": 1, "default": 4, "description": "Most runs the host keeps running at once." },
+        "max_starting": { "type": "integer", "minimum": 1, "default": 2, "description": "Most runs the host lets start at once." }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "When the host releases a finished run's runtime; off by default.",
+      "properties": {
+        "release_after": {
+          "type": "string",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$",
+          "description": "Go duration, for example 24h, after which a finished run is released. Omit to keep runtimes until released explicitly."
+        }
+      }
+    }
+  },
+  "definitions": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Identifier used in start requests: lowercase letters, digits and dashes."
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "path": { "type": "string", "pattern": "^/", "description": "Absolute path of an existing directory." }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "source": { "type": "string", "minLength": 1, "description": "Pipeline source accepted by afm run --pipeline: a local folder or a Git source." },
+        "options": { "type": "string", "pattern": "^/", "description": "Absolute path of an existing options file passed as --pipeline-options." }
+      }
+    }
+  }
+}

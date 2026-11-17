@@ -15,6 +15,8 @@ type runtimeInfo struct {
 	Mode            string `json:"mode"`
 	RunID           string `json:"run_id"`
 	Ready           bool   `json:"ready"`
+	// InstanceID is empty for an afm that predates the field.
+	InstanceID string `json:"instance_id"`
 }
 
 // fetchRuntime reads /api/runtime; found is false for an afm that predates the endpoint (404).
@@ -57,5 +59,13 @@ func (r *Run) detectMode(ctx context.Context) error {
 		return err
 	}
 	r.mode = Mode(info.Mode)
+	r.instanceID = info.InstanceID
 	return nil
+}
+
+// loadInstanceID remembers the process id /api/runtime reports. It is best effort: a run without one still works.
+func (r *Run) loadInstanceID(ctx context.Context) {
+	if info, found, err := r.fetchRuntime(ctx); err == nil && found {
+		r.instanceID = info.InstanceID
+	}
 }

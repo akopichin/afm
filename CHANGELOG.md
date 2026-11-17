@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-17
 
+### Improvement:
+
+- Add `afm serve`: a persistent loopback host that serves MCP for every afm run on the machine. It lists runs, starts new ones from the projects and pipelines in `~/.afm/serve.yaml` (`afm_run_start`, idempotent by `request_id`, limits `max_running` and `max_starting`), attaches runs started elsewhere, cancels or releases the ones it started, and forwards the tools of each run by `run_id`. Stopping the host leaves runs running; a restarted host finds them again. See `docs/serve.md`.
+- Register every `afm run` with an API in `~/.afm/active-runs/` so that hosts can discover it; the record has no secrets and is removed on exit. Runtime now reports an `instance_id`.
+- Add `afm run --task <text|@file|@-|URL>`: an initial task appended to the flow prompt, kept in the run directory for resume and repeat cycles. Inline text is visible in the `afm run` argv (use `@file` or `@-` to avoid it); it is never passed in `docker run` arguments, and the SDK and `afm serve` pass it by stdin or a file. Go SDK gets `Client.StartWithOptions` with `StartOptions.Task` and `Run.InstanceID`.
+- Extend `afm mcp serve --connect` to connect to an `afm serve` host as well as a single run.
+- **Breaking:** `/mcp` is now served by default whenever the run has an HTTP API, with every permission group. Earlier, `/mcp` needed `--mcp` and was read-only without `--mcp-allow`. Use `--mcp-allow read` for the old behavior or `--mcp-off` to disable it. See `docs/mcp.md`.
+
 ### Fix:
 
 - Show yellow Codex subscription-quota warnings in the dashboard when a reported

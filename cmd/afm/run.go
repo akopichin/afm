@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/akopichin/afm/contracts/worktree"
 	"github.com/akopichin/afm/pkg/mcpserver"
 	"github.com/akopichin/afm/pkg/pipeline"
+	"github.com/akopichin/afm/pkg/runregistry"
 	"github.com/akopichin/afm/pkg/server"
 )
 
@@ -44,9 +46,26 @@ type runOptions struct {
 	// containerBrowser — дескриптор browser из transport, прочитанный один раз за процесс (только в контейнере).
 	containerBrowser *browser.Descriptor
 	mcp              mcpSettings
+	// task дописывается к prompt флоу и сохраняется в каталоге каждого рана; пусто — ран берёт задачу из своего
+	// task.md, если он продолжает прежний.
+	task string
+	// instanceID отличает этот процесс по /api/runtime; registrar — его запись в реестре (nil без неё).
+	instanceID string
+	registrar  *runRegistrar
+	// listener — заранее открытый сокет API для первого цикла (--listen-any-port); остальные циклы слушают порт сами.
+	listener net.Listener
+}
+
+// runDeps are the steps of `afm run` a test replaces to stop the command at a known point.
+type runDeps struct {
+	preparePipeline func(ctx context.Context, pf pipelineFlags, base config.Config, worktreeName string, clearWorktree, clearForce, forceNew bool) (*pipelinePlan, error)
 }
 
 func newRunCmd() *cobra.Command {
+	return newRunCmdWith(runDeps{preparePipeline: preparePipelineRun})
+}
+
+func newRunCmdWith(deps runDeps) *cobra.Command {
 	var maxParallel int
 	var idleTimeout time.Duration
 	var port int
@@ -57,7 +76,12 @@ func newRunCmd() *cobra.Command {
 	var worktreeClearForce bool
 	var worktreeName string
 	var mcpFlag bool
+	var mcpOff bool
 	var mcpAllow string
+	var taskFlag string
+	var instanceIDFlag string
+	var launchID string
+	var listenAnyPort bool
 	var pf pipelineFlags
 
 	cmd := &cobra.Command{
@@ -86,6 +110,37 @@ func newRunCmd() *cobra.Command {
 			if cmd.Flags().Changed("port") {
 				cfg.Server.Port = &port
 			}
+			if listenAnyPort && cmd.Flags().Changed("port") {
+				return errors.New("--listen-any-port cannot be combined with --port")
+			}
+			instanceID := instanceIDFlag
+			if instanceID == "" {
+				instanceID = runregistry.NewInstanceID()
+			} else if !runregistry.ValidInstanceID(instanceID) {
+				return errors.New("--instance-id must be 32 lowercase hex characters")
+			}
+			if launchID != "" {
+				// A host-started run has nobody at the terminal: a tab would open on every launch.
+				noBrowser := false
+				cfg.Server.OpenBrowser = &noBrowser
+			}
+			// Opened once the command line is accepted: the port is known before the run is prepared and
+			// reaches the API server as is.
+			var apiListener net.Listener
+			if listenAnyPort {
+				ln, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					return fmt.Errorf("--listen-any-port: %w", err)
+				}
+				defer ln.Close() //nolint:errcheck
+				tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+				if !ok {
+					return fmt.Errorf("--listen-any-port: unexpected address %v", ln.Addr())
+				}
+				realPort := tcpAddr.Port
+				cfg.Server.Port = &realPort
+				apiListener = ln
+			}
 			// Before the flow, worktree, Docker re-exec or the run itself: a refused mode must create nothing.
 			launch, err := parseLaunchMode(modeFlag)
 			if err != nil {
@@ -94,9 +149,28 @@ func newRunCmd() *cobra.Command {
 			if err := launch.validate(cfg); err != nil {
 				return err
 			}
-			mcp, err := parseMCPSettings(mcpFlag, mcpAllow, cfg)
+			mcp, err := parseMCPSettings(mcpFlags{
+				on:       mcpFlag,
+				off:      mcpOff,
+				allowSet: cmd.Flags().Changed("mcp-allow"),
+				allow:    mcpAllow,
+			}, cfg)
 			if err != nil {
 				return err
+			}
+			// Before the flow, worktree or Docker re-exec: a refused task must create nothing.
+			var task string
+			if cmd.Flags().Changed("task") {
+				if task, err = loadTask(commandContext(cmd), taskFlag, cmd.InOrStdin()); err != nil {
+					return err
+				}
+			}
+
+			// Before the pipeline or worktree is prepared, so a process that dies there is still discoverable.
+			var registrar *runRegistrar
+			if cfg.Server.GetPort() > 0 && !config.ReExecedIntoContainer() {
+				registrar = openRegistrar(launch, cfg, mcp, instanceID, launchID)
+				defer registrar.Close()
 			}
 
 			var f *flow.Flow
@@ -104,7 +178,7 @@ func newRunCmd() *cobra.Command {
 			var plan *pipelinePlan
 			if pf.active() {
 				// The package's flow and agents are assembled in memory; no config file is read for them or written.
-				if plan, err = preparePipelineRun(commandContext(cmd), pf, cfg, worktreeName, worktreeClear, worktreeClearForce); err != nil {
+				if plan, err = deps.preparePipeline(commandContext(cmd), pf, cfg, worktreeName, worktreeClear, worktreeClearForce, task != ""); err != nil {
 					return err
 				}
 				f, cfg = plan.setup.loaded.Flow, plan.setup.cfg
@@ -141,6 +215,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err // resolveWorktree's own errors already carry a "worktree: " prefix
 			}
+			registrar.SetProject(runNameFor(worktreeName, f.Name), wtDir)
 			// Held for the entire run so a concurrent --worktree-clear always sees this flow's lock held
 			// — never released right after resolveWorktree returns, which would leave the run's whole
 			// lifetime unprotected. docker.ReExec spawns `docker run` as a child process and blocks on
@@ -161,9 +236,12 @@ func newRunCmd() *cobra.Command {
 			syncSkillsForRun(home, os.Stderr)
 
 			if cfg.Docker.IsDockerEnabled() {
-				saved, err := engine.SavedRunFor(mode, runsDir(), runNameFor(worktreeName, f.Name), f)
-				if err != nil {
-					return err
+				// A task starts a new run, so there is nothing saved to continue.
+				var saved *engine.SavedRun
+				if task == "" {
+					if saved, err = engine.SavedRunFor(mode, runsDir(), runNameFor(worktreeName, f.Name), f); err != nil {
+						return err
+					}
 				}
 				releaseOwnerTokenForDocker(os.Stdout)
 				var launchArgs []string
@@ -175,7 +253,26 @@ func newRunCmd() *cobra.Command {
 					defer os.Remove(launchPath) //nolint:errcheck
 					launchArgs = []string{"--pipeline-launch=" + launchPath}
 				}
-				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir, saved, launch, launchArgs...)
+				if task != "" {
+					// The container reads the task from a file: the text must not appear in docker's argv.
+					taskPath, err := writeTaskSnapshot(absRootDir(), task)
+					if err != nil {
+						return err
+					}
+					defer os.Remove(taskPath) //nolint:errcheck
+					launchArgs = append(launchArgs, "--task=@"+taskPath)
+				}
+				launchArgs = append(launchArgs, "--instance-id="+instanceID)
+				containerStarted := func() bool { return false }
+				if port := cfg.Server.GetPort(); port > 0 {
+					// Docker publishes the port itself: release it, and keep the container on the same one.
+					if apiListener != nil {
+						_ = apiListener.Close()
+					}
+					launchArgs = append(launchArgs, fmt.Sprintf("--port=%d", port), "--listen-any-port=false")
+					containerStarted = watchContainer(registrar, port)
+				}
+				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir, saved, launch, containerStarted, launchArgs...)
 			}
 
 			// reasoning is never a hard error — warn on non-canonical/cursor values and proceed. Emitted
@@ -197,8 +294,12 @@ func newRunCmd() *cobra.Command {
 				worktreeDir:     wtDir,
 				requireApproval: requireApproval,
 				exitOnFail:      resolvedExitOnFail,
-				forceNewRun:     mode != worktree.ClearNone,
+				forceNewRun:     mode != worktree.ClearNone || task != "",
 				mcp:             mcp,
+				task:            task,
+				instanceID:      instanceID,
+				registrar:       registrar,
+				listener:        apiListener,
 			}
 			if plan != nil {
 				loop.forceNewRun = loop.forceNewRun || plan.forceNew
@@ -215,8 +316,16 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "agent idle timeout")
 	cmd.Flags().IntVar(&port, "port", 0, "dashboard port (0=use config)")
 	cmd.Flags().StringVar(&modeFlag, "mode", "", "launch mode: dashboard (HTTP API and Web UI, default) or core (HTTP API only)")
-	cmd.Flags().BoolVar(&mcpFlag, "mcp", false, "serve MCP (read-only unless --mcp-allow) on /mcp of the HTTP API; needs a port")
-	cmd.Flags().StringVar(&mcpAllow, "mcp-allow", "", "MCP write permissions, comma-separated: reply,stages,approve,budget; requires --mcp")
+	cmd.Flags().BoolVar(&mcpFlag, "mcp", false, "serve MCP on /mcp of the HTTP API (default whenever the API runs); needs a port")
+	cmd.Flags().BoolVar(&mcpOff, "mcp-off", false, "do not serve MCP")
+	cmd.Flags().StringVar(&mcpAllow, "mcp-allow", "", "MCP permissions, comma-separated: reply,stages,approve,budget, or read for read-only (default: all groups)")
+	cmd.Flags().StringVar(&instanceIDFlag, "instance-id", "", "internal: process id a host expects in /api/runtime")
+	cmd.Flags().StringVar(&launchID, "launch-id", "", "internal: launch id of a host-started run")
+	cmd.Flags().BoolVar(&listenAnyPort, "listen-any-port", false, "internal: serve the HTTP API on a free loopback port")
+	_ = cmd.Flags().MarkHidden("instance-id")
+	_ = cmd.Flags().MarkHidden("launch-id")
+	_ = cmd.Flags().MarkHidden("listen-any-port")
+	cmd.Flags().StringVar(&taskFlag, "task", "", "initial task appended to the flow prompt: text, @file, @- (stdin) or an http(s) URL; starts a new run")
 	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "fail if a stage plan needs approval but no dashboard is running")
 	cmd.Flags().BoolVar(&exitOnFail, "exit-on-fail", false, "stop the run and exit 1 when a stage fails (env: AFM_EXIT_ON_FAIL)")
 	cmd.Flags().BoolVar(&worktreeClear, "worktree-clear", false, "recreate the flow worktree, discarding uncommitted changes but keeping its branch and commits; also starts a fresh run")
@@ -278,12 +387,22 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	if ws != nil {
 		files = engine.FileResolver{Resolve: workspaceResolveFile(ws), CurrentSHA: workspaceCurrentFileSHA(ws)}
 	}
+	// The task joins the prompt of this pass only: the engine reads Prompt after OnRunCreated, and the caller's
+	// flow stays as the user wrote it.
+	passFlow := *f
+	var task string
 	// The binder cannot fail the engine's callback; its error is acted on right after Open, before anything starts.
 	var runCreatedErr error
 	onRunCreated := func(runID string) {
 		if opts.pipeline != nil {
 			runCreatedErr = opts.pipeline.runCreated(runID, opts.cycle)
 		}
+		var err error
+		if task, err = prepareRunTask(filepath.Join(absPath(runsDir()), runID), opts.task); err != nil && runCreatedErr == nil {
+			runCreatedErr = err
+		}
+		passFlow.Prompt = promptWithTask(f.Prompt, task)
+		opts.registrar.SetRun(runID)
 		if opts.onRunCreated != nil {
 			opts.onRunCreated(runID)
 		}
@@ -311,7 +430,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	if exporter != nil {
 		engineOpts.BudgetExporter = exporter
 	}
-	run, err := engine.Open(ctx, engine.Spec{Flow: f, Config: cfg.Execution(), Hooks: hooks, AssistantLoops: loops}, engineOpts)
+	run, err := engine.Open(ctx, engine.Spec{Flow: &passFlow, Config: cfg.Execution(), Hooks: hooks, AssistantLoops: loops}, engineOpts)
 	if err != nil {
 		if ws != nil {
 			_ = ws.Close()
@@ -332,7 +451,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	api := run.Collaboration()
 	serverCfg := server.Config{
 		RunDir:      read.RunDir(),
-		Runtime:     server.RuntimeInfo{Mode: opts.launch.String(), Ready: run.Ready},
+		Runtime:     server.RuntimeInfo{Mode: opts.launch.String(), InstanceID: opts.instanceID, Ready: run.Ready},
 		Description: f.Description,
 		// The dashboard reads stage config from the runtime registry on every call, not a map frozen
 		// at startup.
@@ -382,12 +501,13 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		}
 		serverCfg.MCP = svc
 	}
-	srv, agentAPIURL, err := startServer(cfg, serverCfg, runSurface{run.Mesh(), run.Graph(), run.Flow()}, opts.launch, opts.cycle <= 1)
+	srv, agentAPIURL, err := startServerOn(cfg, serverCfg, runSurface{run.Mesh(), run.Graph(), run.Flow()}, opts.launch, opts.cycle <= 1, opts.listener)
 	if err != nil {
 		return cycleResult{}, err
 	}
 	if srv != nil {
 		defer func() { _ = srv.Shutdown(context.Background()) }()
+		opts.registrar.SetEndpoint(loopbackURL(agentAPIURL))
 	}
 	// Drains the Assistant and its bridges before the dashboard they talk to goes away.
 	defer func() { _ = run.Shutdown(context.Background()) }()
@@ -395,6 +515,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	if err := run.Start(ctx, engine.Endpoints{AgentAPIURL: agentAPIURL}); err != nil {
 		return cycleResult{}, err
 	}
+	opts.registrar.SetReady(true)
 	// The run is cancelled through ctx given to Start; Wait itself must outlive that cancellation to report
 	// the interrupted run's error.
 	res, _ := run.Wait(context.WithoutCancel(ctx))
@@ -402,7 +523,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		return cycleResult{RunID: res.RunID, Resumed: res.Resumed}, runExitError(ctx, res.Err, res.RunDir)
 	}
 	// Err is nil for a run with a failed stage too; success is the persisted finished state with all done.
-	out := cycleResult{RunID: res.RunID, Resumed: res.Resumed, Completed: res.Completed, Budget: res.Budget}
+	out := cycleResult{RunID: res.RunID, Resumed: res.Resumed, Completed: res.Completed, Budget: res.Budget, Task: task}
 	if res.Budget != nil && res.Budget.Held {
 		return out, budgetHeldExit(ctx, run, opts.flowPath, opts.pipeline != nil)
 	}

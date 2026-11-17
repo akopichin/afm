@@ -24,6 +24,7 @@ type Run struct {
 	port       int
 	pid        int
 	mode       Mode
+	instanceID string // from /api/runtime; empty for an afm that predates the field
 
 	interruptOnce sync.Once
 	killMu        sync.Mutex // orders a Kill against watchProcess deciding whether that Kill ended afm
@@ -44,6 +45,12 @@ func (r *Run) Port() int {
 // PID returns the OS process id of this run's afm subprocess.
 func (r *Run) PID() int {
 	return r.pid
+}
+
+// InstanceID returns the process id the run's /api/runtime reports, which tells this afm process from another one
+// that later listens on the same port. It is empty for an afm that does not report one.
+func (r *Run) InstanceID() string {
+	return r.instanceID
 }
 
 // readyTimeout is a variable so unit tests can shorten it.

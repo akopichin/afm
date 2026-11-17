@@ -24,17 +24,38 @@ type Groups struct {
 	enabled map[Group]bool
 }
 
-// ParseGroups reads a comma-separated list such as "reply,stages". There is deliberately no "all": every
-// permission has to be named. An empty list means read-only.
-func ParseGroups(csv string) (Groups, error) {
+// readOnlyKeyword names the read-only choice explicitly; it cannot be combined with write groups.
+const readOnlyKeyword Group = "read"
+
+// AllGroups enables every write group.
+func AllGroups() Groups {
 	g := Groups{enabled: map[Group]bool{}}
+	for _, name := range knownGroups {
+		g.enabled[name] = true
+	}
+	return g
+}
+
+// ParseGroups reads a comma-separated list such as "reply,stages". Inside the parser every permission has to be
+// named; the default of all groups is the CLI's choice (AllGroups). An empty list or the single word "read"
+// means read-only.
+func ParseGroups(csv string) (Groups, error) {
+	var names []Group
 	for _, raw := range strings.Split(csv, ",") {
-		name := Group(strings.TrimSpace(raw))
-		if name == "" {
-			continue
+		if name := Group(strings.TrimSpace(raw)); name != "" {
+			names = append(names, name)
 		}
+	}
+	g := Groups{enabled: map[Group]bool{}}
+	if slices.Contains(names, readOnlyKeyword) {
+		if len(names) != 1 {
+			return Groups{}, fmt.Errorf("%q cannot be combined with other MCP permission groups", readOnlyKeyword)
+		}
+		return g, nil
+	}
+	for _, name := range names {
 		if !slices.Contains(knownGroups, name) {
-			return Groups{}, fmt.Errorf("unknown MCP permission group %q (allowed: %s)", name, joinGroups(knownGroups))
+			return Groups{}, fmt.Errorf("unknown MCP permission group %q (allowed: %s, or read)", name, joinGroups(knownGroups))
 		}
 		g.enabled[name] = true
 	}

@@ -63,6 +63,17 @@ fmt.Println(status.RunState) // finished, failed or interrupted
 Core keeps running after the result, so `Run.Wait` does not return until
 `Shutdown`. Details and errors are in the SDK README.
 
+### Initial task and instance id
+
+`Client.StartWithOptions(ctx, flowPath, workDir, afmsdk.StartOptions{Task: "..."})` starts the
+run with an [initial task](core-mode.md#initial-task). The SDK passes it as `--task @-` on stdin,
+so the text is not in the process list. A task always starts a new run. `Start` is the same
+call with no options.
+
+`Run.InstanceID()` returns the id that the run's `/api/runtime` reports, the same one as in its
+`~/.afm/active-runs` record, so a caller can tell this process from another that later listens on
+the same port. It is empty for an `afm` that predates the field.
+
 ## Conditional approval
 
 `Run.Approve` approves whatever plan is waiting. To approve only a plan the caller

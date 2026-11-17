@@ -217,40 +217,16 @@ func (s *Service) pauseOrContinue(ctx context.Context, in stageInput, name strin
 }
 
 func (s *Service) registerControlTools() {
-	g := s.cfg.Groups
-	if g.Has(GroupReply) {
-		sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-			Name: "afm_interaction_reply",
-			Description: "Answer the question a stage is waiting on (phase and question_id come from its pending action). " +
-				"Not idempotent: an answer that was applied is not applied twice, but a second call after a lost response " +
-				"fails with question_not_pending, so read afm_run_status before retrying.",
-			Annotations: &sdkmcp.ToolAnnotations{DestructiveHint: ptr(false)},
-		}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in replyInput) (*sdkmcp.CallToolResult, any, error) {
-			return s.reply(ctx, in), nil, nil
+	addTool(s, toolInteractionReply, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in replyInput) (*sdkmcp.CallToolResult, any, error) {
+		return s.reply(ctx, in), nil, nil
+	})
+	addTool(s, toolStageDecide, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in decideInput) (*sdkmcp.CallToolResult, any, error) {
+		return s.decide(ctx, in), nil, nil
+	})
+	for _, name := range []string{toolActionPause, toolActionContinue} {
+		addTool(s, "afm_stage_"+name, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in stageInput) (*sdkmcp.CallToolResult, any, error) {
+			return s.pauseOrContinue(ctx, in, name), nil, nil
 		})
-	}
-	if g.Has(GroupApprove) || g.Has(GroupStages) {
-		sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-			Name: "afm_stage_decide",
-			Description: "Decide a stage: approve (needs group approve and expected_revision, the plan revision you read; it is " +
-				"applied only if that exact revision is still current, otherwise approval_stale), revise (needs group " +
-				"stages; sends feedback to the planner and is not idempotent: do not repeat it blindly) or retry (needs " +
-				"group stages). Returns the stage state after the call.",
-			Annotations: &sdkmcp.ToolAnnotations{DestructiveHint: ptr(false)},
-		}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in decideInput) (*sdkmcp.CallToolResult, any, error) {
-			return s.decide(ctx, in), nil, nil
-		})
-	}
-	if g.Has(GroupStages) {
-		for _, name := range []string{toolActionPause, toolActionContinue} {
-			sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-				Name:        "afm_stage_" + name,
-				Description: "Stage control: " + name + " the stage. Returns the stage state after the call. Needs group stages.",
-				Annotations: &sdkmcp.ToolAnnotations{IdempotentHint: true, DestructiveHint: ptr(false)},
-			}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in stageInput) (*sdkmcp.CallToolResult, any, error) {
-				return s.pauseOrContinue(ctx, in, name), nil, nil
-			})
-		}
 	}
 	s.registerBudgetTools()
 }

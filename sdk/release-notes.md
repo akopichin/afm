@@ -2,6 +2,13 @@
 
 Newest first. See the module's [README](./README.md) for usage; see the main project's [release-notes.md](../CHANGELOG.md) for afm itself.
 
+## 2026-11-16
+
+### Improvement: initial task and instance id
+
+- `Client.StartWithOptions` with `StartOptions{Task}` starts `afm run --task @-` and sends the task on stdin, so the text stays out of the process list. A task always starts a new run. `Client.Start` is unchanged.
+- `Run.InstanceID()` returns the process id from `/api/runtime`, for `Start`, `Connect` and `Attach`; it is empty for an `afm` that predates the field.
+
 ## 2026-11-14
 
 ### Improvement: budgets

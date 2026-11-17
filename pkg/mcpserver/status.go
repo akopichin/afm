@@ -171,13 +171,7 @@ func revisionString(rev int64) string { return strconv.FormatInt(rev, 10) }
 type runStatusInput struct{}
 
 func (s *Service) registerStatusTool() {
-	sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-		Name: "afm_run_status",
-		Description: "Read the run: run status, whether anything needs a person (attention_required), every pending action " +
-			"with the tool actions allowed for it, stage list, token/cost totals and a cursor for afm_run_wait. " +
-			"Read-only. There is no progress percentage on purpose.",
-		Annotations: &sdkmcp.ToolAnnotations{ReadOnlyHint: true},
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ runStatusInput) (*sdkmcp.CallToolResult, any, error) {
+	addTool(s, toolRunStatus, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ runStatusInput) (*sdkmcp.CallToolResult, any, error) {
 		release, err := s.enter()
 		if err != nil {
 			return errorResult(err), nil, nil

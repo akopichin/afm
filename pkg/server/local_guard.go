@@ -10,9 +10,9 @@ import (
 // maxLocalBodyBytes caps a guarded request body; the guarded routes carry small JSON-RPC and command bodies.
 const maxLocalBodyBytes = 1 << 20
 
-// localGuard admits only requests a local client could make: loopback Host, absent or same-origin Origin, and
+// LocalGuard admits only requests a local client could make: loopback Host, absent or same-origin Origin, and
 // the methods guarded routes use. A container binds all interfaces, so the bind address proves nothing.
-func localGuard(next http.Handler) http.Handler {
+func LocalGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet, http.MethodPost, http.MethodDelete:

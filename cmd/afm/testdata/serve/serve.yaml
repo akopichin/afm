@@ -1,0 +1,10 @@
+# Config of the host under test: two projects so that one flow can run in both, and a start that reuses a
+# checkout is refused by admission. The test replaces the placeholders with absolute project paths.
+projects:
+  - id: alpha
+    path: __ALPHA__
+  - id: beta
+    path: __BETA__
+limits:
+  max_running: 4
+  max_starting: 2

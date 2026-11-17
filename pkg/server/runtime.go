@@ -9,8 +9,10 @@ const (
 
 // RuntimeInfo описывает режим процесса для /api/runtime; нулевое значение читается как «dashboard, не готов».
 type RuntimeInfo struct {
-	Mode  string
-	Ready func() bool
+	Mode string
+	// InstanceID отличает процесс от другого на том же порту; пустой — поле не отдаётся.
+	InstanceID string
+	Ready      func() bool
 }
 
 type runtimeResponse struct {
@@ -18,6 +20,7 @@ type runtimeResponse struct {
 	Mode            string `json:"mode"`
 	RunID           string `json:"run_id"`
 	Ready           bool   `json:"ready"`
+	InstanceID      string `json:"instance_id,omitempty"`
 }
 
 // handleRuntime отдаёт клиентам (SDK) режим, готовность и id рана без путей, токенов и PID.
@@ -33,6 +36,7 @@ func (s *Server) handleRuntime(w http.ResponseWriter, r *http.Request) {
 		Mode:            s.runtime.Mode,
 		RunID:           s.runID(),
 		Ready:           s.runtime.Ready != nil && s.runtime.Ready(),
+		InstanceID:      s.runtime.InstanceID,
 	}
 	if resp.Mode == "" {
 		resp.Mode = runtimeModeDashboard

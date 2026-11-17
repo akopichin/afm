@@ -64,6 +64,7 @@ func newModeFixture(t *testing.T, mode, flowFile, flowTail string) *modeFixture 
 		"__AUTO_AGENT__":   "agents/auto_agent.sh",
 		"__BOARD_AGENT__":  "agents/board_agent.sh",
 		"__BUDGET_AGENT__": "agents/budget_agent.sh",
+		"__PROMPT_AGENT__": "agents/prompt_agent.sh",
 		"__PLAN__":         "plans/plan.md",
 	} {
 		text = strings.ReplaceAll(text, placeholder, testdataAbs(t, rel))

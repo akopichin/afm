@@ -25,7 +25,7 @@ func (s *Server) routeApproval(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	localGuard(http.HandlerFunc(s.handleApproval)).ServeHTTP(w, r)
+	LocalGuard(http.HandlerFunc(s.handleApproval)).ServeHTTP(w, r)
 }
 
 func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {

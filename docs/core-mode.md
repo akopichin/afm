@@ -68,9 +68,37 @@ Restarting `afm run --mode core` on the same flow resumes the run as usual; see
 
 ## MCP
 
-Add `--mcp` to serve the [Model Context Protocol](mcp.md) on `/mcp` of the same
-port, read-only unless `--mcp-allow` names write groups. It needs the port above and
-works in dashboard mode too.
+With an API port, the [Model Context Protocol](mcp.md) is served on `/mcp` of the same
+port by default, with every permission group allowed. Use `--mcp-allow read` (or a list
+of groups) to narrow it and `--mcp-off` to turn it off. It works in dashboard mode too.
+
+## Initial task
+
+`--task` appends a task to the flow prompt that every agent of the run receives:
+
+```bash
+afm run --mode core --port 9876 --task "Fix the flaky login test" flow.yaml
+afm run --task @task.md flow.yaml        # a file
+cat task.md | afm run --task @- flow.yaml  # stdin
+afm run --task https://example.com/task.txt flow.yaml
+```
+
+- The value is text, `@file`, `@-` or an `http(s)` URL that answers `200` with a `text/*` body.
+  A URL with credentials is refused, and errors never print the query string.
+- At most 1 MiB of valid UTF-8; an empty or whitespace-only task is refused. Any refusal happens
+  before a run, worktree or container is created.
+- A task always starts a **new** run. It is saved as `task.md` (mode `0600`) in the run
+  directory, so a later `afm run` that resumes this run, and every
+  [repeat](flow-reference.md#repeat-run-successful-flows-again) cycle, keep it without `--task`.
+- Inline text is visible in the argv of the `afm run` process itself, so use `@file` or `@-` for
+  text that must stay out of the process list. It is never put in `docker run` arguments, and the SDK
+  and `afm serve` pass it by stdin or a file.
+
+## Discovery
+
+While it runs, `afm run` with an API registers itself in `~/.afm/active-runs/` so that
+[`afm serve`](serve.md) can find it, and removes the record when it exits. The record
+holds no secrets. The registry directory is created with mode `0700`.
 
 ## Docker
 

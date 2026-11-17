@@ -463,6 +463,11 @@ func (s *Server) Start() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("listen: %w", err)
 	}
+	return s.StartOn(ln)
+}
+
+// StartOn serves on a listener the caller opened earlier, so its port is known before the server starts.
+func (s *Server) StartOn(ln net.Listener) (string, error) {
 	go func() { _ = s.httpSrv.Serve(ln) }()
 	return ln.Addr().String(), nil
 }
@@ -473,7 +478,7 @@ func (s *Server) routeMCP(w http.ResponseWriter, r *http.Request) {
 		writeFlowError(w, http.StatusNotFound, "mcp_disabled")
 		return
 	}
-	localGuard(s.mcp).ServeHTTP(w, r)
+	LocalGuard(s.mcp).ServeHTTP(w, r)
 }
 
 // Shutdown gracefully stops the server.

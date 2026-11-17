@@ -51,6 +51,15 @@ func TestMain(m *testing.M) {
 		os.Exit(runMain([]string{"check"})) //nolint:revive // deliberate custom exit code, see comment above
 		return
 	}
+	// Process-wide throwaway HOME: runs started from tests publish themselves under ~/.afm/active-runs, and that
+	// must never be the developer's real registry.
+	home, err := os.MkdirTemp("", "afm-test-home-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(9) //nolint:revive // deliberate custom exit code, see comment above
+	}
+	defer os.RemoveAll(home) //nolint:errcheck
+	_ = os.Setenv("HOME", home)
 	// No explicit os.Exit(m.Run()) needed: the `go test` runner applies
 	// m.Run()'s exit code automatically once TestMain returns (Go 1.15+).
 	m.Run()

@@ -55,19 +55,39 @@ type mcpSettings struct {
 	groups  mcpserver.Groups
 }
 
-// parseMCPSettings проверяет --mcp и --mcp-allow до создания рана: без HTTP API MCP некуда монтировать, а права
-// без --mcp молча ничего бы не значили.
-func parseMCPSettings(enabled bool, allow string, cfg config.Config) (mcpSettings, error) {
-	if !enabled {
-		if allow != "" {
-			return mcpSettings{}, errors.New("--mcp-allow needs --mcp")
+// mcpFlags — значения --mcp, --mcp-off и --mcp-allow как их ввёл пользователь; allowSet отличает явное пустое
+// значение --mcp-allow (только чтение) от отсутствия флага (все группы).
+type mcpFlags struct {
+	on       bool
+	off      bool
+	allowSet bool
+	allow    string
+}
+
+// parseMCPSettings проверяет флаги MCP до создания рана. При HTTP API /mcp монтируется по умолчанию со всеми
+// группами; без API по умолчанию молча выключен, а явный запрос MCP или прав — ошибка, чтобы не обещать
+// несуществующее.
+func parseMCPSettings(in mcpFlags, cfg config.Config) (mcpSettings, error) {
+	hasAPI := cfg.Server.GetPort() > 0
+	if in.off {
+		if in.on || in.allowSet {
+			return mcpSettings{}, errors.New("--mcp-off cannot be combined with --mcp or --mcp-allow")
 		}
 		return mcpSettings{}, nil
 	}
-	if cfg.Server.GetPort() <= 0 {
-		return mcpSettings{}, errors.New("--mcp needs the HTTP API: set a positive --port or server.port; 0 disables it")
+	if !hasAPI {
+		switch {
+		case in.on:
+			return mcpSettings{}, errors.New("--mcp needs the HTTP API: set a positive --port or server.port; 0 disables it")
+		case in.allowSet:
+			return mcpSettings{}, errors.New("--mcp-allow needs the HTTP API: set a positive --port or server.port; 0 disables it")
+		}
+		return mcpSettings{}, nil
 	}
-	groups, err := mcpserver.ParseGroups(allow)
+	if !in.allowSet {
+		return mcpSettings{enabled: true, groups: mcpserver.AllGroups()}, nil
+	}
+	groups, err := mcpserver.ParseGroups(in.allow)
 	if err != nil {
 		return mcpSettings{}, fmt.Errorf("--mcp-allow: %w", err)
 	}

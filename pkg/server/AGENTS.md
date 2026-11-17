@@ -52,7 +52,7 @@ Display-order — стабильный топологический порядо
 - `/mcp` регистрируется всегда: без маршрута SPA-fallback отдал бы HTML. Выключенный
   MCP отвечает 404 `mcp_disabled`. Типизированный nil `*Service` в `Config.MCP`
   выглядел бы как включённый MCP: присваивай поле только когда он включён.
-- `/mcp` и `/api/stages/{id}/approval` идут через `localGuard`: loopback `Host`,
+- `/mcp` и `/api/stages/{id}/approval` идут через `LocalGuard` (экспортирован: его же использует host `afm serve`): loopback `Host`,
   отсутствующий или same-origin `Origin`, лимит тела. Bind-адрес ничего не доказывает —
   контейнер слушает все интерфейсы. Группы разрешений — не аутентификация.
 - `Shutdown` сначала вызывает `MCPHandler.Close`, затем `http.Server.Shutdown`: иначе

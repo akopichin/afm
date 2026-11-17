@@ -30,9 +30,40 @@ func TestGroupsParseExplicitList(t *testing.T) {
 }
 
 func TestGroupsRejectUnknownAndAll(t *testing.T) {
-	for _, in := range []string{"all", "reply,all", "write", "read", "reply;stages"} {
+	for _, in := range []string{"all", "reply,all", "write", "reply;stages"} {
 		if _, err := ParseGroups(in); err == nil {
 			t.Errorf("ParseGroups(%q) accepted", in)
+		}
+	}
+}
+
+func TestGroupsReadKeywordIsReadOnly(t *testing.T) {
+	g, err := ParseGroups(" read ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Names()) != 0 {
+		t.Fatalf("read enabled %v, want no write groups", g.Names())
+	}
+}
+
+func TestGroupsReadKeywordCannotBeMixed(t *testing.T) {
+	for _, in := range []string{"read,reply", "reply,read", "read,read"} {
+		if _, err := ParseGroups(in); err == nil {
+			t.Errorf("ParseGroups(%q) accepted", in)
+		}
+	}
+}
+
+func TestAllGroups(t *testing.T) {
+	names := AllGroups().Names()
+	want := []Group{GroupReply, GroupStages, GroupApprove, GroupBudget}
+	if len(names) != len(want) {
+		t.Fatalf("AllGroups = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("AllGroups = %v, want %v", names, want)
 		}
 	}
 }

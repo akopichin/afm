@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -90,11 +91,22 @@ func (c *Client) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-// runArgs passes --mode only for core so binaries without the flag still start in dashboard mode.
-func (c *Client) runArgs(workDir, flowPath string, port int) []string {
+// StartOptions are the optional inputs of StartWithOptions; the zero value starts afm as Start does.
+type StartOptions struct {
+	// Task is the initial task handed to the agents on top of the flow prompt. afm reads it from stdin, so
+	// the text never appears in the process list. A task always starts a new run instead of resuming one.
+	Task string
+}
+
+// runArgs passes --mode only for core so binaries without the flag still start in dashboard mode, and --task
+// only when there is a task.
+func (c *Client) runArgs(workDir, flowPath string, port int, opts StartOptions) []string {
 	args := []string{"run", "--dir", workDir, "--port", strconv.Itoa(port)}
 	if c.mode == ModeCore {
 		args = append(args, "--mode", string(ModeCore))
+	}
+	if opts.Task != "" {
+		args = append(args, "--task", "@-")
 	}
 	return append(args, flowPath)
 }
@@ -102,6 +114,11 @@ func (c *Client) runArgs(workDir, flowPath string, port int) []string {
 // Start launches afm and waits until the API is usable; ModeCore needs a ready core, never a silent dashboard.
 // On failure the process is reaped and the slot freed before return, and workDir is kept.
 func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, error) {
+	return c.StartWithOptions(ctx, flowPath, workDir, StartOptions{})
+}
+
+// StartWithOptions is Start with the optional inputs of opts.
+func (c *Client) StartWithOptions(ctx context.Context, flowPath, workDir string, opts StartOptions) (*Run, error) {
 	release, err := c.acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -123,8 +140,11 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 		return nil, err
 	}
 
-	cmd := exec.Command(c.binary, c.runArgs(workDir, flowPath, port)...)
+	cmd := exec.Command(c.binary, c.runArgs(workDir, flowPath, port, opts)...)
 	cmd.Dir = workDir
+	if opts.Task != "" {
+		cmd.Stdin = strings.NewReader(opts.Task)
+	}
 	out := &tailBuffer{max: maxErrorBytes}
 	cmd.Stdout = out
 	cmd.Stderr = out
@@ -160,5 +180,6 @@ func (c *Client) Start(ctx context.Context, flowPath, workDir string) (*Run, err
 	if err := run.waitReady(ctx); err != nil {
 		return nil, err
 	}
+	run.loadInstanceID(ctx)
 	return run, nil
 }

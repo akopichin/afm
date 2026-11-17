@@ -5,26 +5,41 @@ on `/mcp` of the run's HTTP API. An MCP client (for example Claude Code) can
 read the run, see what needs a person, answer questions and approve plans
 without the dashboard.
 
-By default the endpoint is **read-only**. Every permission to change the run is
-named explicitly with `--mcp-allow`.
+Whenever the run has an HTTP API, `/mcp` is on and **every permission group is
+allowed**. Narrow it with `--mcp-allow`, or turn it off with `--mcp-off`.
+
+!!! warning "Changed default"
+    Earlier builds served `/mcp` only with `--mcp`, and `--mcp` alone was read-only.
+    Now `/mcp` is on by default with all groups, and `--mcp` alone no longer limits
+    anything. Pass `--mcp-allow read` to keep the old read-only behavior, or `--mcp-off`.
 
 ```bash
-# read-only
-afm run --mode core --port 9876 --mcp flow.yaml
+# default: /mcp with all groups next to the API
+afm run --mode core --port 9876 flow.yaml
 
-# also answer questions and approve the exact plan the client has read
-afm run --mode core --port 9876 --mcp --mcp-allow=reply,approve flow.yaml
+# read-only
+afm run --mode core --port 9876 --mcp-allow read flow.yaml
+
+# only answer questions and approve the exact plan the client has read
+afm run --mode core --port 9876 --mcp-allow=reply,approve flow.yaml
+
+# no MCP
+afm run --mode core --port 9876 --mcp-off flow.yaml
 ```
+
+To follow all runs of the machine from one client, use [`afm serve`](serve.md).
 
 ## Enabling
 
 | Flag | Meaning |
 |---|---|
-| `--mcp` | Mount `/mcp` on the HTTP API port. Needs a positive `--port` or `server.port`; with port `0` the command fails before a run is created. |
-| `--mcp-allow=<groups>` | Comma-separated write groups. Needs `--mcp`. An unknown group name is refused before a run is created. There is no `all`: name every permission. |
+| *(none)* | `/mcp` is mounted on the HTTP API port with all groups. With port `0` there is no API and no MCP. |
+| `--mcp` | Same as the default; refused before a run is created when there is no API (`--port 0`). |
+| `--mcp-allow=<groups>` | Comma-separated groups: `reply`, `approve`, `stages`, `budget`, or `read` (also an empty value) for read-only. An unknown name is refused before a run is created. There is no `all`: omit the flag for every group. |
+| `--mcp-off` | Do not serve `/mcp`. Cannot be combined with `--mcp` or `--mcp-allow`. |
 
 Works in both [launch modes](core-mode.md): the endpoint is on the same port as
-the API (`core`) or as the API and Web UI (`dashboard`). Without `--mcp`,
+the API (`core`) or as the API and Web UI (`dashboard`). With `--mcp-off`,
 `/mcp` answers `404 {"error":"mcp_disabled"}` (never the dashboard's HTML).
 When the run finishes, core holds the API (and `/mcp`) until interrupted, as
 described in [Core mode](core-mode.md#lifetime).
@@ -39,7 +54,7 @@ described in [Core mode](core-mode.md#lifetime).
 | `stages` | `revise` and `retry` decisions of `afm_stage_decide`, `afm_stage_pause`, `afm_stage_continue` |
 | `budget` | `afm_budget_adjust`, `afm_budget_resume` |
 
-A tool whose group is off is not listed. A call that needs a group that is off
+A tool whose group is off is not listed (and not available to the run's own agents either). A call that needs a group that is off
 fails with `not_allowed`.
 
 ## Tools
@@ -132,6 +147,8 @@ running and does not own it:
 afm mcp serve --connect http://127.0.0.1:9876
 ```
 
+The same bridge connects to an [`afm serve`](serve.md) host (`--connect http://127.0.0.1:8100`).
+
 ```json
 {
   "mcpServers": {
@@ -143,8 +160,8 @@ afm mcp serve --connect http://127.0.0.1:9876
 - `--connect` must be a loopback `http` URL (`127.0.0.1`, `localhost`, `[::1]`).
   A bare host and port means the `/mcp` path. `--transport` accepts only `stdio`.
 - stdout carries protocol messages only; diagnostics go to stderr.
-- A run started without `--mcp` makes the bridge exit with code 1 and
-  `the run serves no MCP endpoint: start it with afm run --mcp`; stdout stays empty.
+- A run started with `--mcp-off` makes the bridge exit with code 1 and
+  `the process serves no MCP endpoint: the run was started with --mcp-off`; stdout stays empty.
 - When stdin closes, the bridge deletes its session and exits `0`; the run keeps
   going. `Ctrl+C` also stops only the bridge.
 - A session ends with the run, with a [repeat](flow-reference.md#repeat-run-successful-flows-again)
@@ -182,10 +199,12 @@ not make a permission group a security boundary.
 Anyone who can reach the loopback port can use every enabled group. Keep in mind:
 
 - A process on the same machine, including the run's own agents, can call the
-  endpoint. Enable only the groups you accept for them.
+  endpoint, and by default every group is on, so an agent can approve its own plan or
+  change budgets. Narrow it with `--mcp-allow`, or use `--mcp-off`, if agents must not
+  control the run.
 - With [Docker](docker.md) the port is published as `127.0.0.1:<port>:<port>`,
-  and the container's network can reach it too. Do not enable `approve`, `stages`
-  or `budget` if agents must not control the run.
+  and the container's network can reach it too. Leave out `approve`, `stages`
+  and `budget` (or use `--mcp-off`) if agents must not control the run; the default allows them.
 - Remote access is not supported; use an SSH tunnel.
 
 ## Verified clients
@@ -198,7 +217,8 @@ advertises `resources.subscribe`.
 ## Limits of this stage
 
 - Plan approval is not conditional on anything other than the revision; there is
-  no per-user authentication or token.
+  no per-user authentication or token (planned as a separate stage).
+- One endpoint serves one run. [`afm serve`](serve.md) forwards these tools for many runs.
 - Only status and cost resources are subscribable; plans and artifacts are read
   on demand.
 - Sessions idle for 30 minutes expire; at most 16 are open at once; at most 8

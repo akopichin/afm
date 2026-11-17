@@ -353,7 +353,7 @@ func TestMCPServeMCPDisabledFailsClearly(t *testing.T) {
 	}
 	select {
 	case <-bridge.done:
-		if bridge.err == nil || !strings.Contains(bridge.err.Error(), "afm run --mcp") {
+		if bridge.err == nil || !strings.Contains(bridge.err.Error(), "--mcp-off") {
 			t.Errorf("bridge error = %v, want the mcp_disabled hint", bridge.err)
 		}
 		if out := bridge.stdout.text(); out != "" {

@@ -12,6 +12,7 @@
       usage.jsonl    # token usage per agent run (cost accounting)
       agent-jobs.jsonl  # who ran and when: one line per AI process start/finish; header marks when recording began
       .lock          # flock of the active afm run
+      task.md        # initial task from `afm run --task` (0600), kept for resume and repeat cycles
       <stage-id>/
         plan.md          # stage plan
         feedback.md      # revision notes (plan revise, or a note added to a running stage)
@@ -49,3 +50,19 @@ When enabled, the git worktree lives at `<project-root>/.worktrees/<run-name>`;
 The worktree contains the source checkout, while run records stay under `.afm/`.
 
 See [the event log](event-log.md) for the guarantees behind `events.jsonl`.
+
+## User-level state: `~/.afm`
+
+Next to the per-project `.afm/`, afm keeps process-level state in the user's home directory:
+
+```
+~/.afm/
+  active-runs/
+    <instance-id>.json  # one record per live `afm run` with an API (0600, directory 0700); removed on exit
+  serve.yaml            # allowlist of projects and pipelines for `afm serve`
+  serve/                # state of the `afm serve` host: lock, host.json, attached.json,
+                        # launches/ (receipts), logs/, tasks/ (prompt files of started runs)
+```
+
+See [Serve](../serve.md). Records hold no secrets. The host removes only its own state and
+the record of a process that has exited.

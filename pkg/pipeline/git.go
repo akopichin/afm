@@ -18,11 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akopichin/afm/contracts/browser"
-	"github.com/akopichin/afm/contracts/config"
 	"github.com/akopichin/afm/contracts/gitcmd"
-	"github.com/akopichin/afm/contracts/lifecyclehooks"
 	"github.com/akopichin/afm/contracts/progress"
+	"github.com/akopichin/afm/pkg/childenv"
 )
 
 const (
@@ -355,7 +353,7 @@ func writeArchiveFile(r io.Reader, target string, executable bool) error {
 // gitDir "" runs outside any repository.
 func newGitCmd(ctx context.Context, gitDir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-pager"}, args...)...) //nolint:gosec // G702: argv is built by this package, never from a shell string
-	env := append(stripTransportEnv(gitcmd.SanitizeEnv(os.Environ())),
+	env := append(childenv.StripTransport(gitcmd.SanitizeEnv(os.Environ())),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_ALLOW_PROTOCOL="+gitAllowedProtocols,
 		// The cache is shared across runs: a refs/replace/* ref must never change what a pinned commit contains.
@@ -366,20 +364,6 @@ func newGitCmd(ctx context.Context, gitDir string, args ...string) *exec.Cmd {
 	}
 	cmd.Env = env
 	return cmd
-}
-
-// stripTransportEnv drops afm's internal secret transport variables, which git and its credential or ssh helpers
-// must not inherit.
-func stripTransportEnv(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if strings.HasPrefix(kv, config.SecretEnvPrefix) || strings.HasPrefix(kv, config.SyspromptEnvPrefix) ||
-			strings.HasPrefix(kv, lifecyclehooks.HookSecretTransportPrefix) || browser.IsTransportEnv(kv) {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 // runGit runs git and returns stdout; a failure carries git's trimmed stderr.
