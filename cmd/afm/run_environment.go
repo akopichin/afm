@@ -20,8 +20,9 @@ func opensHostBrowser(cfg config.Config, launch launchMode) bool {
 }
 
 // saved is the run this start would resume (nil for a new run): its frozen skill libraries need mounts too, and its
-// unfinished helper tasks their commands. extraArgs follow the original arguments, so they win over a repeated flag.
-func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string, saved *engine.SavedRun, launch launchMode, extraArgs ...string) error {
+// unfinished helper tasks their commands. extraArgs follow the original arguments, so they win over a repeated flag. containerStarted tells whether the
+// container already answered: a failed `docker run` is retried only before that.
+func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string, saved *engine.SavedRun, launch launchMode, containerStarted func() bool, extraArgs ...string) error {
 	absDir, err := filepath.Abs(afmRoot)
 	if err != nil {
 		return fmt.Errorf("resolve project dir: %w", err)
@@ -73,7 +74,7 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		DashboardPort: port,
 		ExtraMounts:   slices.Concat(cfg.Docker.ExtraMounts, skillMounts),
 		// The absolute, final --dir wins over a user's relative flag inside Docker.
-		ExtraArgs:          slices.Concat(os.Args[1:], []string{"--dir=" + absDir}, extraArgs),
+		ExtraArgs:          slices.Concat(withoutTaskArg(os.Args[1:]), []string{"--dir=" + absDir}, extraArgs),
 		ClientCommand:      cfg.Client.Command,
 		Recipes:            proj.Recipes,
 		SecretsFile:        cfg.Docker.SecretsFile,
@@ -93,5 +94,5 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		rc.BrowserAppContainerPort = cfg.Browser.GetAppPort()
 		rc.BrowserAppHostPort = portFromURL(browserDesc.AppURL)
 	}
-	return docker.ReExec(rc)
+	return reexecWithRetry(rc, containerStarted)
 }

@@ -56,7 +56,7 @@ func newCoreFixture(t *testing.T, flowFile string, subst map[string]string) *cor
 	text := readCoreTestdata(t, "flows/"+flowFile)
 	for placeholder, rel := range map[string]string{
 		"__AGENT__": "agents/agent.sh", "__AUTO_AGENT__": "agents/auto_agent.sh", "__ASK_AGENT__": "agents/ask_agent.sh",
-		"__BUDGET_AGENT__": "agents/budget_agent.sh",
+		"__BUDGET_AGENT__": "agents/budget_agent.sh", "__PROMPT_AGENT__": "agents/prompt_agent.sh",
 	} {
 		abs, err := filepath.Abs(filepath.Join(coreTestdata, rel))
 		if err != nil {
@@ -1058,5 +1058,37 @@ func TestIntegration_CoreConditionalApproval(t *testing.T) {
 	requireResult(ctx, t, run, RunStateFinished)
 	if n := fx.agentRuns("build:implementation"); n != 1 {
 		t.Errorf("implementation ran %d times, want 1", n)
+	}
+}
+
+// StartOptions.Task reaches the agent's prompt on top of the flow prompt, and /api/runtime names the process.
+func TestIntegration_CoreStartWithTask(t *testing.T) {
+	fx := newCoreFixture(t, "prompt.yaml", nil)
+	promptLog := filepath.Join(t.TempDir(), "prompts.log")
+	t.Setenv("AFM_IT_PROMPT_LOG", promptLog)
+	ctx := coreTestContext(t)
+
+	run, err := fx.client.StartWithOptions(ctx, fx.flowPath, fx.workDir, StartOptions{Task: "build the thing"})
+	if err != nil {
+		t.Fatalf("StartWithOptions: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = run.Shutdown(stopCtx)
+	})
+	if id := run.InstanceID(); len(id) != 32 {
+		t.Errorf("InstanceID = %q, want the 32-character id of the afm process", id)
+	}
+	waitUntil(t, "the agent prompt", func() bool {
+		raw, _ := os.ReadFile(promptLog)
+		return strings.Contains(string(raw), "build the thing")
+	})
+	raw, err := os.ReadFile(promptLog)
+	if err != nil || !strings.Contains(string(raw), "flow instructions") {
+		t.Errorf("prompt = %q, %v; want the flow prompt together with the task", raw, err)
+	}
+	if args := processArgs(t, run.PID()); strings.Contains(args, "build the thing") {
+		t.Errorf("task text visible in the process list: %s", args)
 	}
 }

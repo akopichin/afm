@@ -3,10 +3,12 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/contracts/config"
+	"github.com/akopichin/afm/pkg/mcpserver"
 )
 
 func TestParseLaunchMode(t *testing.T) {
@@ -98,6 +100,55 @@ func TestRunMain_RefusedModeCreatesNothing(t *testing.T) {
 			}
 			if _, err := os.Stat(fx.tickLog); !os.IsNotExist(err) {
 				t.Errorf("stage script ran: tick marker exists (stat err = %v)", err)
+			}
+		})
+	}
+}
+
+func TestParseMCPSettings(t *testing.T) {
+	cfgWithPort := func(port int) config.Config {
+		return config.Config{Server: config.ServerConfig{Port: &port}}
+	}
+	allGroups := mcpserver.AllGroups().Names()
+	tests := []struct {
+		name          string
+		in            mcpFlags
+		port          int
+		wantEnabled   bool
+		wantGroups    []mcpserver.Group
+		wantErrSubstr string
+	}{
+		{name: "default with API mounts all groups", port: 8080, wantEnabled: true, wantGroups: allGroups},
+		{name: "default without API is silently off", port: 0},
+		{name: "--mcp with API mounts all groups", in: mcpFlags{on: true}, port: 8080, wantEnabled: true, wantGroups: allGroups},
+		{name: "--mcp without API fails", in: mcpFlags{on: true}, wantErrSubstr: "--mcp needs the HTTP API"},
+		{name: "--mcp-off disables", in: mcpFlags{off: true}, port: 8080},
+		{name: "--mcp-off with --mcp fails", in: mcpFlags{on: true, off: true}, port: 8080, wantErrSubstr: "--mcp-off cannot be combined"},
+		{name: "--mcp-off with --mcp-allow fails", in: mcpFlags{off: true, allowSet: true, allow: "read"}, port: 8080, wantErrSubstr: "--mcp-off cannot be combined"},
+		{name: "--mcp-allow without API fails", in: mcpFlags{allowSet: true, allow: "read"}, wantErrSubstr: "--mcp-allow needs the HTTP API"},
+		{name: "--mcp-allow read is read-only", in: mcpFlags{allowSet: true, allow: "read"}, port: 8080, wantEnabled: true},
+		{name: "explicit empty --mcp-allow is read-only", in: mcpFlags{allowSet: true}, port: 8080, wantEnabled: true},
+		{name: "named groups", in: mcpFlags{allowSet: true, allow: "reply,stages"}, port: 8080, wantEnabled: true, wantGroups: []mcpserver.Group{mcpserver.GroupReply, mcpserver.GroupStages}},
+		{name: "unknown group fails", in: mcpFlags{allowSet: true, allow: "reply,all"}, port: 8080, wantErrSubstr: `unknown MCP permission group "all"`},
+		{name: "read mixed with groups fails", in: mcpFlags{allowSet: true, allow: "read,reply"}, port: 8080, wantErrSubstr: "cannot be combined"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseMCPSettings(tt.in, cfgWithPort(tt.port))
+			if tt.wantErrSubstr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrSubstr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErrSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.enabled != tt.wantEnabled {
+				t.Errorf("enabled = %v, want %v", got.enabled, tt.wantEnabled)
+			}
+			if tt.wantEnabled && !slices.Equal(got.groups.Names(), tt.wantGroups) {
+				t.Errorf("groups = %v, want %v", got.groups.Names(), tt.wantGroups)
 			}
 		})
 	}

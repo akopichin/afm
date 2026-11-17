@@ -102,13 +102,14 @@ func withMCP(t *testing.T, fx *modeFixture) *mcpFixture {
 	return &mcpFixture{modeFixture: fx, ctx: ctx}
 }
 
-// startMCP starts the run with the MCP endpoint and the named permission groups and waits until it serves.
+// startMCP starts the run with the MCP endpoint and the named permission groups (none: read-only) and waits
+// until it serves.
 func (fx *mcpFixture) startMCP(allow string, extra ...string) (*afmChild, string) {
 	fx.t.Helper()
-	args := append([]string{"--mcp"}, extra...)
-	if allow != "" {
-		args = append(args, "--mcp-allow", allow)
+	if allow == "" {
+		allow = "read"
 	}
+	args := append([]string{"--mcp", "--mcp-allow", allow}, extra...)
 	child := fx.start(args...)
 	return child, fx.waitReady(child)
 }

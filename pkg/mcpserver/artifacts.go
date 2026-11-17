@@ -562,13 +562,7 @@ func (c artifactContent) page() textPage {
 }
 
 func (s *Service) registerArtifactTool() {
-	sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-		Name: "afm_artifact_read",
-		Description: "Read one artifact by the opaque artifact_id that afm_run_status lists: a stage plan, an execution " +
-			"summary, an image or a file the stage declares as an artifact. Text comes in pages (next_offset is null on the last one); " +
-			"secrets are masked. Logs and dialog files are not readable. Read-only.",
-		Annotations: &sdkmcp.ToolAnnotations{ReadOnlyHint: true},
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in artifactReadInput) (*sdkmcp.CallToolResult, any, error) {
+	addTool(s, toolArtifactRead, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in artifactReadInput) (*sdkmcp.CallToolResult, any, error) {
 		release, err := s.enter()
 		if err != nil {
 			return errorResult(err), nil, nil

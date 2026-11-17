@@ -316,7 +316,7 @@ func (b *pipelineBinder) expectedRun() string {
 
 // preparePipelineRun is the whole preflight of `afm run --pipeline`, ending in a plan the rest of RunE follows.
 // Everything that can be refused is refused here, before a worktree, a Docker re-exec or a run exists.
-func preparePipelineRun(ctx context.Context, pf pipelineFlags, base config.Config, worktreeName string, clearWorktree, clearForce bool) (*pipelinePlan, error) {
+func preparePipelineRun(ctx context.Context, pf pipelineFlags, base config.Config, worktreeName string, clearWorktree, clearForce, forceNew bool) (*pipelinePlan, error) {
 	if worktreeName != "" {
 		if err := worktree.ValidateName(worktreeName); err != nil {
 			return nil, err
@@ -346,7 +346,7 @@ func preparePipelineRun(ctx context.Context, pf pipelineFlags, base config.Confi
 			return nil, err
 		}
 	}
-	plan, err := planPipelineRun(ctx, planInput{source: src, options: opts, base: base, worktree: worktreeName, clear: mode})
+	plan, err := planPipelineRun(ctx, planInput{source: src, options: opts, base: base, worktree: worktreeName, clear: mode, forceNew: forceNew})
 	if err != nil {
 		return nil, err
 	}

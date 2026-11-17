@@ -70,12 +70,7 @@ func (s *Service) readEvents(in eventsReadInput) (eventsPage, error) {
 }
 
 func (s *Service) registerEventsTool() {
-	sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-		Name: "afm_events_read",
-		Description: "Read the stage transitions of the run journal in pages ordered by seq. Pass the previous next_seq as " +
-			"after_seq to continue. This is history, not a wait: use afm_run_wait to block until something needs attention. Read-only.",
-		Annotations: &sdkmcp.ToolAnnotations{ReadOnlyHint: true},
-	}, func(_ context.Context, _ *sdkmcp.CallToolRequest, in eventsReadInput) (*sdkmcp.CallToolResult, any, error) {
+	addTool(s, toolEventsRead, func(_ context.Context, _ *sdkmcp.CallToolRequest, in eventsReadInput) (*sdkmcp.CallToolResult, any, error) {
 		release, err := s.enter()
 		if err != nil {
 			return errorResult(err), nil, nil

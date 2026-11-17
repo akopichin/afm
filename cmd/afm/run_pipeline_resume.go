@@ -45,13 +45,17 @@ type planInput struct {
 	base     config.Config
 	worktree string // the --worktree value, empty without the flag
 	clear    worktree.ClearMode
+	forceNew bool // a task starts a new run without discarding the worktree
 }
+
+// continuesRun — the start may continue a recorded run: no clear flag and no task.
+func (in planInput) continuesRun() bool { return in.clear == worktree.ClearNone && !in.forceNew }
 
 // planPipelineRun decides, before any worktree or run exists, which snapshot to use and whether to continue a run:
 // only one whose binding matches the source and --worktree and that the engine would reopen. Otherwise the source
 // is resolved afresh, and an unfinished run of that name which this pipeline does not own stops the start.
 func planPipelineRun(ctx context.Context, in planInput) (*pipelinePlan, error) {
-	if in.clear == worktree.ClearNone {
+	if in.continuesRun() {
 		choice, err := findResumable(ctx, in)
 		if err != nil {
 			return nil, err
@@ -65,7 +69,7 @@ func planPipelineRun(ctx context.Context, in planInput) (*pipelinePlan, error) {
 		return nil, err
 	}
 	runName := runNameFor(in.worktree, loaded.Flow.Name)
-	if in.clear == worktree.ClearNone {
+	if in.continuesRun() {
 		if err := refuseForeignUnfinishedRun(runName, loaded.Flow); err != nil {
 			return nil, err
 		}

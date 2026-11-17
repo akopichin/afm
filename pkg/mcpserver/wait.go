@@ -99,14 +99,7 @@ func (s *Service) wait(ctx context.Context, in runWaitInput) (waitResult, error)
 }
 
 func (s *Service) registerWaitTool() {
-	sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-		Name: "afm_run_wait",
-		Description: "Block until the run's attention model changes from the given cursor (a new question, approval, failure, " +
-			"hold or a resolved one), or until timeout_seconds (default 30, at most 60). Returns the fresh status and " +
-			"whether it changed. Pass back the returned cursor. reset=true means the cursor belonged to another run. " +
-			"Cancelling the request does not affect the run. Read-only.",
-		Annotations: &sdkmcp.ToolAnnotations{ReadOnlyHint: true},
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runWaitInput) (*sdkmcp.CallToolResult, any, error) {
+	addTool(s, toolRunWait, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runWaitInput) (*sdkmcp.CallToolResult, any, error) {
 		release, err := s.enter()
 		if err != nil {
 			return errorResult(err), nil, nil

@@ -3,6 +3,7 @@ package afmsdk
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -31,6 +32,8 @@ type fakeCfg struct {
 	Delay        int    `json:"delay_ms"`      // sleep before serving
 	DieBySignal  bool   `json:"die_by_signal"` // on SIGINT die of SIGTERM instead of exiting
 	ApprovalRev  string `json:"approval_rev"`  // serves /api/stages/<id>/approval for this plan revision
+	InstanceID   string `json:"instance_id"`   // reported by /api/runtime; empty omits the field, as older afm do
+	Record       bool   `json:"record"`        // writes fake-args.json and, for `--task @-`, fake-task.txt into --dir
 }
 
 const fakeEnv = "AFM_FAKE_CFG"
@@ -66,6 +69,9 @@ func runFakeAfm(cfg fakeCfg) int {
 			port, _ = strconv.Atoi(args[i+1])
 		default:
 		}
+	}
+	if cfg.Record && dir != "" {
+		recordFakeLaunch(dir, args)
 	}
 	if cfg.ExitNow != 0 {
 		fmt.Fprintln(os.Stderr, "fake afm: refusing to start")
@@ -120,7 +126,11 @@ func runFakeAfm(cfg fakeCfg) int {
 			proto, _ = strconv.Atoi(cfg.Runtime[9:])
 		default:
 		}
-		_, _ = fmt.Fprintf(w, `{"protocol_version":%d,"mode":%q,"run_id":%q,"ready":%t}`, proto, mode, runID, ready)
+		instance := ""
+		if cfg.InstanceID != "" {
+			instance = fmt.Sprintf(`,"instance_id":%q`, cfg.InstanceID)
+		}
+		_, _ = fmt.Fprintf(w, `{"protocol_version":%d,"mode":%q,"run_id":%q,"ready":%t%s}`, proto, mode, runID, ready, instance)
 	})
 	if cfg.ApprovalRev != "" {
 		mux.HandleFunc("/api/stages/{id}/approval", fakeApproval(runID, cfg.ApprovalRev))
@@ -149,6 +159,18 @@ func runFakeAfm(cfg fakeCfg) int {
 		return cfg.ExitCode
 	}
 	return 0
+}
+
+// recordFakeLaunch lets a test see the argv afm was started with and the task it read from stdin.
+func recordFakeLaunch(dir string, args []string) {
+	raw, _ := json.Marshal(args)
+	_ = os.WriteFile(filepath.Join(dir, "fake-args.json"), raw, 0o600)
+	for i, a := range args {
+		if a == "--task" && i+1 < len(args) && args[i+1] == "@-" {
+			task, _ := io.ReadAll(os.Stdin)
+			_ = os.WriteFile(filepath.Join(dir, "fake-task.txt"), task, 0o600)
+		}
+	}
 }
 
 // fakeApproval serves the conditional-approval endpoints for one plan revision: a different expected

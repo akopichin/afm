@@ -108,3 +108,13 @@ func TestRuntime_RunIDMatchesStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntime_InstanceID(t *testing.T) {
+	_, body := getRuntime(t, newTestServer(t, Config{Runtime: RuntimeInfo{InstanceID: "0123456789abcdef0123456789abcdef"}}))
+	if body["instance_id"] != "0123456789abcdef0123456789abcdef" {
+		t.Errorf("instance_id = %v", body["instance_id"])
+	}
+	if len(body) != 5 || body["protocol_version"] != float64(1) {
+		t.Errorf("fields = %v, want the four old ones plus instance_id", body)
+	}
+}

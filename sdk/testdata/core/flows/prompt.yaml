@@ -1,0 +1,6 @@
+name: core-prompt
+prompt: flow instructions
+stages:
+  - id: build
+    agents: [auto]
+    command: __PROMPT_AGENT__

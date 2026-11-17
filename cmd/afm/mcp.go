@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,6 +18,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
+
+	"github.com/akopichin/afm/pkg/serve"
 )
 
 const (
@@ -49,7 +49,7 @@ func newMCPServeCmd() *cobra.Command {
 	var transport, connect string
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Bridge stdio MCP to the /mcp endpoint of a running afm run (started with --mcp)",
+		Short: "Bridge stdio MCP to the /mcp endpoint of a running afm run or afm serve",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if transport != mcpTransportStdio {
@@ -70,7 +70,7 @@ func newMCPServeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&transport, "transport", mcpTransportStdio, "client-side transport (only stdio)")
-	cmd.Flags().StringVar(&connect, "connect", "", "loopback URL of the run's HTTP API, e.g. http://127.0.0.1:8080")
+	cmd.Flags().StringVar(&connect, "connect", "", "loopback URL of the HTTP API of afm run (e.g. http://127.0.0.1:8080) or of afm serve (http://127.0.0.1:8100)")
 	_ = cmd.MarkFlagRequired("connect")
 	return cmd
 }
@@ -78,13 +78,9 @@ func newMCPServeCmd() *cobra.Command {
 // parseMCPConnect accepts only loopback http: the endpoint has no authentication, so the bridge must never
 // carry a session to a remote host. A bare host:port URL means the default /mcp path.
 func parseMCPConnect(raw string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "http" || u.Host == "" {
-		return "", fmt.Errorf("--connect %q: want a loopback http URL such as http://127.0.0.1:8080", raw)
-	}
-	host := u.Hostname()
-	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return "", fmt.Errorf("--connect %q: only loopback hosts (127.0.0.1, localhost, [::1]) are allowed", raw)
+	u, err := serve.ParseLoopbackURL(raw)
+	if err != nil {
+		return "", fmt.Errorf("--connect: %w", err)
 	}
 	if u.Path == "" || u.Path == "/" {
 		u.Path = mcpDefaultPath
@@ -454,7 +450,7 @@ func (b *mcpBridge) describe(err error) error {
 		return errors.New("the MCP session is gone: the run ended, moved to a new repeat cycle, or afm restarted; start the bridge again")
 	}
 	if b.disabled() {
-		return errors.New("the run serves no MCP endpoint: start it with `afm run --mcp`")
+		return errors.New("the process serves no MCP endpoint: the run was started with --mcp-off")
 	}
 	b.mu.Lock()
 	rejected := b.rejected

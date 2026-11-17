@@ -65,6 +65,7 @@ type Config struct {
 // Service is the MCP endpoint of one run. It implements server.MCPHandler.
 type Service struct {
 	cfg    Config
+	specs  map[string]ToolSpec
 	runID  string
 	server *sdkmcp.Server
 	http   *sdkmcp.StreamableHTTPHandler
@@ -109,7 +110,7 @@ func New(cfg Config) (*Service, error) {
 	if runID == "" {
 		return nil, errors.New("mcpserver: RunID or RunDir is required")
 	}
-	s := &Service{cfg: cfg, runID: runID, done: make(chan struct{}), closeDone: make(chan struct{}), changed: make(chan struct{}), ready: make(chan struct{})}
+	s := &Service{cfg: cfg, specs: catalogByName(), runID: runID, done: make(chan struct{}), closeDone: make(chan struct{}), changed: make(chan struct{}), ready: make(chan struct{})}
 	s.ctx, s.cancel = context.WithCancel(context.Background()) //nolint:gosec // Close calls cancel
 	s.server = sdkmcp.NewServer(&sdkmcp.Implementation{Name: "afm", Version: cfg.Version}, &sdkmcp.ServerOptions{
 		SubscribeHandler:   s.subscribeHandler,

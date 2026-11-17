@@ -82,22 +82,10 @@ func (s *Service) budgetResume(ctx context.Context, in budgetResumeInput) *sdkmc
 }
 
 func (s *Service) registerBudgetTools() {
-	if !s.cfg.Groups.Has(GroupBudget) {
-		return
-	}
-	sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-		Name: "afm_budget_adjust",
-		Description: "Set the absolute limit of a budget scope (tokens and/or money_usd) or remove it (unlimited). It does not " +
-			"release held work; call afm_budget_resume for that. Fails with a conflict if expected_revision is stale. Needs group budget.",
-		Annotations: &sdkmcp.ToolAnnotations{DestructiveHint: ptr(false)},
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in budgetAdjustInput) (*sdkmcp.CallToolResult, any, error) {
+	addTool(s, toolBudgetAdjust, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in budgetAdjustInput) (*sdkmcp.CallToolResult, any, error) {
 		return s.budgetAdjust(ctx, in), nil, nil
 	})
-	sdkmcp.AddTool(s.server, &sdkmcp.Tool{
-		Name:        "afm_budget_resume",
-		Description: "Continue a scope held by a budget limit without changing the limit. Needs group budget.",
-		Annotations: &sdkmcp.ToolAnnotations{DestructiveHint: ptr(false)},
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in budgetResumeInput) (*sdkmcp.CallToolResult, any, error) {
+	addTool(s, toolBudgetResume, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in budgetResumeInput) (*sdkmcp.CallToolResult, any, error) {
 		return s.budgetResume(ctx, in), nil, nil
 	})
 }

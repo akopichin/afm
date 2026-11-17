@@ -21,7 +21,10 @@ func TestRunMCPRefusedFlagsCreateNothing(t *testing.T) {
 		want string
 	}{
 		{name: "mcp without a port", args: []string{"--mcp", "--port", "0"}, want: "--mcp needs the HTTP API"},
-		{name: "allow without mcp", args: []string{"--mcp-allow", "reply"}, want: "--mcp-allow needs --mcp"},
+		{name: "allow without a port", args: []string{"--mcp-allow", "reply", "--port", "0"}, want: "--mcp-allow needs the HTTP API"},
+		{name: "off with mcp", args: []string{"--mcp-off", "--mcp"}, want: "--mcp-off cannot be combined"},
+		{name: "off with allow", args: []string{"--mcp-off", "--mcp-allow", "read"}, want: "--mcp-off cannot be combined"},
+		{name: "read mixed with groups", args: []string{"--mcp-allow", "read,reply"}, want: "cannot be combined"},
 		{name: "unknown group", args: []string{"--mcp", "--port", "8080", "--mcp-allow", "reply,all"}, want: `unknown MCP permission group "all"`},
 	}
 	for _, tt := range tests {
@@ -54,22 +57,35 @@ func TestRunMCPRefusedFlagsCreateNothing(t *testing.T) {
 	}
 }
 
-// --mcp mounts /mcp on the HTTP API in both modes, read-only unless permissions are named.
-func TestRunMCPMountsInBothModes(t *testing.T) {
+// /mcp is mounted by default in both modes with every permission group.
+func TestRunMCPMountsByDefault(t *testing.T) {
 	for _, mode := range bothModes {
 		t.Run(mode, func(t *testing.T) {
 			fx := newModeFixture(t, mode, "auto.yaml", "")
-			child := fx.start("--mcp")
+			child := fx.start()
 			fx.waitReady(child)
 			child.waitOutput(t, "mcp: "+fx.base()+"/mcp")
 
 			names := mcpToolNames(t, fx.base()+"/mcp")
 			for _, write := range []string{"afm_interaction_reply", "afm_stage_decide", "afm_stage_pause", "afm_budget_adjust"} {
-				if slices.Contains(names, write) {
-					t.Errorf("tool %s listed without --mcp-allow: %v", write, names)
+				if !slices.Contains(names, write) {
+					t.Errorf("tool %s missing by default: %v", write, names)
 				}
 			}
 		})
+	}
+}
+
+func TestRunMCPReadOnlyKeyword(t *testing.T) {
+	fx := newModeFixture(t, modeCore, "auto.yaml", "")
+	child := fx.start("--mcp-allow", "read")
+	fx.waitReady(child)
+
+	names := mcpToolNames(t, fx.base()+"/mcp")
+	for _, write := range []string{"afm_interaction_reply", "afm_stage_decide", "afm_stage_pause", "afm_budget_adjust"} {
+		if slices.Contains(names, write) {
+			t.Errorf("tool %s listed with --mcp-allow read: %v", write, names)
+		}
 	}
 }
 
@@ -80,12 +96,12 @@ func TestRunMCPAcceptsNamedGroups(t *testing.T) {
 	mcpToolNames(t, fx.base()+"/mcp")
 }
 
-// Without --mcp the route answers JSON, not the SPA fallback.
-func TestRunMCPDisabledByDefault(t *testing.T) {
+// With --mcp-off the route answers JSON, not the SPA fallback.
+func TestRunMCPOff(t *testing.T) {
 	for _, mode := range bothModes {
 		t.Run(mode, func(t *testing.T) {
 			fx := newModeFixture(t, mode, "auto.yaml", "")
-			child := fx.start()
+			child := fx.start("--mcp-off")
 			fx.waitReady(child)
 
 			code, body, header := fx.call(http.MethodPost, "/mcp", "{}", nil)
@@ -93,7 +109,7 @@ func TestRunMCPDisabledByDefault(t *testing.T) {
 				t.Errorf("POST /mcp = %d %q (%s), want 404 JSON mcp_disabled", code, body, header.Get("Content-Type"))
 			}
 			if strings.Contains(child.out.String(), "mcp:") {
-				t.Errorf("mcp line announced without --mcp:\n%s", child.out.String())
+				t.Errorf("mcp line announced with --mcp-off:\n%s", child.out.String())
 			}
 		})
 	}

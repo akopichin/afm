@@ -250,11 +250,16 @@ image rejects the launch record. See [Pipeline packages](pipelines.md).
 
 ## MCP in Docker
 
-`afm run --mcp` works in the container: `/mcp` is on the published API port, so a
-host MCP client uses `http://127.0.0.1:<port>/mcp` or
+`/mcp` is served in the container by default, with **every permission group**: it is on the
+published API port, so a host MCP client uses `http://127.0.0.1:<port>/mcp` or
 `afm mcp serve --connect http://127.0.0.1:<port>`. The endpoint has no
-authentication and agents in the container can reach it too; see
-[MCP](mcp.md#local-access) before enabling write groups.
+authentication and agents in the container can reach it too, so they can approve plans and
+change budgets. Use `--mcp-allow read` or `--mcp-off` if they must not; see
+[MCP](mcp.md#local-access).
+
+The afm process on the host (before the re-exec) registers the run in `~/.afm/active-runs/`, so
+[`afm serve`](serve.md) lists it. The host stops a Docker run gracefully only (`SIGINT`); it never
+kills the container.
 
 ## Project file browser
 

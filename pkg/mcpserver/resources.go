@@ -15,23 +15,16 @@ const jsonMIME = "application/json"
 
 // registerResources exposes the same data as the read tools for clients that prefer resources and subscriptions.
 func (s *Service) registerResources() {
+	templates := ResourceTemplates()
+	status, cost, plan, artifact := templates[0], templates[1], templates[2], templates[3]
 	s.server.AddResource(&sdkmcp.Resource{
-		URI: statusURI(s.runID), Name: "run status", MIMEType: jsonMIME,
-		Description: "Run status, pending actions and cursor; subscribe to be told when it changes.",
+		URI: statusURI(s.runID), Name: status.Name, MIMEType: status.MIMEType, Description: status.Description,
 	}, s.readStatusResource)
 	s.server.AddResource(&sdkmcp.Resource{
-		URI: costURI(s.runID), Name: "run cost", MIMEType: jsonMIME,
-		Description: "Token and cost totals of the run; subscribe to be told when they change.",
+		URI: costURI(s.runID), Name: cost.Name, MIMEType: cost.MIMEType, Description: cost.Description,
 	}, s.readCostResource)
-	s.server.AddResourceTemplate(&sdkmcp.ResourceTemplate{
-		URITemplate: "afm://runs/{run_id}/stages/{stage_id}/plans/{revision}", Name: "stage plan",
-		MIMEType:    "text/markdown",
-		Description: "The plan of a stage at the revision a client reviewed; a revision that is no longer current is not found.",
-	}, s.readPlanResource)
-	s.server.AddResourceTemplate(&sdkmcp.ResourceTemplate{
-		URITemplate: "afm://runs/{run_id}/artifacts/{artifact_id}", Name: "artifact",
-		Description: "An artifact listed by afm_run_status: text (first page) or an image.",
-	}, s.readArtifactResource)
+	s.server.AddResourceTemplate(plan, s.readPlanResource)
+	s.server.AddResourceTemplate(artifact, s.readArtifactResource)
 }
 
 func (s *Service) readStatusResource(ctx context.Context, req *sdkmcp.ReadResourceRequest) (*sdkmcp.ReadResourceResult, error) {

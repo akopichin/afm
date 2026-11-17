@@ -136,7 +136,7 @@ func TestPipelineResumeLeavesUnboundRunWithProgressUnbound(t *testing.T) {
 	if code, _, stderr := pf.runAfm("--pipeline", dir); code != 0 {
 		t.Fatalf("first start: code=%d %s", code, stderr)
 	}
-	plan, err := preparePipelineRun(t.Context(), pipelineFlags{source: dir}, testCycleConfig(), "", false, false)
+	plan, err := preparePipelineRun(t.Context(), pipelineFlags{source: dir}, testCycleConfig(), "", false, false, false)
 	if err != nil || plan.resume == nil {
 		t.Fatalf("plan=%+v err=%v", plan, err)
 	}
@@ -161,7 +161,7 @@ func TestPipelineResumeLeavesUnboundRunWithProgressUnbound(t *testing.T) {
 	if pf.runFingerprint(predicted) != before {
 		t.Fatal("the predicted run's binding or journal changed")
 	}
-	next, err := preparePipelineRun(t.Context(), pipelineFlags{source: dir}, testCycleConfig(), "", false, false)
+	next, err := preparePipelineRun(t.Context(), pipelineFlags{source: dir}, testCycleConfig(), "", false, false, false)
 	if err == nil || !strings.Contains(err.Error(), "was not started from this pipeline source") {
 		t.Fatalf("the next start must refuse the unbound run %s: plan=%+v err=%v", foreign, next, err)
 	}
@@ -222,5 +222,23 @@ func TestPipelineResumeRefusesRunHeldByAnotherProcess(t *testing.T) {
 	}
 	if got := pf.runDirs(); len(got) != 1 || len(pf.logLines()) != before {
 		t.Fatalf("a refused continuation started something: runs=%v log=%v", got, pf.logLines())
+	}
+}
+
+// A start with a task is a new run: preflight must not predict the continuation of the recorded run, or the binder
+// would reject the new run the engine opens.
+func TestPipelinePlanWithTaskStartsNewRun(t *testing.T) {
+	pf := newPipelineFixture(t)
+	dir := pf.writePackage("tpkg", "pkgflow", nil)
+	if code, _, stderr := pf.runAfm("--pipeline", dir); code != 0 {
+		t.Fatalf("first start: code=%d %s", code, stderr)
+	}
+	cont, err := preparePipelineRun(t.Context(), pipelineFlags{source: dir}, testCycleConfig(), "", false, false, false)
+	if err != nil || cont.resume == nil {
+		t.Fatalf("without a task the plan must continue the recorded run: plan=%+v err=%v", cont, err)
+	}
+	fresh, err := preparePipelineRun(t.Context(), pipelineFlags{source: dir}, testCycleConfig(), "", false, false, true)
+	if err != nil || fresh.resume != nil || !fresh.forceNew {
+		t.Fatalf("with a task the plan must start a new run: plan=%+v err=%v", fresh, err)
 	}
 }

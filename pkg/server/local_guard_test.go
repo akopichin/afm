@@ -9,7 +9,7 @@ import (
 
 func guardedRequest(method, host, origin, body string) *httptest.ResponseRecorder {
 	reached := false
-	h := localGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := LocalGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -80,7 +80,7 @@ func TestLocalGuardLimitsBody(t *testing.T) {
 		t.Fatalf("declared oversize: status = %d, want 413", w.Code)
 	}
 
-	h := localGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := LocalGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, maxLocalBodyBytes+2)
 		n, err := r.Body.Read(buf)
 		for err == nil {
