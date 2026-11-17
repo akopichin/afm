@@ -5,6 +5,6 @@ func AllStatuses() []StageStatus {
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
 		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants, StatusAwaitingPeer,
-		StatusAwaitingQuota,
+		StatusAwaitingQuota, StatusAwaitingPreCompletion,
 	}
 }

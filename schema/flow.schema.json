@@ -381,6 +381,16 @@
           "type": "boolean",
           "description": "Enable the file-based dialog protocol with the user via the dashboard."
         },
+        "pre_completion": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_failures": {
+              "type": "integer", "minimum": 0, "default": 1,
+              "description": "Number of author corrections allowed after a required pre-completion review requests changes."
+            }
+          }
+        },
         "verify": {
           "description": "Stage-completion check(s) run after .done: a shell command (legacy scalar), one step object ({run: ...} or {command: ...}), an ordered list of step objects, or a container object ({steps: [...], max_failures: N}) that also sets a per-stage verify failure budget. A non-zero shell exit means the stage is not actually complete.",
           "oneOf": [
@@ -505,6 +515,7 @@
               "interactive": { "const": false },
               "plan": { "maxLength": 0 },
               "verify": { "not": {} },
+              "pre_completion": { "not": {} },
               "buttons": { "maxProperties": 0 },
               "assistants": { "not": {} }
             }
@@ -604,8 +615,8 @@
         },
         "trigger": {
           "type": "string",
-          "enum": ["", "one_shot", "checkpoints", "on_completion", "on_message"],
-          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion. on_message: waits for messages addressed to it and answers each in its own turn."
+          "enum": ["", "one_shot", "checkpoints", "pre_completion", "on_completion", "on_message"],
+          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion. pre_completion: reviews a completed execution before verify. on_message: waits for messages addressed to it and answers each in its own turn."
         },
         "skills": { "$ref": "#/definitions/skillNames" },
         "skills_dir": { "$ref": "#/definitions/skillsDir" },

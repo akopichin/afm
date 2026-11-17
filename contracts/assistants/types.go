@@ -79,6 +79,8 @@ const (
 	TriggerOneShot Trigger = "one_shot"
 	// TriggerCheckpoints — помощник приглашается на контрольных точках родителя.
 	TriggerCheckpoints Trigger = "checkpoints"
+	// TriggerPreCompletion reviews the stage result before verification.
+	TriggerPreCompletion Trigger = "pre_completion"
 	// TriggerOnCompletion — помощник приглашается, когда порождающая его
 	// работа завершена.
 	TriggerOnCompletion Trigger = "on_completion"
@@ -90,7 +92,7 @@ const (
 // Valid reports whether t is a recognized Trigger, or empty (meaning "use Attach's own default").
 func (t Trigger) Valid() bool {
 	switch t {
-	case "", TriggerOneShot, TriggerCheckpoints, TriggerOnCompletion, TriggerOnMessage:
+	case "", TriggerOneShot, TriggerCheckpoints, TriggerPreCompletion, TriggerOnCompletion, TriggerOnMessage:
 		return true
 	default:
 		return false

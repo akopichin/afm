@@ -202,7 +202,29 @@ type RunState struct {
 
 type RunStatus string
 
+// PreCompletionRound identifies the reviewed author turn and its continuation across replay.
+type PreCompletionRound struct {
+	ID              string                `json:"id"`
+	Phase           string                `json:"phase"`
+	RootGeneration  uint64                `json:"root_generation"`
+	AuthorEpoch     uint64                `json:"author_epoch"`
+	TaskIDs         []assistants.TaskID   `json:"task_ids,omitempty"`
+	CorrectionCount int                   `json:"correction_count"`
+	Decision        PreCompletionDecision `json:"decision"`
+}
+
+type PreCompletionDecision string
+
+const (
+	PreCompletionReviewing     PreCompletionDecision = "reviewing"
+	PreCompletionNeedsDecision PreCompletionDecision = "needs_decision"
+	PreCompletionCorrect       PreCompletionDecision = "correct"
+	PreCompletionVerify        PreCompletionDecision = "verify"
+	PreCompletionFail          PreCompletionDecision = "fail"
+)
+
 type StageState struct {
+	PreCompletion *PreCompletionRound `json:"pre_completion,omitempty"`
 	Status        StageStatus         `json:"status"`
 	UpdatedAt     time.Time           `json:"updated_at"`
 	Timing        StageTiming         `json:"timing,omitzero"`
@@ -320,6 +342,7 @@ const RunStatusFinished RunStatus = "finished"
 const RunStatusInterrupted RunStatus = "interrupted"
 const RunStatusRunning RunStatus = "running"
 const StatusAwaitingApproval StageStatus = "awaiting_approval"
+const StatusAwaitingPreCompletion StageStatus = "awaiting_pre_completion"
 const StatusAwaitingAssistants StageStatus = "awaiting_assistants"
 const StatusAwaitingPeer StageStatus = "awaiting_peer"
 const StatusAwaitingQuota StageStatus = "awaiting_quota"
@@ -353,6 +376,11 @@ func isIdle(rs *RunState) bool {
 		switch st.Status {
 		case StatusAwaitingUserInput, StatusAwaitingApproval, StatusPaused, StatusHookFailed:
 			return true
+		case StatusAwaitingPreCompletion:
+			if st.PreCompletion != nil && st.PreCompletion.Decision == PreCompletionNeedsDecision {
+				return true
+			}
+			anyActive = true
 		case StatusAwaitingAssistants:
 			if rs.Assistants.NeedsHumanDecision(stageID) {
 				return true

@@ -159,7 +159,8 @@ type Stage struct {
 	Interactive bool       `yaml:"interactive,omitempty"`
 	// Verify описывает один или несколько шагов проверки завершённости стадии, выполняемых в проектной
 	// директории после того как стадия заявила о завершении. См. pkg/flow/verify.go.
-	Verify VerifySpec `yaml:"verify,omitempty"`
+	Verify        VerifySpec         `yaml:"verify,omitempty"`
+	PreCompletion *PreCompletionSpec `yaml:"pre_completion,omitempty" json:",omitempty"`
 	// Prompt is an optional explicit instruction delivered to the agent
 	// after the <stage> context block.
 	Prompt string `yaml:"prompt,omitempty"`
@@ -816,6 +817,14 @@ func (f *Flow) validate() error {
 	// verify: сами шаги и требование исполняемой стадии. Стадия без implementation/review/auto (только
 	// planning) не создаёт .done и никогда не "заявляет о завершении" — проверять там нечего.
 	for _, s := range f.Stages {
+		if s.PreCompletion != nil {
+			if !s.IsExecutionStage() {
+				return fmt.Errorf("stage %q: pre_completion requires an execution stage", s.ID)
+			}
+			if s.PreCompletion.CorrectionLimit() < 0 {
+				return fmt.Errorf("stage %q: pre_completion.max_failures must be non-negative", s.ID)
+			}
+		}
 		if s.Verify.IsEmpty() {
 			continue
 		}
