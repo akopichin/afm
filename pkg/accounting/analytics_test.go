@@ -439,7 +439,7 @@ func TestAnalytics_ModelProvenanceAndUnknown(t *testing.T) {
 	}
 
 	models := sel.Rows(GroupModel, SortName, false)
-	if unknown := rowByKey(t, models, UnknownModelKey); unknown.Model != nil || unknown.Label != "Unknown" || unknown.Jobs != 1 {
+	if unknown := rowByKey(t, models, UnknownModelKey); unknown.Model != nil || unknown.Label != unknownModelLabel || unknown.Jobs != 1 {
 		t.Fatalf("unknown bucket = %+v", unknown)
 	}
 }

@@ -54,63 +54,81 @@ func TestIdleTimeout_FakeClockFiresAndKillsProcess(t *testing.T) {
 	}
 }
 
-// TestIdleTimeout_ResetDefersDeadlineOnOutput asserts that each line of output resets the idle deadline —
-// a steady stream of output must never trip the timeout even though its cumulative wall-clock span exceeds
-// IdleTimeout, as long as no single gap between lines does.
+// Output spanning more than one idle timeout keeps the script alive while each gap is shorter.
 func TestIdleTimeout_ResetDefersDeadlineOnOutput(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "reset.log")
 
 	fc := clock.NewFake(time.Unix(0, 0))
-	lineCh := make(chan struct{}, 8)
+	reset := make(chan bool, 3)
+	scriptClock := &idleResetClock{FakeClock: fc, afterReset: func(wasActive bool) {
+		fc.Advance(30 * time.Minute)
+		reset <- wasActive
+	}}
 	ex := executor.New(executor.Config{
-		Command: testCmdShell,
-		// A real gap between lines matters: it guarantees each line's idleTimer.Reset() lands strictly after
-		// the PRECEDING Advance in the loop below, so the fake clock's "now" at each Reset keeps climbing
-		// instead of all three resets racing in at now==0 before the test loop gets to advance at all.
-		ExtraArgs:   []string{testFlagC, "for i in 1 2 3; do echo line$i; sleep 0.05; done; sleep 300"},
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, "printf 'line1\nline2\nline3\n'; exec sleep 300"},
 		IdleTimeout: time.Hour,
-		Clock:       fc,
-		// RunScript reports every raw stdout line via OnAction unconditionally — unlike RunAgent, which only
-		// reports lines that parse as the JSON stream protocol.
-		OnAction: func(stream, line string) { lineCh <- struct{}{} },
+		Clock:       scriptClock,
 	})
 
-	done := make(chan error, 1)
-	go func() { done <- ex.RunScript(context.Background(), 0, logFile) }()
-
-	fc.BlockUntil(1) // initial idle timer registered
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		defer close(done)
+		runErr = ex.RunScript(ctx, 0, logFile)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 
 	for i := 0; i < 3; i++ {
 		select {
-		case <-lineCh:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("line %d did not arrive in time", i+1)
+		case wasActive := <-reset:
+			if !wasActive {
+				t.Fatalf("idle timer expired before line %d", i+1)
+			}
+		case <-done:
+			t.Fatalf("RunScript returned before line %d reset the idle timer: %v", i+1, runErr)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("line %d did not reset the idle timer", i+1)
 		}
-		// idleTimer.Reset is called synchronously right after the line callback, on the same goroutine — a
-		// brief real settle lets it land before the next Advance (scheduling slack, not a production duration).
-		time.Sleep(10 * time.Millisecond)
-		fc.Advance(30 * time.Minute) // half of IdleTimeout: must not fire if Reset just re-armed the full hour
 	}
 
-	select {
-	case err := <-done:
-		t.Fatalf("RunAgent returned early (%v) — the idle timer was not reset by incoming output", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	// No more output is coming (the script just sleeps for real now) — advance well past the last reset's
-	// deadline to let the idle timeout actually fire.
-	fc.Advance(time.Hour)
+	// The clock has already advanced half the idle timeout since the last line.
+	fc.Advance(30 * time.Minute)
 
 	select {
-	case err := <-done:
-		if !errors.Is(err, executor.ErrIdleTimeout) {
-			t.Fatalf("expected ErrIdleTimeout once output stopped, got %v", err)
+	case <-done:
+		if !errors.Is(runErr, executor.ErrIdleTimeout) {
+			t.Fatalf("expected ErrIdleTimeout once output stopped, got %v", runErr)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("RunAgent did not return after the idle timeout should have fired")
+		t.Fatal("RunScript did not return after the idle timeout should have fired")
 	}
+}
+
+type idleResetClock struct {
+	*clock.FakeClock
+	afterReset func(bool)
+}
+
+func (c *idleResetClock) NewTimer(d time.Duration) clock.Timer {
+	return idleResetTimer{Timer: c.FakeClock.NewTimer(d), afterReset: c.afterReset}
+}
+
+type idleResetTimer struct {
+	clock.Timer
+	afterReset func(bool)
+}
+
+func (t idleResetTimer) Reset(d time.Duration) bool {
+	wasActive := t.Timer.Reset(d)
+	// Advance before the stdout reader can reset the timer for the next line.
+	t.afterReset(wasActive)
+	return wasActive
 }
 
 // TestInterruptGrace_SIGKILLAfterGraceElapsed asserts that a subprocess which ignores SIGINT is force-killed
