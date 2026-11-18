@@ -185,6 +185,18 @@ func OnMessageTurnBlock() string {
 		"Use only your assigned skills listed in this prompt; other skills are not available to you.\n\n"
 }
 
+// PreCompletionTurnBlock is afm's own instruction in the context of every turn of a pre_completion helper (not data,
+// so it is never fenced): the turn reviews round `round` of the stage's author, and what the author reads of the answer.
+func PreCompletionTurnBlock(round int) string {
+	return "## How your turns work\n\n" +
+		fmt.Sprintf("You review the work of the stage's agent before the stage's own verification: each turn answers ONE review round, this one is round %d. ", round) +
+		"The agent has finished its turn; its plan, summary and artifacts are above as data, and the work itself is in your workspace — judge the work, not the agent's own account of it.\n" +
+		"Return one result in the output contract below: verdict `pass` when the work is acceptable, `needs_changes` when the agent has to change something. " +
+		"The agent reads your summary, suggested change and findings word for word, so say exactly what to change and why.\n" +
+		"AFM returns you to waiting by itself after your result and starts your next turn for the next round. Do not register an `afm agent wait` or a loop for it, and do not end your turn by waiting for the agent: it does not work while you review.\n" +
+		"Use only your assigned skills listed in this prompt; other skills are not available to you.\n\n"
+}
+
 // completionHelperInstructions — a helper with trigger on_completion starts only after the stage agent finished, so
 // a wait on it can never end and admission refuses it (wait_cycle); the agent only has to finish its own work.
 const completionHelperInstructions = "A helper with trigger `on_completion` starts by itself after you finish your own work: do not wait for it before that, such a wait is refused.\n"

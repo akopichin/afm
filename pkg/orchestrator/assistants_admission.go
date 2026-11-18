@@ -84,6 +84,9 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	if err := rejectOnMessageTopLevel(req.Trigger, scope, req.StageID, stageActive); err != nil {
 		return admittedTask{}, err
 	}
+	if err := o.rejectPreCompletionTopLevel(req.Trigger, scope, req.StageID, stageActive); err != nil {
+		return admittedTask{}, err
+	}
 
 	if o.opts.AssistantsRegistry == nil {
 		return admittedTask{}, attachRejected(assistants.CodeFeatureDisabled, "no assistant profiles configured")
@@ -128,7 +131,7 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	// it; a helper on a pending stage waits for the stage.
 	if scope == assistants.ScopeRun || stageActive {
 		task.Status = assistants.StatusQueued
-		if isWatcherTrigger(task.Trigger) || task.Trigger == assistants.TriggerOnMessage {
+		if isWatcherTrigger(task.Trigger) || state.IsRequestDriven(task.Trigger) {
 			task.Status = assistants.StatusWatching
 		}
 		statusEff, err := taskStatusEffect(task.ID, task.Status, "")
@@ -146,6 +149,9 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	task.Expect = state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, MaxQuota: o.opts.Config.Collaboration.Limits.MaxTasks}
 	if scope == assistants.ScopeStage {
 		task.Expect.StageNotTerminal = []string{req.StageID}
+	}
+	if task.Trigger == assistants.TriggerPreCompletion {
+		task.Expect.Check = preCompletionWindowCheck(req.StageID)
 	}
 	return task, nil
 }

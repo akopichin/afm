@@ -87,11 +87,25 @@ func atomicWriteFile(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// A temp file of its own, so two writers of one path never rename each other's.
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return fmt.Errorf("write temp %s: %w", path, err)
 	}
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp, 0644)
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write temp %s: %w", path, werr)
+	}
 	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("rename %s: %w", path, err)
 	}
 	return nil

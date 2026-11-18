@@ -387,7 +387,7 @@ func (o *Orchestrator) prepareHelperTurn(ctx context.Context, taskID assistants.
 	if current, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
 		request = onMessageTurnRequest(current)
 	}
-	if state.IsOnMessageHelper(task) && request == "" {
+	if state.IsRequestHelper(task) && request == "" {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWatching, errNoRequestDue.Error())
 		return helperTurn{}, false
 	}

@@ -74,6 +74,17 @@ const (
 	// the Stop hook reminder, or the launch of a post-exit correction. Fenced by the turn's epoch; the stage
 	// does not move, so it resolves no wait and completes nothing.
 	EvReserveSummaryHook FSMEvent = "reserve_summary_hook"
+	// EvAwaitPreCompletion — the author's turn passed the completion check and the stage's pre_completion helpers
+	// review it before verify. The author's process has exited; the round is fenced by the epoch of its turn.
+	EvAwaitPreCompletion FSMEvent = "await_pre_completion"
+	// EvPreCompletionDecided ends a round that goes on: accepted (verify or completion follows) or needs_changes (the
+	// author corrects). Fenced by the round's own start and by the stage's open round, under the store lock.
+	EvPreCompletionDecided FSMEvent = "pre_completion_decided"
+	// EvPreCompletionAcceptEmpty and EvPreCompletionConsumed are self-transitions of a running stage that only
+	// record the accepted-round intent: an empty round (no helper) before verify or completion, and its use when
+	// verify rejected the work. The stage does not move.
+	EvPreCompletionAcceptEmpty FSMEvent = "pre_completion_accept_empty"
+	EvPreCompletionConsumed    FSMEvent = "pre_completion_consumed"
 )
 
 type GuardCtx struct {
@@ -102,6 +113,10 @@ type GuardCtx struct {
 	// SummaryStep is recorded by the transition that reserves a correction of a missing execution_summary.md:
 	// EvScheduleRetry for a post-exit continuation, EvReserveSummaryHook for the Stop hook reminder.
 	SummaryStep *state.SummaryStep
+	// PreCompletion is recorded by the pre-completion transitions: the author's loop counters and the decision.
+	PreCompletion *state.PreCompletionStep
+	// currentStatus is set by Apply for rules whose target is the status they fire from.
+	currentStatus state.StageStatus
 }
 
 type Rule struct {
@@ -137,7 +152,7 @@ func NewFSM(store *state.Store) *FSM {
 			EvApprove:   {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
 			// awaiting_assistants добавлен для T7.8: старый процесс УЖЕ вышел (main executor done), Revise там —
 			// явный запуск исполнения с feedback, а не прерывание живого агента.
-			EvRevise: {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused, state.StatusAwaitingAssistants}, To: to(state.StatusRevising)},
+			EvRevise: {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused, state.StatusAwaitingAssistants, state.StatusAwaitingPreCompletion}, To: to(state.StatusRevising)},
 			// Revising тоже разрешён здесь: run<Phase>WithFeedback переводит стадию обратно в Running этим же
 			// событием ПЕРЕД повторным runWithRetry — без этого стадия застревала бы в Revising навсегда.
 			EvStartRun: {From: []state.StageStatus{state.StatusReady, state.StatusRevising}, To: to(state.StatusRunning)},
@@ -173,6 +188,14 @@ func NewFSM(store *state.Store) *FSM {
 			// can hit the limit too. EvQuotaReset returns to the phase; Pause/Fail leave the wait like any other.
 			EvAwaitQuota: {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusAwaitingQuota)},
 			EvQuotaReset: {From: []state.StageStatus{state.StatusAwaitingQuota}, To: phaseDispatch},
+			// A round parks the stage like awaiting_assistants. Only its own decision, Pause, Revise and Fail leave it: Complete,
+			// VerifyFail and AskUser are not accepted, so nothing but the decision hands the work on.
+			EvAwaitPreCompletion:   {From: []state.StageStatus{state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingPreCompletion)},
+			EvPreCompletionDecided: {From: []state.StageStatus{state.StatusAwaitingPreCompletion}, To: to(state.StatusRunning)},
+			// A finished author may sit in awaiting_user_input (an abandoned question) or in retrying (a restart that found its
+			// files done); the acceptance does not move it.
+			EvPreCompletionAcceptEmpty: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingUserInput, state.StatusRetrying}, To: func(c GuardCtx) state.StageStatus { return c.currentStatus }},
+			EvPreCompletionConsumed:    {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusRunning)},
 			// EvReserveSummaryHook stays in running: it only records the reminder (see its doc comment).
 			EvReserveSummaryHook: {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusRunning)},
 			// Разрешаем retry из AwaitingUserInput/AwaitingPeer: поллер мог сменить статус до возврата
@@ -187,7 +210,7 @@ func NewFSM(store *state.Store) *FSM {
 			// awaiting_assistants/awaiting_peer/awaiting_quota допускают выход в paused: пользователь может вручную
 			// поставить на паузу стадию, пока она ждёт помощников/коллегу по mesh (T5.1: "awaiting_peer...
 			// is pausable").
-			EvPause:    {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer, state.StatusAwaitingQuota}, To: to(state.StatusPaused)},
+			EvPause:    {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPreCompletion, state.StatusAwaitingPeer, state.StatusAwaitingQuota}, To: to(state.StatusPaused)},
 			EvContinue: {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
 		},
 	}
@@ -215,6 +238,7 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 	if !ruleAllowsFrom(rule.From, from) {
 		return from, from, 0, false, nil
 	}
+	ctx.currentStatus = from
 	to = rule.To(ctx)
 	tr := &state.Transition{
 		StageID: stageID,
@@ -226,6 +250,7 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 		PeerWaits:      ctx.PeerWaits,
 		Quota:          ctx.Quota,
 		SummaryStep:    ctx.SummaryStep,
+		PreCompletion:  ctx.PreCompletion,
 		ExpectEpoch:    ctx.ExpectEpoch,
 		ExpectStageSeq: ctx.ExpectStageSeq,
 		Fence:          ctx.Fence,

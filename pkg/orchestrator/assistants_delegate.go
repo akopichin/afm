@@ -669,7 +669,7 @@ func (o *Orchestrator) resumeAssistantsAfterRestart(ctx context.Context) {
 				o.issueCompletionPasses(ctx, t.RootStageID)
 			}
 			// Or between a request and its wake.
-			if state.IsOnMessageHelper(t.Task) {
+			if state.IsRequestHelper(t.Task) {
 				o.wakeOnMessageTask(ctx, id)
 			}
 		default:

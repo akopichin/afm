@@ -15,7 +15,7 @@ func stageOwnHelper(rs state.RunState, stageID string, t *state.TaskState) bool 
 	if t.RootStageID != stageID || t.RootGeneration != rs.Assistants.RootGenerations[stageID] {
 		return false
 	}
-	return (t.CreatedBy == assistants.OriginStageAgent && !isWatcherTrigger(t.Trigger)) || state.IsOnMessageHelper(t.Task)
+	return (t.CreatedBy == assistants.OriginStageAgent && !isWatcherTrigger(t.Trigger)) || state.IsRequestHelper(t.Task)
 }
 
 // rejectOnMessageTopLevel refuses an on_message top-level task that has no stage to serve yet: a run agent
@@ -37,12 +37,12 @@ func rejectOnMessageTopLevel(trigger assistants.Trigger, scope assistants.Scope,
 // its parent's work, and the parent resumes when its children finish, not on a message.
 func rejectOnMessageDelegation(children []assistants.DelegateRequest, continuation *assistants.Continuation) error {
 	for i, child := range children {
-		if child.Trigger == assistants.TriggerOnMessage {
-			return attachRejected(assistants.CodeInvalidRequest, "children[%d]: trigger on_message is only for a stage's top-level helper", i)
+		if state.IsRequestDriven(child.Trigger) {
+			return attachRejected(assistants.CodeInvalidRequest, "children[%d]: trigger %s is only for a stage's top-level helper", i, child.Trigger)
 		}
 	}
-	if continuation != nil && continuation.Trigger == assistants.TriggerOnMessage {
-		return attachRejected(assistants.CodeInvalidRequest, "continuation trigger on_message is not supported — a delegating task resumes when its children finish")
+	if continuation != nil && state.IsRequestDriven(continuation.Trigger) {
+		return attachRejected(assistants.CodeInvalidRequest, "continuation trigger %s is not supported — a delegating task resumes when its children finish", continuation.Trigger)
 	}
 	return nil
 }
@@ -51,7 +51,7 @@ func rejectOnMessageDelegation(children []assistants.DelegateRequest, continuati
 // yield, delegation, Pause or crash keeps, or else the oldest waiting one. "" for any other task.
 func onMessageTurnRequest(t *state.TaskState) agentcomm.MessageID {
 	switch {
-	case !state.IsOnMessageHelper(t.Task):
+	case !state.IsRequestHelper(t.Task):
 		return ""
 	case t.ActiveRequest != "":
 		return t.ActiveRequest
@@ -91,7 +91,7 @@ const (
 // onMessageGated reports whether on_message helper t may not start a turn now: its stage is paused, or the helper
 // serves a superseded attempt of it. The requests wait; the stage's Continue starts them (resumeOnMessageHelpers).
 func onMessageGated(rs state.RunState, t *state.TaskState) bool {
-	if t == nil || !state.IsOnMessageHelper(t.Task) {
+	if t == nil || !state.IsRequestHelper(t.Task) {
 		return false
 	}
 	return t.RootGeneration != rs.Assistants.RootGenerations[t.RootStageID] || rs.Stages[t.RootStageID].Status == state.StatusPaused
@@ -100,9 +100,9 @@ func onMessageGated(rs state.RunState, t *state.TaskState) bool {
 // onMessageStartBlocked is why on_message helper t may not start a turn now, nil when it may or t is another task.
 func onMessageStartBlocked(rs state.RunState, t *state.TaskState) error {
 	switch {
-	case t == nil || !state.IsOnMessageHelper(t.Task):
+	case t == nil || !state.IsRequestHelper(t.Task):
 		return nil
-	case state.OnMessageIdle(*t):
+	case state.RequestIdle(*t):
 		return errNoRequestDue
 	case onMessageGated(rs, t):
 		return errOnMessageGated
@@ -116,7 +116,7 @@ func onMessageStartBlocked(rs state.RunState, t *state.TaskState) error {
 // its helpers and this one is required and passed its last request.
 func onMessageCloseReason(rs state.RunState, taskID assistants.TaskID) string {
 	t := rs.Assistants.Tasks[taskID]
-	if t == nil || t.Status != assistants.StatusWatching || !state.OnMessageIdle(*t) ||
+	if t == nil || t.Status != assistants.StatusWatching || !state.RequestIdle(*t) ||
 		t.RootGeneration != rs.Assistants.RootGenerations[t.RootStageID] {
 		return ""
 	}
@@ -124,7 +124,7 @@ func onMessageCloseReason(rs state.RunState, taskID assistants.TaskID) string {
 	case state.StatusDone:
 		return onMessageClosedReasonPrefix + "stage " + t.RootStageID + " is done"
 	case state.StatusAwaitingAssistants:
-		if t.Mode == assistants.ModeRequired && t.LastOutcome == state.RequestOutcomeResult && t.LastVerdict == assistants.VerdictPass {
+		if state.IsOnMessageHelper(t.Task) && t.Mode == assistants.ModeRequired && t.LastOutcome == state.RequestOutcomeResult && t.LastVerdict == assistants.VerdictPass {
 			return onMessageClosedReasonPrefix + "the last request passed and stage " + t.RootStageID + " awaits its helpers"
 		}
 		return ""
@@ -169,7 +169,7 @@ func (o *Orchestrator) resumeOnMessageHelpers(ctx context.Context, stageID strin
 	rs := o.opts.Store.Snapshot()
 	for _, id := range rs.Assistants.ByRootStage[stageID] {
 		t := rs.Assistants.Tasks[id]
-		if t == nil || !state.IsOnMessageHelper(t.Task) {
+		if t == nil || !state.IsRequestHelper(t.Task) {
 			continue
 		}
 		switch t.Status {
@@ -225,6 +225,7 @@ func (o *Orchestrator) finishOnMessageRequest(ctx context.Context, taskID assist
 	o.taskDelegationRejects.Delete(taskID) // rejections in a row count within one request
 	o.wakeOnMessageTask(ctx, taskID)
 	o.settleOnMessageTask(taskID)
+	o.afterRoundHelperChange(ctx, taskID) // the end of its request may be what the round waited for
 	return nil
 }
 

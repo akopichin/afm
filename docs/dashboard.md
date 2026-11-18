@@ -491,7 +491,7 @@ The breakdown splits the time into three groups:
 | Group | Statuses |
 |---|---|
 | **Working** | `planning`, `running`, `revising` |
-| **Waiting** | **Approval & replies** — `awaiting_approval`, `awaiting_user_input`, `hook_failed`, and `awaiting_assistants` when a required helper task needs your decision; **Helpers & colleagues** — `awaiting_peer`, and `awaiting_assistants` while a helper is still working; **Backoff & usage limits** — `retrying`, `awaiting_quota`; **Scheduling** — a started stage that is `pending` or `ready` again (shown only when above zero) |
+| **Waiting** | **Approval & replies** — `awaiting_approval`, `awaiting_user_input`, `hook_failed`, and `awaiting_assistants` when a required helper task needs your decision; **Helpers & colleagues** — `awaiting_peer`, `awaiting_assistants` while a helper is still working, and `awaiting_pre_completion` while a review round runs (it needs your decision when a required helper failed); **Backoff & usage limits** — `retrying`, `awaiting_quota`; **Scheduling** — a started stage that is `pending` or `ready` again (shown only when above zero) |
 | **Paused** | `paused` |
 
 The figures come from the server and are derived from the
@@ -874,7 +874,14 @@ resizing still works, but the width is not retained.
   to every stage); **Attach helper to stage…** opens the stage's **Attach
   helper** dialog (a helper that works for this stage's agent). The second is
   shown only while the stage can take a helper.
-- In the **Attach helper** dialog, **Trigger** offers **On message**: the helper
+- In the **Attach helper** dialog, **Trigger** offers **Pre-completion review**:
+  the helper runs after the stage agent finishes its turn and before verify. The
+  stage header and list show **Pre-completion review · round N** while it works,
+  the Feed adds notices when a round starts and ends (accepted, sent back to the
+  stage agent, or budget exhausted; they survive a reconnect), and the helper's
+  task view shows **Pre-completion review**, the round and the verdict. See
+  [Pre-completion review](collaboration.md#pre-completion-review).
+- In the **Attach helper** dialog, **Trigger** also offers **On message**: the helper
   waits idle until it is sent a message, answers each one in its own turn and
   stays attached; its task view then shows **Waiting for message** and the last
   request. See

@@ -277,8 +277,8 @@ stages:
 
 A single name (`assistants: reviewer`) or a single object also works. List order
 is preserved. The object accepts `profile` plus optional `title`, `instruction`,
-`mode`, `trigger` (`one_shot`, `checkpoints`, `on_completion` or `on_message`),
-`skills`, and `skills_dir`. Defaults are `advisory` and
+`mode`, `trigger` (`one_shot`, `checkpoints`, `on_completion`, `on_message` or
+`pre_completion`), `skills`, and `skills_dir`. Defaults are `advisory` and
 `one_shot`; the mode and trigger choices have the same meaning as in the dashboard
 below. `skills` and `skills_dir` work as for
 [stage agents](flow-reference.md#agent-skills); a helper does not inherit its
@@ -544,6 +544,89 @@ proposals are still recorded by the run. In the Assistant, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
+### Pre-completion review
+
+A helper with `trigger: pre_completion` reviews the stage agent's work **before**
+`verify:`. When the agent has finished its turn and the expected files pass the
+completion check, afm opens a review round: every `pre_completion` helper of the
+stage reads the result and answers with the usual `pass` or `needs_changes`.
+The order is author → `pre_completion` helpers → `verify:` (if any) → the post-verify
+required gate (`awaiting_assistants`, which waits for any unresolved required
+helper of the other triggers, such as `one_shot` or `on_completion`; the
+`on_completion` helpers may work there, before `done`) → `done`. It works for `implementation`, `review` and autonomous
+(`agents: [auto]`) stages, with or without a `verify:` step; planning phases and
+script stages have no round.
+
+```yaml
+stages:
+  - id: implement
+    agents: [auto]
+    pre_completion:
+      max_failures: 2
+    assistants:
+      - profile: reviewer
+        title: Review before verification
+        instruction: >-
+          Review the finished change. Return needs_changes with a clear
+          explanation of what the author must fix, or pass.
+        trigger: pre_completion
+        mode: required
+```
+
+- **Start.** The round starts only after the agent's turn ends. The appearance
+  of `execution_summary.md` or any other file starts nothing, and a helper does
+  not start while the completion check still fails.
+- **Waiting.** The stage is `awaiting_pre_completion` and shows the round
+  number. The agent's execution slot is released while helpers work, so
+  `max_parallel: 1` and the command semaphore do not deadlock. The round waits
+  for **all** its helpers, so the author gets every remark at once.
+- **`pass`.** If every required helper passed, verify runs, then the stage
+  completes as usual.
+- **`needs_changes`.** A required helper's `needs_changes` sends the work back to
+  the stage agent through the ordinary retry path; verify does not run for that
+  result. The author's next prompt carries each blocking helper's summary,
+  suggested change and findings **word for word** (with the helper, the round
+  and a link to the full report), under the heading "Замечания помощников
+  pre-completion". It is separate from `feedback.md` and from the verify
+  feedback. Advisory remarks are added as non-blocking recommendations. The
+  feedback reaches the author both in a resumed and in a fresh session; a fresh
+  one follows `fresh_correction` of [verify](verify.md). After the agent's next
+  turn a new round asks all `pre_completion` helpers again, even if the summary
+  is unchanged. The same happens after a verify rejection and its correction.
+- **Budget.** `pre_completion.max_failures` is the number of corrections for the
+  whole round, not per helper. Default is 1; `0` fails the stage on the first
+  `needs_changes`. When it is spent the stage becomes `failed` with the reason and
+  the path of the last report. The budget is journaled, so a restart keeps it.
+  It is independent of `verify.max_failures`, and both count against the
+  overall retry limit. Pause, a usage-limit wait and transport retries do not
+  spend it. **Retry** and **Revise** of the stage start a fresh budget.
+- **Advisory** helpers take part in the round and finish before verify, but their
+  verdict never asks for changes: here advisory means "no veto", not "in the
+  background after the stage". Use `mode: required` for automatic corrections.
+- **Failures.** A required helper that returns `inconclusive`, an invalid answer,
+  fails or is cancelled does not count as a remark on the code and is never a
+  `pass`. After the usual helper retries the stage waits for your decision
+  (Retry the helper, or **Waive…**); with `exit_on_fail` the failed or cancelled
+  required task follows the existing policy for required helpers. Verify is not
+  skipped.
+- **Waive** accepts one required helper for the **open round** only; a later
+  round asks it again. **Cancel** of the stage cancels the round, and a late
+  result of an earlier round never accepts or rejects newer work.
+- **Attach.** A `pre_completion` helper is for a stage's top-level helper only
+  (not a run agent, a `team:` role or a delegated child) on a stage that has
+  started and can reach a completion. Attach is refused with `invalid_status`
+  while a round is open and from its acceptance until verify ends; attach it
+  before the round or for the next one after a correction. It is not attached to
+  a `done` stage as a post-hoc reviewer. A stage with no such helper completes as
+  before.
+- **Delegation.** A helper can delegate, but a `delegate` result does not decide
+  the round: it waits for the helper's final result and its required children.
+
+The agent does not wait for its own `pre_completion` helper, as with
+`on_completion`: such a wait is refused with `wait_cycle`, including
+transitive ones, and a helper that waits for the author's unfinished turn is
+refused too (see [above](#do-not-wait-for-your-own-on-completion-helper)).
+
 ### Helpers that wait for messages
 
 A helper with `trigger: on_message` is a standing helper of one stage. It
@@ -574,6 +657,7 @@ It differs from the other triggers:
 | `one_shot` | once, right after it is attached | one question or review |
 | `checkpoints` | at the stage's checkpoints, several times | a watcher of the stage's output |
 | `on_completion` | one final pass when the stage result is ready | a report on the finished stage |
+| `pre_completion` | one pass per review round, before verify | a review that sends the work back to the author |
 | `on_message` | once per request, whenever one arrives | a colleague the stage agent or you ask repeatedly |
 | `team:` run agent | on every message, for the whole run | a reviewer shared by several stages |
 

@@ -17,6 +17,7 @@ export const STAGE_STATUSES = [
   "awaiting_assistants",
   "awaiting_peer",
   "awaiting_quota",
+  "awaiting_pre_completion",
 ] as const
 
 export type StageStatus = (typeof STAGE_STATUSES)[number]

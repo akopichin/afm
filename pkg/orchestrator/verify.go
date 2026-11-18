@@ -715,11 +715,14 @@ func (o *Orchestrator) verifyFeedbackBlock(stageDir string) string {
 	return "\n\n" + verifyFeedbackHeading + "\n\n" + text
 }
 
-// gateWithVerify запускает verify только после успешной file-пробы исполнительской фазы; planning и
-// status-чтения его не вызывают.
+// gateWithVerify запускает verify только после успешной file-пробы исполнительской фазы и раунда pre_completion;
+// planning и status-чтения его не вызывают.
 func (o *Orchestrator) gateWithVerify(ctx context.Context, s flow.Stage, phase string, baseCheck func() error) func() error {
 	return func() error {
 		if err := baseCheck(); err != nil {
+			return err
+		}
+		if err := o.preCompletionGate(s, phase); err != nil {
 			return err
 		}
 		if s.Verify.IsEmpty() {

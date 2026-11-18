@@ -11,12 +11,13 @@ import "github.com/akopichin/afm/pkg/assistants"
 // root generation (RootGenerations[stageID], 0 if never bumped) — a stage-level mirror of
 // pkg/orchestrator's currentChildren one level up. MINOR, intentional duplication: pkg/state cannot import
 // pkg/orchestrator (forbidden cycle), and introducing a third, lower-level package for six lines of map
-// filtering is not worth it — see dev-plan.md's Review decisions.
+// filtering is not worth it — see dev-plan.md's Review decisions. pre_completion helpers are left out: the
+// round they take part in is their gate, not the stage's completion.
 func (as AssistantsState) currentRootChildren(stageID string) []assistants.TaskID {
 	gen := as.RootGenerations[stageID]
 	var out []assistants.TaskID
 	for _, id := range as.ByRootStage[stageID] {
-		if t, ok := as.Tasks[id]; ok && t.ParentTaskID == nil && t.RootGeneration == gen {
+		if t, ok := as.Tasks[id]; ok && t.ParentTaskID == nil && t.RootGeneration == gen && t.Trigger != assistants.TriggerPreCompletion {
 			out = append(out, id)
 		}
 	}
@@ -117,8 +118,8 @@ func (as AssistantsState) RunBlocker() (TaskState, bool) {
 		if t == nil || t.Status.Terminal() {
 			continue
 		}
-		if IsOnMessageHelper(t.Task) {
-			if OnMessageIdle(*t) {
+		if IsRequestHelper(t.Task) {
+			if RequestIdle(*t) {
 				continue
 			}
 		} else if t.Status == assistants.StatusQueued {
@@ -143,7 +144,7 @@ func (as AssistantsState) NeedsHumanDecision(stageID string) bool {
 	if !ok {
 		return false
 	}
-	if OnMessageIdle(blocker) {
+	if RequestIdle(blocker) {
 		return blocker.LastOutcome != RequestOutcomeResult || blocker.LastVerdict != assistants.VerdictPass
 	}
 	switch blocker.Status {

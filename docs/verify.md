@@ -392,6 +392,24 @@ config > global config > default `true`**. This setting controls session renewal
 after verify rejection; it does not change the correction budget. Non-interactive
 agents already start without a resumable session.
 
+## Before verify: `pre_completion` helpers
+
+When a stage has [`pre_completion` helpers](collaboration.md#pre-completion-review),
+a review round runs after the author's turn and its completion check, and
+**before** the first verify step, even if the stage has no `verify:`. Verify starts
+only when every required helper has passed (or been waived). A required
+`needs_changes` returns the work to the author without running verify.
+
+- The two budgets are independent: `pre_completion.max_failures` counts review
+  corrections, `verify.max_failures` counts verify rejections. Both ride the
+  overall retry limit of the stage.
+- After a verify rejection and the author's correction, the `pre_completion`
+  round runs again: the earlier acceptance covered code that has changed. The
+  verify counters, including `review_patience`, are kept across the round.
+- Feedback stays separate: the helpers' remarks are not turned into verify
+  findings and are not written to `verify/feedback.md`.
+- A stage with no `pre_completion` helper behaves exactly as before.
+
 ## The correction budget: `verify.max_failures`
 
 When a verify step returns `needs_changes` (or a shell step exits non-zero), afm
@@ -432,7 +450,10 @@ shell step's non-zero exit. Two things it does **not** touch:
   it.
 
 The counter is **in-memory** and resets if the run is resumed after a restart
-(it is not persisted). Verify corrections also still ride the overall retry
+(it is not persisted). The exception is a stage with a
+[`pre_completion` round](collaboration.md#pre-completion-review): the round
+journals the verify counters, so they survive a restart there. The
+`pre_completion` budget itself is always journaled. Verify corrections also still ride the overall retry
 loop, so the effective ceiling is `min(max_failures, MaxRetries)` — with the
 built-in `MaxRetries = 15`, a budget above 15 is capped there.
 
@@ -492,7 +513,8 @@ Important guarantees and guardrails:
   silent no-op (the safe side — it never accepts by mistake, it just doesn't
   engage).
 - Like the correction budget, the unchanged-round counter is **in-memory** and
-  resets if the run is resumed after a restart.
+  resets if the run is resumed after a restart, except across a `pre_completion`
+  round, which journals it.
 
 ## Reports and feedback files
 
@@ -561,14 +583,15 @@ purely informational — the step's verdict and the stage outcome are unaffected
   therefore see the same project directory. `AFM_STAGE_DIR` holds the absolute
   directory of the verified stage, as it does for agents and script stages, so a
   step can check that stage's artifacts.
-- **The correction budget is an independent, in-memory counter**
+- **The correction budget is an independent counter, in-memory except across a `pre_completion` round**
   (`verify.max_failures`, default 1 — see
   [The correction budget](#the-correction-budget-verifymax_failures)), separate
   from the shared retry `attempt` counter. Transport/rate-limit retries and
   plan-incomplete retries no longer eat into it, and vice versa, so the
   configured number of corrective author runs is honored regardless of unrelated
   retries. The counter is **not durable**: it lives only for the current run and
-  resets if the run is resumed after a restart. Verify corrections still ride the
+  resets if the run is resumed after a restart, except across a `pre_completion`
+  round, which journals it. Verify corrections still ride the
   overall retry loop, so the effective ceiling is `min(max_failures, 15)`.
 - **Read-only is not a security boundary against local processes.** Even the
   codex sandbox is not a defense against a malicious process running under the

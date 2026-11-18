@@ -93,6 +93,7 @@ describe('useStatus', () => {
       preNote: '',
       buttons: [],
       awaitingAssistantsBlocked: false,
+      preCompletionBlocked: false,
     })
     expect(result.current.stages[1]?.status).toBe('running')
   })
@@ -177,6 +178,23 @@ describe('useStatus', () => {
     expect(byId.get('s2')?.isScript).toBe(false)
     expect(byId.get('s2')?.pausedFrom).toBe('')
     expect(byId.get('s2')?.preNote).toBe('')
+  })
+
+  test('парсит pre_completion и pre_completion_blocked, мусор игнорируется', () => {
+    const { stages } = normalizeStatus({
+      flow_name: 'demo',
+      stages: [
+        { id: 's1', status: 'awaiting_pre_completion', pre_completion: { round: 2, corrections: 1, max_failures: 3, decision: 'needs_changes' }, pre_completion_blocked: true },
+        { id: 's2', status: 'awaiting_pre_completion', pre_completion: { round: 'x' } },
+        { id: 's3', status: 'running', pre_completion: { round: 1, decision: 'bogus' } },
+      ],
+    })
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('s1')?.preCompletion).toEqual({ round: 2, corrections: 1, maxFailures: 3, decision: 'needs_changes' })
+    expect(byId.get('s1')?.preCompletionBlocked).toBe(true)
+    expect(byId.get('s2')?.preCompletion).toBeUndefined()
+    expect(byId.get('s2')?.preCompletionBlocked).toBe(false)
+    expect(byId.get('s3')?.preCompletion).toEqual({ round: 1, corrections: 0, maxFailures: 0, decision: '' })
   })
 
   // T7.9: awaiting_assistants_blocked различает «помощник ещё работает» (false/отсутствует) от «нужно решение

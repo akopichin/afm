@@ -96,6 +96,9 @@ type TaskState struct {
 	WaiverReason string    `json:"waiver_reason,omitempty"`
 	WaivedBy     Actor     `json:"waived_by,omitempty"`
 	WaivedAt     time.Time `json:"waived_at,omitempty"`
+	// WaivedRequest is the request of a pre_completion round a human waived for this helper. Unlike Waived it
+	// closes only that round's request: a later round is not waived by it.
+	WaivedRequest agentcomm.MessageID `json:"waived_request,omitempty"`
 }
 
 // Paused reports whether this task itself carries at least one hold (does not look at ancestors — see
@@ -940,6 +943,8 @@ func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
 // applyTaskWaived, encoded by pkg/orchestrator's taskWaivedEffect.
 type TaskWaivedPayload struct {
 	Reason string `json:"reason"`
+	// RequestID, for a pre_completion helper, is the round request the waiver covers.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // applyTaskWaived projects a human's explicit decision to accept the risk of this required task never
@@ -959,7 +964,11 @@ func applyTaskWaived(as *AssistantsState, c *Control, dryRun bool) error {
 	if dryRun {
 		return nil
 	}
-	t.Waived = true
+	if p.RequestID != "" {
+		t.WaivedRequest = agentcomm.MessageID(p.RequestID)
+	} else {
+		t.Waived = true
+	}
 	t.WaiverReason = p.Reason
 	t.WaivedBy = c.Actor
 	t.WaivedAt = c.Time

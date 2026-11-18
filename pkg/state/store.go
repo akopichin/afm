@@ -36,6 +36,10 @@ type Transition struct {
 	// source and file problem, projected onto StageState.Summary. Absent in journals written before it and on
 	// every other transition.
 	SummaryStep *SummaryStep `json:"summary_step,omitempty"`
+	// PreCompletion — on a transition of the pre-completion round (start, decision, empty acceptance, consumption):
+	// the author's loop counters and the decision, projected onto StageState.PreCompletion. Absent on every other
+	// transition and in journals written before it.
+	PreCompletion *PreCompletionStep `json:"pre_completion,omitempty"`
 	// ExpectEpoch, when set, fences the transition: it commits only while the stage's StageState.Epoch still
 	// has this value — the process that decided it still owns the stage. Never journaled.
 	ExpectEpoch *uint64 `json:"-"`

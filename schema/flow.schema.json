@@ -337,6 +337,18 @@
             { "$ref": "#/definitions/verifyContainer" }
           ]
         },
+        "pre_completion": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Budget of the review round that runs the stage's pre_completion helpers after the author's turn and before verify. Allowed on execution stages only; it does not require a declared helper, one can be attached while the run goes.",
+          "properties": {
+            "max_failures": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many needs_changes rounds send the work back to the stage's agent before the stage fails: N = the number of corrections. Default 1; 0 fails on the first needs_changes."
+            }
+          }
+        },
         "prompt": {
           "type": "string",
           "description": "Explicit instruction delivered to the agent after the stage context block."
@@ -442,7 +454,8 @@
               "plan": { "maxLength": 0 },
               "verify": { "not": {} },
               "buttons": { "maxProperties": 0 },
-              "assistants": { "not": {} }
+              "assistants": { "not": {} },
+              "pre_completion": { "not": {} }
             }
           }
         }
@@ -538,8 +551,8 @@
         },
         "trigger": {
           "type": "string",
-          "enum": ["", "one_shot", "checkpoints", "on_completion", "on_message"],
-          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion. on_message: waits for messages addressed to it and answers each in its own turn."
+          "enum": ["", "one_shot", "checkpoints", "on_completion", "on_message", "pre_completion"],
+          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion. on_message: waits for messages addressed to it and answers each in its own turn. pre_completion: reviews the stage's author after its turn passed the completion check and before verify; a required needs_changes returns the work to the stage's agent. Execution stages only."
         },
         "skills": { "$ref": "#/definitions/skillNames" },
         "skills_dir": { "$ref": "#/definitions/skillsDir" }

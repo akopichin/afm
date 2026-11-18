@@ -73,6 +73,10 @@ const (
 	// wakes back into the phase it was in (EvQuotaReset's phaseDispatch) or exits to paused/failed. Classified
 	// as ACTIVITY, not human-idle (isIdle below): the wait ends by itself, no user decision is pending.
 	StatusAwaitingQuota StageStatus = "awaiting_quota"
+	// StatusAwaitingPreCompletion — the author's turn passed the completion check and the stage's pre_completion
+	// helpers review it before verify. The author's process has exited and its lease is free. Non-terminal;
+	// exits to running (decision), paused, failed or revising. Machine work unless the round needs a human.
+	StatusAwaitingPreCompletion StageStatus = "awaiting_pre_completion"
 )
 
 // AllStatuses returns every StageStatus in declaration order.
@@ -81,7 +85,7 @@ func AllStatuses() []StageStatus {
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
 		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants, StatusAwaitingPeer,
-		StatusAwaitingQuota,
+		StatusAwaitingQuota, StatusAwaitingPreCompletion,
 	}
 }
 
@@ -116,6 +120,9 @@ type StageState struct {
 	// (Transition.SummaryStep). Carried across pause, restart and retries; only an explicit Retry or Revise
 	// starts a new cycle. Derived on replay.
 	Summary *SummaryCorrections `json:"summary,omitempty"`
+	// PreCompletion — the stage's pre-completion round record (Transition.PreCompletion). Carried across pause and
+	// restart; Retry and Revise start a new cycle. Derived on replay.
+	PreCompletion *PreCompletionState `json:"pre_completion,omitempty"`
 }
 
 // SummaryCorrections counts the corrections spent on a missing or empty execution_summary.md. A reservation is
@@ -347,6 +354,11 @@ func isIdle(rs *RunState) bool {
 			anyActive = true // машинная работа помощника — как running/planning/revising
 		case StatusFailed:
 			hasFailed = true
+		case StatusAwaitingPreCompletion:
+			if PreCompletionNeedsHuman(rs, stageID) {
+				return true
+			}
+			anyActive = true
 		case StatusRunning, StatusPlanning, StatusRevising, StatusAwaitingPeer, StatusAwaitingQuota:
 			anyActive = true
 		default:
@@ -453,6 +465,14 @@ func (rs *RunState) applyTransition(t *Transition) {
 		rs.resolveStageStatusWaits()
 		return
 	}
+	if preCompletionRecordEvents[t.Event] {
+		st.Summary = summaryAfter(prev.Summary, t)
+		st.PreCompletion = rs.preCompletionAfter(prev.PreCompletion, t)
+		st.Seq = t.Seq
+		rs.Stages[t.StageID] = st
+		rs.resolveStageStatusWaits()
+		return
+	}
 	st.PeerWaits = slices.Clone(t.PeerWaits)
 	// Pausing a park and continuing it keep its episode: Continue decides the continuation on the same waits.
 	if (t.To == StatusPaused && t.From == StatusAwaitingPeer) || (t.From == StatusPaused && t.To == StatusAwaitingPeer) {
@@ -461,8 +481,12 @@ func (rs *RunState) applyTransition(t *Transition) {
 	st.PeerContinued = continuesPeerTurn(prev, t)
 	st.Quota = quotaAfter(prev.Quota, t)
 	st.Summary = summaryAfter(prev.Summary, t)
+	st.PreCompletion = rs.preCompletionAfter(prev.PreCompletion, t)
 	st.Seq = t.Seq
 	rs.Stages[t.StageID] = st
+	if t.Event == preCompletionEventAwait {
+		rs.queuePreCompletionRound(t.StageID, st.PreCompletion)
+	}
 	rs.resolveStageStatusWaits()
 }
 

@@ -96,7 +96,7 @@ it('pauses and continues through the API and disables actions while status is st
 it('offers Pause for lifecycle waits but never for an executing script', () => {
   const { rerender } = render(<WorkspaceHeader stage={stage({ status: 'running', isScript: true })} connected />)
   expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
-  for (const status of ['planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota'] as const) {
+  for (const status of ['planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota', 'awaiting_pre_completion'] as const) {
     rerender(<WorkspaceHeader stage={stage({ status })} connected />)
     expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled()
   }
@@ -268,4 +268,12 @@ describe('WorkspaceHeader Feed focus', () => {
     fireEvent.click(wait)
     expect(onOpen).toHaveBeenCalledOnce()
   })
+})
+
+it('shows the pre-completion review phase with its round, and marks a blocked round', () => {
+  const review = { round: 2, corrections: 1, maxFailures: 3, decision: '' as const }
+  const { rerender } = render(<WorkspaceHeader stage={stage({ status: 'awaiting_pre_completion', preCompletion: review })} connected />)
+  expect(screen.getByText('Pre-completion review · round 2')).not.toHaveAttribute('data-blocked')
+  rerender(<WorkspaceHeader stage={stage({ status: 'awaiting_pre_completion', preCompletion: review, preCompletionBlocked: true })} connected />)
+  expect(screen.getByText('Pre-completion review · round 2')).toHaveAttribute('data-blocked', 'true')
 })

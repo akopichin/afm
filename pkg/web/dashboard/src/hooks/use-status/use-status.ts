@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Stage, StageStatus, StageVerify } from '../../types'
+import type { Stage, StagePreCompletion, StageStatus, StageVerify } from '../../types'
 import { STAGE_STATUSES, parseStageQuota } from '../../types'
-import { parseStageTiming } from '../../types/stage'
+import { parseStageTiming, PRE_COMPLETION_DECISIONS } from '../../types/stage'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 import { parseUsageAnalyticsStatus, type UsageAnalyticsStatus } from '../../types/usage-analytics'
 
@@ -313,8 +313,21 @@ function toStage(raw: unknown): Stage | null {
     cost,
     verify,
     awaitingAssistantsBlocked: obj.awaiting_assistants_blocked === true,
+    preCompletion: toPreCompletion(obj.pre_completion),
+    preCompletionBlocked: obj.pre_completion_blocked === true,
     quota: parseStageQuota(obj.quota),
     timing: parseStageTiming(obj.timing),
+  }
+}
+
+function toPreCompletion(raw: unknown): StagePreCompletion | undefined {
+  if (!isRecord(raw) || typeof raw.round !== 'number') return undefined
+  const decision = (PRE_COMPLETION_DECISIONS as readonly unknown[]).includes(raw.decision) ? (raw.decision as StagePreCompletion['decision']) : ''
+  return {
+    round: raw.round,
+    corrections: typeof raw.corrections === 'number' ? raw.corrections : 0,
+    maxFailures: typeof raw.max_failures === 'number' ? raw.max_failures : 0,
+    decision,
   }
 }
 

@@ -617,6 +617,19 @@ describe('StagesList', () => {
   })
 })
 
+describe('StagesList — pre-completion review row', () => {
+  const stage: Stage = { id: 'a', name: 'Impl', status: 'awaiting_pre_completion', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [], preCompletion: { round: 2, corrections: 1, maxFailures: 3, decision: '' } }
+
+  test('shows the phase and round; attention only when the round needs a human', () => {
+    const { container, rerender } = render(<StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    expect(screen.getByRole('button', { name: /^a / })).toHaveTextContent('Pre-completion review · round 2')
+    expect(container.querySelector('.stage-item')).not.toHaveAttribute('data-attention', 'true')
+    rerender(<StagesList stages={[{ ...stage, preCompletionBlocked: true }]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    expect(container.querySelector('.assistants-blocked-badge')).not.toBeNull()
+    expect(container.querySelector('.stage-item')).toHaveAttribute('data-attention', 'true')
+  })
+})
+
 describe('StagesList — helper-task child rows (T3.9)', () => {
   const stage: Stage = {
     id: 's1', name: 'Build', status: 'running', updatedAt: '', interactive: false, autonomous: false,

@@ -28,6 +28,9 @@ const (
 	StageAwaitingAssistants StageStatus = "awaiting_assistants"
 	StageAwaitingPeer       StageStatus = "awaiting_peer"
 	StagePaused             StageStatus = "paused"
+	// StageAwaitingPreCompletion: the author's turn passed the completion check and the stage's pre_completion
+	// helpers review it before verify. Neither Done nor Failed.
+	StageAwaitingPreCompletion StageStatus = "awaiting_pre_completion"
 )
 
 // StageView is the dashboard's joined runtime and configuration view. It has
@@ -47,6 +50,7 @@ type StageView struct {
 	ShowDialog                bool        `json:"show_dialog"`
 	Buttons                   []string    `json:"buttons,omitempty"`
 	AwaitingAssistantsBlocked bool        `json:"awaiting_assistants_blocked,omitempty"`
+	PreCompletionBlocked      bool        `json:"pre_completion_blocked,omitempty"`
 }
 
 type Capabilities struct {

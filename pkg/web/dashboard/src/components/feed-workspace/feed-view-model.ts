@@ -200,6 +200,9 @@ function mapEvent(event: AfmEvent, unknownPrefix: string | undefined): Mapped | 
       // The flow's team: declaration could not be applied as written for one member (a durable run-level notice,
       // pkg/orchestrator/team.go) — the run goes on, so a warning, not an error.
       return { actor: 'system', tone: 'warning', kind: 'status', text: `team member ${str(obj.member_id)}: ${str(obj.message)}`, mono: false }
+    case 'pre_completion_round_started':
+    case 'pre_completion_decided':
+      return mapPreCompletionNotice(event.type, obj)
     case 'verify_started':
     case 'verify_result':
     case 'verify_retry':
@@ -429,6 +432,37 @@ function mapQuotaNotice(type: 'quota_wait' | 'quota_reset' | 'quota_warning', ob
   }[type]
   const tone = type === 'quota_reset' ? 'neutral' : 'warning'
   return { actor: 'system', tone, kind: 'status', text: lead(message !== '' ? message : fallback), mono: false }
+}
+
+// mapPreCompletionNotice — раунд pre-completion ревью: старт, затем решение (принято / вернули агенту на доработку /
+// бюджет исчерпан). dedupeId несёт раунд, чтобы replay после reconnect не дублировал строки.
+function mapPreCompletionNotice(type: 'pre_completion_round_started' | 'pre_completion_decided', obj: Record<string, unknown>): Mapped {
+  const round = typeof obj.round === 'number' ? obj.round : Number(str(obj.round))
+  const row = (tone: FeedTone, kind: FeedItemKind, text: string): Mapped => ({
+    actor: 'system',
+    tone,
+    kind,
+    text,
+    mono: false,
+    dedupeId: `pre_completion:${round}:${type}`,
+  })
+  if (type === 'pre_completion_round_started') {
+    const helpers = typeof obj.helpers === 'number' ? obj.helpers : 0
+    return row('neutral', 'status', `Pre-completion review round ${round} started · ${helpers} ${helpers === 1 ? 'helper' : 'helpers'}`)
+  }
+  const reason = str(obj.reason)
+  const suffix = reason !== '' ? `: ${reason}` : ''
+  const budget = `${str(obj.corrections)} of ${str(obj.max_failures)} corrections used`
+  switch (str(obj.decision)) {
+    case 'accepted':
+      return row('success', 'success', `Pre-completion review round ${round} accepted${suffix}`)
+    case 'needs_changes':
+      return row('warning', 'status', `Pre-completion review round ${round} needs changes, sent back to the stage agent · ${budget}${suffix}`)
+    case 'exhausted':
+      return row('warning', 'status', `Pre-completion review round ${round}: correction budget exhausted · ${budget}${suffix}`)
+    default:
+      return row('danger', 'status', `Pre-completion review round ${round} ${str(obj.decision) || 'failed'}${suffix}`)
+  }
 }
 
 // mapVerifyEvent — презентация AI-verify наблюдательных событий. Именованный шаг показывается своим именем

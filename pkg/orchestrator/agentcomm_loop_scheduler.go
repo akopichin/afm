@@ -124,7 +124,7 @@ func loopRestartStatus(rs state.RunState, target agentcomm.ParticipantID) (assis
 		return "", ""
 	}
 	t, ok := loopTargetTask(rs, target)
-	if !ok || state.IsOnMessageHelper(t.Task) || (t.Status != assistants.StatusCompleted && t.Status != assistants.StatusWatching) {
+	if !ok || state.IsRequestHelper(t.Task) || (t.Status != assistants.StatusCompleted && t.Status != assistants.StatusWatching) {
 		return "", ""
 	}
 	return t.ID, t.Status
@@ -354,7 +354,7 @@ func loopTargetReady(rs state.RunState, l state.LoopState) bool {
 	case assistants.StatusWatching:
 		return !completionHelperGated(rs, t)
 	case assistants.StatusCompleted:
-		return !state.IsOnMessageHelper(t.Task) && !taskNeedsHumanDecision(t)
+		return !state.IsRequestHelper(t.Task) && !taskNeedsHumanDecision(t)
 	case assistants.StatusQueued:
 		return idleRunAgent(rs, t)
 	}

@@ -991,3 +991,40 @@ describe('groupToolRuns / toolRunSummary', () => {
     expect(summary(['A', 'B', 'C', 'D', 'E'])).toEqual({ count: 5, label: 'tool calls', names: 'a, b, c, d…' })
   })
 })
+
+describe('pre_completion notices', () => {
+  it('round_started: нейтральная строка с раундом и числом helpers', () => {
+    const items = toFeedItems([ev('pre_completion_round_started', { round: 2, helpers: 1 }, 's1', '2026-11-17T10:00:00Z', 3)])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', tone: 'neutral', kind: 'status', text: 'Pre-completion review round 2 started · 1 helper' })
+  })
+
+  it('decided needs_changes: коррекция возвращена агенту стадии, бюджет и причина видны', () => {
+    const items = toFeedItems([
+      ev('pre_completion_decided', { round: 1, decision: 'needs_changes', corrections: 1, max_failures: 3, reason: 'missing test' }, 's1', '2026-11-17T10:01:00Z', 4),
+    ])
+    expect(items[0]).toMatchObject({ tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toBe('Pre-completion review round 1 needs changes, sent back to the stage agent · 1 of 3 corrections used: missing test')
+  })
+
+  it('decided accepted / exhausted / failed различаются текстом и тоном', () => {
+    const items = toFeedItems([
+      ev('pre_completion_decided', { round: 2, decision: 'accepted', corrections: 1, max_failures: 3 }, 's1', '2026-11-17T10:02:00Z', 5),
+      ev('pre_completion_decided', { round: 3, decision: 'exhausted', corrections: 3, max_failures: 3 }, 's1', '2026-11-17T10:03:00Z', 6),
+      ev('pre_completion_decided', { round: 4, decision: 'failed', corrections: 3, max_failures: 3, reason: 'helper crashed' }, 's1', '2026-11-17T10:04:00Z', 7),
+    ])
+    expect(items.map((i) => [i.tone, i.text])).toEqual([
+      ['success', 'Pre-completion review round 2 accepted'],
+      ['warning', 'Pre-completion review round 3: correction budget exhausted · 3 of 3 corrections used'],
+      ['danger', 'Pre-completion review round 4 failed: helper crashed'],
+    ])
+  })
+
+  it('live-событие без seq получает ключ раунда, не зависящий от timestamp', () => {
+    const payload = { round: 1, decision: 'accepted', corrections: 0, max_failures: 3 }
+    const [early] = toFeedItems([ev('pre_completion_decided', payload, 's1', '2026-11-17T10:05:00Z')])
+    const [late] = toFeedItems([ev('pre_completion_decided', payload, 's1', '2026-11-17T10:05:09Z')])
+    expect(early?.key).toBe('pre_completion:1:pre_completion_decided')
+    expect(late?.key).toBe(early?.key)
+  })
+})

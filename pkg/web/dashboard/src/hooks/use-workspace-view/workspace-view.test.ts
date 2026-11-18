@@ -67,6 +67,14 @@ describe('attentionKindForStatus', () => {
   })
 })
 
+describe('attentionKindForStatus — pre-completion review', () => {
+  it('is attention only when the round is blocked on a human', () => {
+    expect(attentionKindForStatus({ ...stage('a', 'awaiting_pre_completion'), preCompletionBlocked: true })).toBe('assistants')
+    expect(attentionKindForStatus({ ...stage('a', 'awaiting_pre_completion'), preCompletionBlocked: false })).toBeNull()
+    expect(attentionKindForStatus(stage('a', 'awaiting_pre_completion'))).toBeNull()
+  })
+})
+
 describe('deriveAttentionItems', () => {
   it('keeps server (topological) order and filters non-actionable stages', () => {
     const stages = [

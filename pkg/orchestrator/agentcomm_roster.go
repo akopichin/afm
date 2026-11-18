@@ -322,7 +322,7 @@ func taskActivity(t *state.TaskState, idle bool) agentcomm.Activity {
 		return agentcomm.ActivityDone
 	case t.Status == assistants.StatusPaused || len(t.Holds) > 0:
 		return agentcomm.ActivityPaused
-	case idle || state.OnMessageIdle(*t):
+	case idle || state.RequestIdle(*t):
 		return agentcomm.ActivityIdle
 	case t.Status == assistants.StatusWaitingPeer, t.Status == assistants.StatusWaitingChildren, t.Status == assistants.StatusWaitingParent:
 		return agentcomm.ActivityWaiting

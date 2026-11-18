@@ -197,6 +197,14 @@ describe('AssistantTaskView', () => {
     expect(screen.queryByRole('button', { name: 'Waive…' })).toBeNull()
   })
 
+  test('a pre_completion round that failed after an earlier pass keeps waive offered', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_result', data: { verdict: 'pass', summary: 'Round 1 ok.' } }]))
+    render(<AssistantTaskView task={makeTask({ mode: 'required', trigger: 'pre_completion', preCompletionRound: 2, preCompletionOutcome: 'failed', status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText('Round 1 ok.')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Waive…' })).toBeInTheDocument()
+  })
+
   test('an event of another type that carries a summary is not read as the result', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_delegated', data: { summary: 'Splitting the work.' } }]))
     render(<AssistantTaskView task={makeTask({ status: 'completed' })} />)
@@ -251,6 +259,17 @@ describe('AssistantTaskView', () => {
     render(<AssistantTaskView task={makeTask({ mode: 'required' })} />)
     await flushLoads()
     expect(screen.getByText('Required')).toBeInTheDocument()
+  })
+
+  test('a pre_completion helper shows its round and the verdict of that round', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    const { rerender } = render(<AssistantTaskView task={makeTask({ trigger: 'pre_completion', preCompletionRound: 2 })} />)
+    expect(screen.getByText('Pre-completion review')).toBeInTheDocument()
+    expect(screen.getByText('Round 2')).toBeInTheDocument()
+    expect(screen.getByText('Verdict: pending')).toBeInTheDocument()
+    rerender(<AssistantTaskView task={makeTask({ trigger: 'pre_completion', preCompletionRound: 2, preCompletionOutcome: 'needs_changes', status: 'completed' })} />)
+    expect(screen.getByText('Verdict: Needs changes')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('Verdict: pending')).toBeNull())
   })
 
   // T5.6: a checkpoints/on_completion watcher task surfaces trigger kind + pass count + last processed

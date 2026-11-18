@@ -438,10 +438,12 @@
 .status-badge[data-status="awaiting_user_input"]  { --status-tone: var(--c-awaiting-user); }
 .status-badge[data-status="hook_failed"]          { --status-tone: var(--c-hook-failed); }
 .status-badge[data-status="paused"]               { --status-tone: var(--c-paused); }
-.status-badge[data-status="awaiting_assistants"]  { --status-tone: var(--c-awaiting-assistants); }
+.status-badge[data-status="awaiting_assistants"],
+.status-badge[data-status="awaiting_pre_completion"]  { --status-tone: var(--c-awaiting-assistants); }
 .status-badge[data-status="awaiting_quota"]       { --status-tone: var(--c-awaiting-quota); }
 /* Blocked — a required helper gate that needs a human decision reads as failed, like the rail node. */
-.status-badge[data-status="awaiting_assistants"][data-blocked="true"] { --status-tone: var(--c-failed); }
+.status-badge[data-status="awaiting_assistants"][data-blocked="true"],
+.status-badge[data-status="awaiting_pre_completion"][data-blocked="true"] { --status-tone: var(--c-failed); }
 
 /* "Agent is working" dots inside the running chip; the word itself is for screen readers only. */
 .thinking {

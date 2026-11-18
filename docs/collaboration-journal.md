@@ -195,3 +195,23 @@ value.
   continue it; replies to an unfinished batch do not wake it early. A park from
   an older journal, or one for unread messages, has no `peer_waits`; recovery
   then uses the earlier rule.
+- `pre_completion` on a stage transition (an object, omitted on every other
+  transition) belongs to the [pre-completion review](collaboration.md#pre-completion-review)
+  of a stage. It is written by the transitions `await_pre_completion` (a round
+  starts), `pre_completion_decided` (the round ended), `fail` (the stage failed with
+  the decision `exhausted` or `failed`), `pre_completion_accept_empty`
+  (a stage with no such helper passed the gate) and `pre_completion_consumed`
+  (the accepted intent was spent). It carries the author's phase and loop
+  counters, the decision (`accepted`, `needs_changes`, `exhausted` or `failed`)
+  and the round id: the seq of the transition that started the round, which the later
+  records of that round (decision, `fail`, consumption) keep. Replay rebuilds the round:
+  its helper tasks, fixed when it started, the correction count and the one-shot
+  accepted intent, so a restart between the decision and the next step finishes
+  that step once. The round's request to a helper is the system id
+  `pre-completion-<round seq>`, not a mesh message. The human-readable report and
+  the author's feedback are artifacts under the stage's `pre-completion/`
+  directory; `events.jsonl` decides. A journal from before this trigger has none
+  of it and no such helper.
+- `waived_request` on a helper task (omitted when empty) names the round request
+  a Waive of a `pre_completion` helper applies to; the waiver does not cover a
+  later round. A journal without it is read as before.

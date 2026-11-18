@@ -79,6 +79,18 @@ func (o *Orchestrator) TaskRequests(taskID assistants.TaskID) (TaskRequestQueue,
 	}, true
 }
 
+// TaskPreCompletion reports a pre_completion helper's standing in its stage's current round: the round's number and how
+// the helper's request of it stands. ok is false for any other task, and for a helper that is not in the round.
+func (o *Orchestrator) TaskPreCompletion(taskID assistants.TaskID) (round int, outcome state.RoundOutcome, ok bool) {
+	rs := o.opts.Store.Snapshot()
+	t, found := rs.Assistants.Tasks[taskID]
+	if !found || !state.IsPreCompletionHelper(t.Task) {
+		return 0, state.RoundPending, false
+	}
+	round, outcome = state.PreCompletionTaskOutcome(rs, t)
+	return round, outcome, round != 0
+}
+
 // AssistantsPolicyRevision returns the run's current effective collaboration depth-policy revision and max
 // depth (T4.5: the live values an action draft's ExpectedRevision must still match before the draft-confirm
 // HTTP path proceeds to Attach).

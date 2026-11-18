@@ -254,10 +254,10 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The statuses Orchestrator.Revise acts on; awaiting_assistants — the author finished and waits for its
-	// helpers, a note reaches it only this way.
-	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning || st.Status == state.StatusAwaitingAssistants
+	// helpers (or, awaiting_pre_completion, its pre_completion review), a note reaches it only this way.
+	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning || st.Status == state.StatusAwaitingAssistants || st.Status == state.StatusAwaitingPreCompletion
 	if !allowed {
-		http.Error(w, fmt.Sprintf("stage is %s, not running, awaiting_approval or awaiting_assistants", st.Status), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("stage is %s, not running, awaiting_approval, awaiting_assistants or awaiting_pre_completion", st.Status), http.StatusBadRequest)
 		return
 	}
 	// A script stage has no live agent to revise; Revise would move it to `revising`, after which script
@@ -430,7 +430,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 	}
 	switch st.Status {
 	// awaiting_assistants/awaiting_peer/awaiting_quota: see Orchestrator.Pause's matching comments (control_api.go).
-	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer, state.StatusAwaitingQuota:
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPreCompletion, state.StatusAwaitingPeer, state.StatusAwaitingQuota:
 	default:
 		http.Error(w, fmt.Sprintf("stage is %s, cannot be paused", st.Status), http.StatusBadRequest)
 		return

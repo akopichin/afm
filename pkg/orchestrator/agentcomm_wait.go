@@ -376,7 +376,7 @@ func validateWaitAdmission(rs state.RunState, req WaitRequest, stages []flow.Sta
 		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: reason}
 	}
 	explicit := buildExplicitWaitGraph(rs, &agentcomm.Wait{Waiter: req.Waiter, Condition: req.Condition}, stages)
-	completion := completionPrerequisites(rs, stages)
+	completion := startPrerequisites(rs, stages)
 	edge := waitEdge(rs, req.Condition, answerableTargets(rs, req.Condition, targets), stages)
 	if !explicit.with(completion).closesCycle(edge, req.Waiter) {
 		return nil // what it waits for can still happen on its own
@@ -386,10 +386,13 @@ func validateWaitAdmission(rs state.RunState, req WaitRequest, stages []flow.Sta
 			Code: agentcomm.CodeWaitCycle, Reason: completionCycleReason(rs, req.Waiter, edge, explicit, completion),
 		}
 	}
-	return &state.OperationRejectedError{
-		Code:   agentcomm.CodeWaitCycle,
-		Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) already (transitively) waits on %q, or the chain is longer than %d hops", edge.targets, req.Waiter, agentcomm.MaxCausalHops),
+	reason := fmt.Sprintf("everyone who could satisfy this wait (%v) already (transitively) waits on %q, or the chain is longer than %d hops", edge.targets, req.Waiter, agentcomm.MaxCausalHops)
+	if id, ok := agentcomm.HelperTaskID(req.Waiter); ok {
+		if t := rs.Assistants.Tasks[id]; t != nil && state.IsPreCompletionHelper(t.Task) && rs.Stages[t.RootStageID].Status == state.StatusAwaitingPreCompletion {
+			reason += fmt.Sprintf(" — the agent of stage %s does not work during its pre-completion review: return needs_changes with your question instead", t.RootStageID)
+		}
 	}
+	return &state.OperationRejectedError{Code: agentcomm.CodeWaitCycle, Reason: reason}
 }
 
 // answerableTargets are the targets that can still produce what cond waits for: one that cannot is no way out of a
@@ -868,7 +871,7 @@ type meshWaitGraph map[agentcomm.ParticipantID][]meshWaitEdge
 // buildMeshWaitGraph returns every "X cannot proceed until Y acts" relationship in the projection: the declared
 // ones plus the start condition of each completion helper that has not started.
 func buildMeshWaitGraph(rs state.RunState, candidate *agentcomm.Wait, stages []flow.Stage) meshWaitGraph {
-	return buildExplicitWaitGraph(rs, candidate, stages).with(completionPrerequisites(rs, stages))
+	return buildExplicitWaitGraph(rs, candidate, stages).with(startPrerequisites(rs, stages))
 }
 
 // with returns g plus the edges of extra, leaving both unchanged.
@@ -929,8 +932,51 @@ func buildExplicitWaitGraph(rs state.RunState, candidate *agentcomm.Wait, stages
 		if edge, blocked := unfinishedDependencies(rs, s); blocked {
 			g[meshStageParticipantID(s.ID)] = append(g[meshStageParticipantID(s.ID)], edge)
 		}
+		if edge, waiting := preCompletionRoundEdge(rs, s.ID); waiting {
+			g[meshStageParticipantID(s.ID)] = append(g[meshStageParticipantID(s.ID)], edge)
+		}
 	}
 	return g
+}
+
+// preCompletionRoundEdge is the edge of a stage whose author waits out its pre-completion round: the helpers that
+// have not answered the round's request. The author does not work meanwhile, so a helper that waits for it never ends.
+func preCompletionRoundEdge(rs state.RunState, stageID string) (meshWaitEdge, bool) {
+	p := rs.Stages[stageID].PreCompletion
+	if rs.Stages[stageID].Status != state.StatusAwaitingPreCompletion || !p.Open() {
+		return meshWaitEdge{}, false
+	}
+	var helpers []agentcomm.ParticipantID
+	for _, id := range p.Tasks {
+		if t := rs.Assistants.Tasks[id]; t != nil {
+			if _, outcome := state.PreCompletionTaskOutcome(rs, t); outcome == state.RoundPending {
+				helpers = append(helpers, meshParticipantForTask(rs, t.Task))
+			}
+		}
+	}
+	return meshWaitEdge{targets: helpers, needsAll: true}, len(helpers) > 0
+}
+
+// preCompletionPrerequisites maps each pre_completion helper that is not in a round to the stage's agent: it starts
+// only once the agent has finished its turn, so a wait of the agent for it could never end.
+func preCompletionPrerequisites(rs state.RunState) meshWaitGraph {
+	g := meshWaitGraph{}
+	for _, t := range rs.Assistants.Tasks {
+		if !state.IsPreCompletionHelper(t.Task) || t.Status.Terminal() || t.RootGeneration != rs.Assistants.RootGenerations[t.RootStageID] {
+			continue
+		}
+		if _, outcome := state.PreCompletionTaskOutcome(rs, t); outcome == state.RoundPending && rs.Stages[t.RootStageID].Status == state.StatusAwaitingPreCompletion {
+			continue // in its round: the author already waits for it (preCompletionRoundEdge)
+		}
+		g[meshParticipantForTask(rs, t.Task)] = []meshWaitEdge{{targets: []agentcomm.ParticipantID{meshStageParticipantID(t.RootStageID)}}}
+	}
+	return g
+}
+
+// startPrerequisites is every helper's start condition that needs its stage's agent first: the completion passes
+// (the stage's result) and the pre-completion rounds (the end of the agent's turn).
+func startPrerequisites(rs state.RunState, stages []flow.Stage) meshWaitGraph {
+	return completionPrerequisites(rs, stages).with(preCompletionPrerequisites(rs))
 }
 
 // unfinishedDependencies is the edge of a stage that has not started and still waits for dependencies to be done.
@@ -961,6 +1007,7 @@ func completionPrerequisites(rs state.RunState, stages []flow.Stage) meshWaitGra
 // names the helpers and stages involved, and tells only the stage's own agent to finish instead.
 func completionCycleReason(rs state.RunState, waiter agentcomm.ParticipantID, edge meshWaitEdge, explicit, completion meshWaitGraph) string {
 	var names, stageIDs []string
+	trigger, start := "on_completion", "produced a result"
 	for _, p := range cycleCompletionHelpers(waiter, edge, explicit, completion) {
 		taskID, _ := participantTask(rs, p)
 		t := rs.Assistants.Tasks[taskID]
@@ -968,9 +1015,12 @@ func completionCycleReason(rs state.RunState, waiter agentcomm.ParticipantID, ed
 		if !slices.Contains(stageIDs, t.RootStageID) {
 			stageIDs = append(stageIDs, t.RootStageID)
 		}
+		if state.IsPreCompletionHelper(t.Task) {
+			trigger, start = "pre_completion", "finished their turn"
+		}
 	}
-	reason := fmt.Sprintf("this wait would never end: on_completion helper(s) %s start only after stage(s) %s produced a result",
-		strings.Join(names, ", "), strings.Join(stageIDs, ", "))
+	reason := fmt.Sprintf("this wait would never end: %s helper(s) %s start only after stage(s) %s %s",
+		trigger, strings.Join(names, ", "), strings.Join(stageIDs, ", "), start)
 	if slices.ContainsFunc(stageIDs, func(id string) bool { return meshStageParticipantID(id) == waiter }) {
 		reason += " — finish this stage's own work instead: AFM runs the helper automatically"
 	}
@@ -1039,7 +1089,7 @@ func stageWaitsOnlyForCallbackHelpers(rs state.RunState, waiter agentcomm.Partic
 	for _, p := range targets {
 		switch {
 		case isOwnPendingCompletionPass(rs, stageID, p):
-		case isOwnHelper(rs, stageID, p) && waitsOnlyForAnswersTo(rs, p, waiter, candidate):
+		case isOwnHelper(rs, stageID, p) && !isPreCompletionParticipant(rs, p) && waitsOnlyForAnswersTo(rs, p, waiter, candidate):
 			callbacks++
 		default:
 			return false
@@ -1056,6 +1106,17 @@ func isOwnPendingCompletionPass(rs state.RunState, stageID string, p agentcomm.P
 	}
 	t, found := rs.Assistants.Tasks[taskID]
 	return found && t.RootStageID == stageID && completionPassPending(rs, t)
+}
+
+// isPreCompletionParticipant reports whether participant p is a pre_completion helper: it answers a review round, never a
+// message of the author's wait.
+func isPreCompletionParticipant(rs state.RunState, p agentcomm.ParticipantID) bool {
+	id, ok := agentcomm.HelperTaskID(p)
+	if !ok {
+		return false
+	}
+	t, found := rs.Assistants.Tasks[id]
+	return found && state.IsPreCompletionHelper(t.Task)
 }
 
 // isOwnHelper reports whether participant p is a helper answering stage stageID's agent (stageOwnHelper).

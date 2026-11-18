@@ -54,6 +54,11 @@ const (
 	// EventVerifyResult fires right AFTER one AI-verify step's outcome is known —
 	// pass/needs_changes/inconclusive, or the step couldn't be evaluated at all.
 	EventVerifyResult EventType = "verify_result"
+	// EventPreCompletionRoundStarted and EventPreCompletionDecided are durable notices (live + notices.jsonl, non-FSM) of
+	// a pre_completion review round: it started with N helpers, and it ended accepted, needs_changes or failed.
+	EventPreCompletionRoundStarted EventType = "pre_completion_round_started"
+	EventPreCompletionDecided      EventType = "pre_completion_decided"
+
 	// EventVerifyRetry fires when a transient verify exec-failure is about to be retried after backoff.
 	// Non-FSM: published live + durable to notices.jsonl, like EventVerifyStarted/Result.
 	EventVerifyRetry EventType = "verify_retry"

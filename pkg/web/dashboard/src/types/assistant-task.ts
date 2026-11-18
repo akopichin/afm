@@ -99,6 +99,10 @@ export type AssistantTask = {
   lastRequestId?: string
   lastOutcome?: AssistantRequestOutcome
   turn?: number
+  // preCompletionRound/preCompletionOutcome — раунд pre-completion ревью, который проверяет эта задача, и вердикт
+  // его запроса ('' пока запрос не завершён). Зеркало server.AssistantTaskView; только для trigger pre_completion.
+  preCompletionRound?: number
+  preCompletionOutcome?: string
   // quota — durable-парковка queued-задачи на сбросе лимита подписки (та же форма, что у stage.quota). Статус
   // остаётся queued (mesh identity и inbox сохраняются), поэтому «Usage limit» выводится из этого поля.
   quota?: StageQuota
@@ -155,7 +159,7 @@ export function assistantBlockingExplanation(task: AssistantTask, tasks: Assista
 export const ASSISTANT_VERDICTS = ['pass', 'needs_changes', 'inconclusive'] as const
 export type AssistantVerdict = (typeof ASSISTANT_VERDICTS)[number]
 
-function isAssistantVerdict(value: unknown): value is AssistantVerdict {
+export function isAssistantVerdict(value: unknown): value is AssistantVerdict {
   return typeof value === 'string' && (ASSISTANT_VERDICTS as readonly string[]).includes(value)
 }
 

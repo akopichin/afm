@@ -49,11 +49,32 @@ type StageView struct {
 	// просто ждёт, пока помощник доработает (state.AssistantsState.NeedsHumanDecision, T7.7's же
 	// классификация). Фронт рисует needs_changes как actionable attention только когда это true.
 	AwaitingAssistantsBlocked bool `json:"awaiting_assistants_blocked,omitempty"`
+	// PreCompletion is the stage's pre_completion review record of the current cycle, once a round has started; Decision is
+	// empty while the round is open. PreCompletionBlocked — only while the stage is awaiting_pre_completion: true when
+	// the round needs a human (a helper's non-pass verdict, a failed or paused required helper), the dashboard's attention.
+	PreCompletion        *PreCompletionView `json:"pre_completion,omitempty"`
+	PreCompletionBlocked bool               `json:"pre_completion_blocked,omitempty"`
 	// Quota — usage-limit wait: only while the stage is awaiting_quota or paused out of such a wait (an unwaitable
 	// limit or a manual Pause), the same after a restart because it is read from the journal state.
 	Quota *QuotaView `json:"quota,omitempty"`
 	// Timing is the stage's time ledger; it does not depend on accounting.
 	Timing *StageTimingView `json:"timing,omitempty"`
+}
+
+// PreCompletionView is the client form of state.PreCompletionState.
+type PreCompletionView struct {
+	Round       int    `json:"round"`
+	Corrections int    `json:"corrections"`
+	MaxFailures int    `json:"max_failures"`
+	Decision    string `json:"decision"`
+}
+
+// newPreCompletionView shows the record once a round has started in the current cycle.
+func newPreCompletionView(p *state.PreCompletionState, maxFailures int) *PreCompletionView {
+	if p == nil || p.Round == 0 {
+		return nil
+	}
+	return &PreCompletionView{Round: p.Round, Corrections: p.Corrections, MaxFailures: maxFailures, Decision: p.Decision}
 }
 
 // StageTimingView is the client form of state.StageTiming. The sums are present only for a started stage with
@@ -182,6 +203,7 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 			pausedFrom = st.PausedFrom
 		}
 		awaitingAssistantsBlocked := st.Status == state.StatusAwaitingAssistants && rs.Assistants.NeedsHumanDecision(id)
+		preCompletionBlocked := state.PreCompletionNeedsHuman(&rs, id)
 
 		name := cfg.Name
 		if name == "" {
@@ -205,6 +227,8 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 			Cost:                      stageCosts[id],
 			Verify:                    verifyByStage[id],
 			AwaitingAssistantsBlocked: awaitingAssistantsBlocked,
+			PreCompletion:             newPreCompletionView(st.PreCompletion, cfg.PreCompletionMaxFailures),
+			PreCompletionBlocked:      preCompletionBlocked,
 			Quota:                     NewQuotaView(orchestrator.StageQuota(st)),
 			Timing:                    newStageTimingView(st.Timing),
 		})

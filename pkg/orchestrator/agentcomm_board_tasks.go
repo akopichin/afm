@@ -353,6 +353,9 @@ func assignableParticipant(rs state.RunState, id agentcomm.ParticipantID) error 
 	if stageID, ok := stageIDFromMeshParticipant(id); ok && rs.Stages[stageID].Status == state.StatusAwaitingAssistants {
 		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %s has finished its own work and waits for its assistants", stageID)}
 	}
+	if stageID, ok := stageIDFromMeshParticipant(id); ok && rs.Stages[stageID].Status == state.StatusAwaitingPreCompletion {
+		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %s waits for its pre-completion review: its agent does not work meanwhile", stageID)}
+	}
 	return nil
 }
 

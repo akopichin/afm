@@ -215,8 +215,8 @@ func TestOnMessagePredicates(t *testing.T) {
 		{"closed", TaskState{Task: cancelled}, false},
 		{"not on_message", TaskState{Task: oneShot}, false},
 	} {
-		if got := OnMessageIdle(tc.task); got != tc.want {
-			t.Errorf("OnMessageIdle(%s) = %v, want %v", tc.name, got, tc.want)
+		if got := RequestIdle(tc.task); got != tc.want {
+			t.Errorf("RequestIdle(%s) = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
@@ -631,7 +631,7 @@ func TestOnMessageQueue_FailedHelperKeepsItsRequestsForTheRetry(t *testing.T) {
 	r.mustOp("retry",
 		Effect{Kind: kindTaskGenerationBumped, Target: Target{TaskID: omTask}},
 		omStatus(t, TaskStatusChangedPayload{Status: string(assistants.StatusWatching), Reason: "retried"}))
-	if OnMessageIdle(*r.task()) || r.store.Snapshot().Assistants.NeedsHumanDecision(omStage) {
+	if RequestIdle(*r.task()) || r.store.Snapshot().Assistants.NeedsHumanDecision(omStage) {
 		t.Fatal("the retried helper rests as if it had no request: the earlier pass would close its gate")
 	}
 	r.mustOp("start-3", omTurnStart(t, 3, "m2"))

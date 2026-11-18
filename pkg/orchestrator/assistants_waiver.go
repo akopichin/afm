@@ -11,15 +11,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
 // taskWaivedEffect builds a "task_waived" control effect — mirrors taskResultEffect/taskStatusEffect above.
-func taskWaivedEffect(taskID assistants.TaskID, reason string) (state.Effect, error) {
-	raw, err := json.Marshal(state.TaskWaivedPayload{Reason: reason})
+func taskWaivedEffect(taskID assistants.TaskID, reason string, request agentcomm.MessageID) (state.Effect, error) {
+	raw, err := json.Marshal(state.TaskWaivedPayload{Reason: reason, RequestID: string(request)})
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_waived payload: %w", err)
 	}
@@ -47,8 +49,27 @@ func (o *Orchestrator) WaiveTask(ctx context.Context, taskID assistants.TaskID, 
 	if t.Waived {
 		return nil
 	}
+	// A pre_completion helper is waived for the open round's request only: a later round asks it again.
+	var roundRequest agentcomm.MessageID
+	var inOpenRound func(*state.RunState) error
+	if state.IsPreCompletionHelper(t.Task) {
+		p := rs.Stages[t.RootStageID].PreCompletion
+		if !p.Open() || !slices.Contains(p.Tasks, taskID) {
+			return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("helper %s has no open pre-completion round to waive", taskID)}
+		}
+		roundRequest = state.PreCompletionRequestID(p.RoundSeq)
+		if t.WaivedRequest == roundRequest {
+			return nil
+		}
+		inOpenRound = func(cur *state.RunState) error {
+			if cp := cur.Stages[t.RootStageID].PreCompletion; !cp.Open() || state.PreCompletionRequestID(cp.RoundSeq) != roundRequest {
+				return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("the pre-completion round of helper %s has already ended", taskID)}
+			}
+			return nil
+		}
+	}
 
-	eff, err := taskWaivedEffect(taskID, reason)
+	eff, err := taskWaivedEffect(taskID, reason, roundRequest)
 	if err != nil {
 		return err
 	}
@@ -56,6 +77,7 @@ func (o *Orchestrator) WaiveTask(ctx context.Context, taskID assistants.TaskID, 
 		ID:      "task-waive:" + string(taskID) + ":" + randomOpSuffix(),
 		Kind:    "waive_task",
 		Actor:   actor,
+		Expect:  state.Preconditions{Check: inOpenRound},
 		Effects: []state.Effect{eff},
 	}
 	rootStage := t.RootStageID
@@ -67,6 +89,7 @@ func (o *Orchestrator) WaiveTask(ctx context.Context, taskID assistants.TaskID, 
 		// T7.6: the waiver unblocks the stage through the SAME barrier re-check every other task-resolution
 		// path uses — never a bare Trigger/EvComplete (TestWaiver_UnblocksStageThroughNormalCascade).
 		o.maybeCompleteAfterAssistants(runCtx, rootStage)
+		o.afterRoundHelperChange(runCtx, taskID)
 	})
 	if err != nil {
 		o.handleTaskOperationErr(err)

@@ -163,6 +163,8 @@ type StageConfig struct {
 	IsScript    bool
 	DependsOn   []string
 	Buttons     []string // Labels only; the orchestrator resolves prompts on click.
+	// PreCompletionMaxFailures is the stage's budget of pre_completion corrections (flow.Stage.PreCompletionMaxFailures).
+	PreCompletionMaxFailures int
 }
 
 // RuntimeStageProvider is the dashboard's one source of per-stage static configuration (T8.3). Unlike a bare

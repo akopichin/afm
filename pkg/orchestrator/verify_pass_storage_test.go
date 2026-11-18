@@ -60,10 +60,9 @@ func TestRunVerification_QuotaManifestStorageOutcomes(t *testing.T) {
 				t.Fatalf("result notices = %+v, want one storage failure", results)
 			}
 			assertVerifyStorageNotice(t, results[0], execErr, verifyKindAgent, "codex")
-			// The failed rename leaves the attempted manifest available without another write seam.
-			data, readErr := os.ReadFile(manifestPath + ".tmp")
-			if readErr != nil || !strings.Contains(string(data), `"outcome": "awaiting_quota"`) {
-				t.Fatalf("attempted quota manifest = %s, error %v", data, readErr)
+			// A failed rename must not leave its temp file behind.
+			if leftovers, _ := filepath.Glob(manifestPath + ".*.tmp"); len(leftovers) != 0 {
+				t.Fatalf("failed manifest write left temp files: %v", leftovers)
 			}
 		})
 	}

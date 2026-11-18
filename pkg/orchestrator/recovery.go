@@ -155,6 +155,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			// Парк пережил рестарт: таймер ждёт остаток until, истёкший — будит стадию сразу, ручная проба — тоже.
 			o.resumeQuotaWait(ctx, s)
 			continue
+		case state.StatusAwaitingPreCompletion:
+			// The round outlives the process: its helpers restart with the other helpers, and a round whose last
+			// request ended right before the stop is decided now.
+			o.resumePreCompletionRound(ctx, s.ID)
+			continue
 		case state.StatusAwaitingAssistants:
 			// Этап 7 (T7.2/T7.3): without this case the stage would fall into `default` below and be
 			// mishandled as a plannable/pending-like stage (activatePrePlannedStage/EvStartPlanning — both
@@ -173,6 +178,9 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			if !s.IsScript() && o.parkInterruptedTurn(ctx, s, state.StatusRetrying) {
 				continue
 			}
+			if o.resumeRoundContinuation(ctx, s) {
+				continue
+			}
 			if !s.NeedsPlanning() {
 				// Restart the execution path through ready, including its before-hook.
 				// A completion marker alone cannot bypass a configured verify gate OR the required-assistants
@@ -180,7 +188,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				// RequiredBlocker and diverts to awaiting_assistants exactly like the live completion path
 				// would have; TestResumeByDoneMarkerDoesNotBypassBarrier).
 				if reason, err := o.executionProbe(s, stageDir); s.Verify.IsEmpty() && err == nil {
-					o.completeRecoveredStage(ctx, s, state.StatusRetrying, reason)
+					o.recoverThroughGate(ctx, s, state.StatusRetrying, reason)
 				} else {
 					o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
 				}
@@ -297,6 +305,9 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 		}
 		kind := o.revisingKind(s)
 		o.spawnKind(ctx, s, kind, o.withFeedbackRunner(kind))
+	case state.StatusAwaitingPreCompletion:
+		// Continue of a paused round, or startup: the helpers the pause held start, and a due decision is made.
+		o.resumePreCompletionRound(ctx, s.ID)
 	case state.StatusAwaitingAssistants:
 		// Shared by startup (startPlanningForPending) and Continue (PausedFrom == AwaitingAssistants, restored
 		// by the FSM's EvContinue table itself before this is reached) — re-check the durable barrier, it may
@@ -378,9 +389,14 @@ func (o *Orchestrator) executionProbe(s flow.Stage, stageDir string) (reason str
 func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, status state.StageStatus) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	kind := o.executionKind(s)
+	// A parked verify step and an accepted round come before any look at the files, and so does the correction a round
+	// asked for: its author's old marker would otherwise pass for the finished work.
+	if !s.IsScript() && (status == state.StatusRunning && o.resumeWokenVerify(ctx, s) || o.resumeRoundContinuation(ctx, s)) {
+		return
+	}
 	reason, completionErr := o.executionProbe(s, stageDir)
 	if completionErr == nil && s.Verify.IsEmpty() {
-		o.completeRecoveredStage(ctx, s, status, reason)
+		o.recoverThroughGate(ctx, s, status, reason)
 		return
 	}
 
@@ -388,8 +404,6 @@ func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, s
 		switch {
 		case s.IsScript():
 			o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
-		case status == state.StatusRunning && o.resumeWokenVerify(ctx, s):
-			// the saved verify step is repeated without the author
 		default:
 			// Resumed agents continue their work without rerunning before-hooks.
 			o.spawnKind(ctx, s, kind, o.plainRunner(kind))
@@ -436,6 +450,7 @@ func (o *Orchestrator) verifyStepStillParked(s flow.Stage, q *state.QuotaWait) b
 // resumeInteractiveAgent re-runs the agent of an unanswered question: the planning one when its session is the latest,
 // otherwise the stage's execution turn. A review session means the stage was paused inside review, which the
 // implementation agent re-triggers at its end; an autonomous stage has no session to tell it apart, so its kind decides.
+// With a correction owed the question is the correction author's own: questionHeldByRound asks none before it runs.
 func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	phase := o.detectInterruptedPhase(stageDir)

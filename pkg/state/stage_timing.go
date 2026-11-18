@@ -61,6 +61,11 @@ func classifyStageTime(rs *RunState, stageID string) TimeKind {
 			return TimeApproval
 		}
 		return TimeHelpers
+	case StatusAwaitingPreCompletion:
+		if PreCompletionNeedsHuman(rs, stageID) {
+			return TimeApproval
+		}
+		return TimeHelpers
 	case StatusRetrying, StatusAwaitingQuota:
 		return TimeBackoff
 	case StatusPending, StatusReady:

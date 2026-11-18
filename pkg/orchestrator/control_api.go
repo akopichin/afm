@@ -143,9 +143,36 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 		return o.reviseAwaitingApproval(reqCtx, stageID, feedback, save)
 	case state.StatusAwaitingAssistants:
 		return o.reviseAwaitingAssistants(reqCtx, stageID, feedback, save)
+	case state.StatusAwaitingPreCompletion:
+		return o.revisePreCompletion(reqCtx, stageID, feedback, save)
 	default:
 		return false, 0, nil
 	}
+}
+
+// revisePreCompletion is Revise's awaiting_pre_completion branch: the author's process has exited, so the Revise
+// starts its feedback run itself, as from running — without a bump of the helpers' generation. The Revise starts a new
+// cycle: the round is over, and the answers of its helpers speak for their own request only.
+func (o *Orchestrator) revisePreCompletion(reqCtx context.Context, stageID, reason string, save func(stageDir string) error) (applied bool, seq uint64, err error) {
+	var phase string
+	if p := o.opts.Store.Snapshot().Stages[stageID].PreCompletion; p != nil {
+		phase = p.Phase
+	}
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{ExpectFrom: state.StatusAwaitingPreCompletion}, reason)
+	if !ok {
+		return false, 0, nil
+	}
+	if err := save(filepath.Join(o.opts.RunDir, stageID)); err != nil {
+		return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
+	}
+	if stage := o.reg().Stage(stageID); stage != nil {
+		kind, known := kindOfPhase(phase)
+		if !known {
+			kind = o.executionKind(*stage)
+		}
+		o.spawnKind(o.runContext(reqCtx), *stage, kind, o.withFeedbackRunner(kind))
+	}
+	return true, seq, nil
 }
 
 // reviseRunning is Revise's StatusRunning branch, factored out so feedback_intent.go's proposal-driven
@@ -269,7 +296,8 @@ func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
 	// its continuation on them again (resumeStageAtStatus).
 	// awaiting_quota: пользователь может остановить ожидание сброса лимита; Continue из такой паузы делает
 	// одну ручную пробу (Continue ниже).
-	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer, state.StatusAwaitingQuota:
+	// awaiting_pre_completion: the round's helpers keep their running turns; the decision waits for Continue.
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPreCompletion, state.StatusAwaitingPeer, state.StatusAwaitingQuota:
 	default:
 		return nil
 	}

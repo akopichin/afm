@@ -326,7 +326,7 @@ stages:
 	if err == nil {
 		t.Fatal("ParseFile: want error, got nil")
 	}
-	for _, trigger := range []assistants.Trigger{assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage} {
+	for _, trigger := range []assistants.Trigger{assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage, assistants.TriggerPreCompletion} {
 		if !strings.Contains(err.Error(), string(trigger)) {
 			t.Fatalf("error = %q, want it to list %q", err.Error(), trigger)
 		}

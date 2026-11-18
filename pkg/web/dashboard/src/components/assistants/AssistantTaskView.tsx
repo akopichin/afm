@@ -15,6 +15,7 @@ import {
   parseAssistantResult,
   verdictGlyph,
   verdictLabel,
+  isAssistantVerdict,
   type AssistantResult,
   type AssistantTask,
 } from '../../types/assistant-task'
@@ -122,6 +123,12 @@ type AssistantTaskViewProps = {
 
 const NO_LIVE_ACTIVITY: AssistantActivityEntry[] = []
 
+// preCompletionOutcomeLabel — verdict of the reviewed round, as text; an empty outcome means the round is still open.
+function preCompletionOutcomeLabel(outcome: string | undefined): string {
+  if (outcome === undefined) return 'Verdict: pending'
+  return isAssistantVerdict(outcome) ? `Verdict: ${verdictLabel(outcome)}` : `Verdict: ${outcome}`
+}
+
 // AssistantTaskView — the workspace body for one helper task: header and controls stay pinned, one scroll
 // region holds the activity history and, last, the outcome. The result goes through the shared safe Markdown
 // renderer, never a second dangerouslySetInnerHTML.
@@ -181,6 +188,14 @@ export function AssistantTaskView({
         </div>
       )}
 
+      {task.trigger === 'pre_completion' && (
+        <div className="assistant-task-view-watch" data-trigger="pre_completion">
+          <span className="assistant-task-view-watch-trigger">Pre-completion review</span>
+          {task.preCompletionRound !== undefined && <span className="assistant-task-view-watch-passes">Round {task.preCompletionRound}</span>}
+          <span className="assistant-task-view-watch-checkpoint">{preCompletionOutcomeLabel(task.preCompletionOutcome)}</span>
+        </div>
+      )}
+
       {task.trigger === 'on_message' && <OnMessageBlock task={task} />}
 
       <AssistantActivityStatus
@@ -207,6 +222,8 @@ export function AssistantTaskView({
 // поэтому старый pass не считается, если после него принят или идёт новый запрос либо последний исход failed.
 function resultPassed(task: AssistantTask, result: AssistantResult | null): boolean {
   if (result?.verdict !== 'pass') return false
+  // Pre-completion: старый pass раунда 1 не закрывает гейт, если раунд 2 открыт или упал — решает исход текущего раунда.
+  if (task.trigger === 'pre_completion') return task.preCompletionOutcome === 'pass'
   if (task.trigger !== 'on_message') return true
   const newerRequest = task.activeRequestId !== undefined || (task.queuedRequests ?? 0) > 0
   return !newerRequest && task.lastOutcome !== 'failed' && result.requestId === task.lastRequestId

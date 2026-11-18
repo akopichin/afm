@@ -62,6 +62,7 @@ describe('STAGE_STATUS_LABELS', () => {
       hook_failed: 'Hook failed',
       awaiting_peer: 'Awaiting colleague',
       awaiting_quota: 'Usage limit',
+      awaiting_pre_completion: 'Pre-completion review',
     })
   })
 })
@@ -81,6 +82,7 @@ describe('ACTIVE_STAGE_STATUSES', () => {
         'hook_failed',
         'awaiting_peer',
         'awaiting_quota',
+        'awaiting_pre_completion',
       ]),
     )
   })

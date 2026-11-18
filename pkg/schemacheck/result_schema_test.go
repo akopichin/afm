@@ -151,3 +151,27 @@ func TestRequiredVerdictContractParity(t *testing.T) {
 		})
 	}
 }
+
+// A delegated child or continuation never takes the stage-level triggers: the result schema keeps refusing them.
+func TestDelegationSchemaRefusesStageLevelTriggers(t *testing.T) {
+	sch := compileSchema(t, "../../schema/assistant-result.schema.json")
+	shapes := func(trigger assistants.Trigger) map[string]string {
+		return map[string]string{
+			"child":        `{"schema_version":1,"kind":"delegate","children":[{"profile_id":"p","title":"t","instruction":"i","trigger":"` + string(trigger) + `"}]}`,
+			"continuation": `{"schema_version":1,"kind":"delegate","children":[{"profile_id":"p","title":"t","instruction":"i"}],"continuation":{"trigger":"` + string(trigger) + `"}}`,
+		}
+	}
+	// The same shapes with a trigger a child may take pass, so the refusals below are about the trigger alone.
+	for name, raw := range shapes(assistants.TriggerOnCompletion) {
+		if err := sch.Validate(jsonInstance(t, []byte(raw))); err != nil {
+			t.Fatalf("schema rejected a valid %s: %v", name, err)
+		}
+	}
+	for _, trigger := range []assistants.Trigger{assistants.TriggerPreCompletion, assistants.TriggerOnMessage} {
+		for name, raw := range shapes(trigger) {
+			if err := sch.Validate(jsonInstance(t, []byte(raw))); err == nil {
+				t.Errorf("schema accepted %s trigger %s", name, trigger)
+			}
+		}
+	}
+}

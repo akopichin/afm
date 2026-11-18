@@ -78,7 +78,7 @@ func (o *Orchestrator) RetryTask(ctx context.Context, taskID assistants.TaskID) 
 	// Nothing would ever work off the requests of an earlier attempt of the stage, and they would hold the run. The
 	// commit checks it again: a new attempt can come before it.
 	notSuperseded := func(cur *state.RunState) error {
-		if state.IsOnMessageHelper(t.Task) && t.RootGeneration != cur.Assistants.RootGenerations[t.RootStageID] {
+		if state.IsRequestHelper(t.Task) && t.RootGeneration != cur.Assistants.RootGenerations[t.RootStageID] {
 			return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("helper %s belongs to a superseded attempt of stage %s", taskID, t.RootStageID)}
 		}
 		return nil
@@ -94,7 +94,7 @@ func (o *Orchestrator) RetryTask(ctx context.Context, taskID assistants.TaskID) 
 	// An infrastructure failure stopped the on_message helper, and it kept its requests, the unfinished one too: it
 	// rests, and its wake takes them up, oldest first.
 	retried := assistants.StatusQueued
-	if state.IsOnMessageHelper(t.Task) {
+	if state.IsRequestHelper(t.Task) {
 		retried = assistants.StatusWatching
 	}
 	bumpEff := state.Effect{Kind: "task_generation_bumped", Target: state.Target{TaskID: string(taskID)}}
@@ -116,6 +116,7 @@ func (o *Orchestrator) RetryTask(ctx context.Context, taskID assistants.TaskID) 
 		o.maybeScheduleTask(runCtx, taskID)
 		o.wakeOnMessageTask(runCtx, taskID)
 		o.settleOnMessageTask(taskID) // a stage done meanwhile takes no more requests
+		o.afterRoundHelperChange(runCtx, taskID)
 	})
 	if err != nil {
 		o.handleTaskOperationErr(err)

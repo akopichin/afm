@@ -29,6 +29,7 @@ export function attentionKindFor(stage: Stage): AttentionKind | null {
   if (stage.status === 'failed' || stage.status === 'hook_failed') return 'failed'
   if (stage.status === 'paused') return 'paused'
   if (stage.status === 'awaiting_assistants') return stage.awaitingAssistantsBlocked === true ? 'assistants' : null
+  if (stage.status === 'awaiting_pre_completion') return stage.preCompletionBlocked === true ? 'assistants' : null
   return null
 }
 

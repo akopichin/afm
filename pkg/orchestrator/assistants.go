@@ -402,7 +402,7 @@ func queuedTurnDue(rs state.RunState) bool {
 		if t.Status != assistants.StatusQueued {
 			continue
 		}
-		if (t.Scope == assistants.ScopeRun && idleRunAgent(rs, t)) || state.OnMessageIdle(*t) {
+		if (t.Scope == assistants.ScopeRun && idleRunAgent(rs, t)) || state.RequestIdle(*t) {
 			continue
 		}
 		return true
@@ -692,6 +692,7 @@ func (o *Orchestrator) finishTaskTurnRequest(taskID assistants.TaskID, turn uint
 			// ancestor) — re-attempt completion unconditionally; maybeCompleteAfterAssistants itself is a cheap
 			// no-op for a stage that isn't currently awaiting_assistants.
 			if to.Terminal() {
+				o.afterRoundHelperChange(o.runContext(context.Background()), taskID)
 				o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
 				// Agent Mesh T6.3: this terminal transition may be exactly what the run-level completion barrier
 				// (state.AssistantsState.RunBlocker, consulted by shouldExit) was waiting on — in particular for a

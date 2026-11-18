@@ -1,12 +1,12 @@
 import { type ReactElement, type ReactNode } from 'react'
 import type { Stage } from '../../types'
-import { STAGE_STATUS_LABELS } from '../../types'
+import { isBlockedGate, stageStatusText } from '../../types'
 import { QuotaCountdown } from '../stages-list/QuotaCountdown'
 import { useStageAction } from '../../hooks/use-stage-retry'
 import { continueStage, pauseStage, retryHookStage, retryStage, triggerStageButton } from '../../api/run-client'
 import type { AttentionKind } from '../../hooks/use-workspace-view'
 
-const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota'])
+const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota', 'awaiting_pre_completion'])
 
 // Кнопки из flow.yaml доставляются через Revise, поэтому нужен живой агент: running/awaiting_approval, не скрипт.
 const BUTTON_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
@@ -92,9 +92,9 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
           id="detail-status"
           className="status-badge"
           data-status={stage.status}
-          data-blocked={stage.status === 'awaiting_assistants' && stage.awaitingAssistantsBlocked === true ? 'true' : undefined}
+          data-blocked={isBlockedGate(stage) ? 'true' : undefined}
         >
-          {STAGE_STATUS_LABELS[stage.status]}
+          {stageStatusText(stage)}
           {stage.status === 'running' && connected && (
             <span className="thinking" aria-hidden="true">
               <span className="td" />

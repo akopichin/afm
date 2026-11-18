@@ -40,6 +40,8 @@ func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 			IsScript:    s.IsScript(),
 			DependsOn:   s.DependsOn,
 			Buttons:     s.Buttons.Labels(),
+
+			PreCompletionMaxFailures: s.PreCompletionMaxFailures(),
 		}
 	}
 	return configs

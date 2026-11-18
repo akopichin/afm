@@ -48,6 +48,11 @@ This is what makes long runs reliable:
 - **Unique run ids.** `<run-name>-<timestamp>-<rand4hex>`, where `<run-name>` is
   the `--worktree` name when supplied and the flow name otherwise. The random suffix
   avoids collisions even within the same second.
+- **Pre-completion rounds.** A stage's [pre-completion review](../collaboration.md#pre-completion-review)
+  is recorded in the same log: each round start, decision (with the correction count) and
+  the accepted-to-verify intent is a transition, so a restart continues with verify or the
+  correction without rerunning the author or accepting a stale pass. Reports are artifacts;
+  the log decides. See [the collaboration journal](../collaboration-journal.md).
 
 Because everything an agent received and did is on disk (prompts under `--debug`, tool
 actions in `<phase>.jsonl`/`.log`, transitions in `events.jsonl`), a run is fully

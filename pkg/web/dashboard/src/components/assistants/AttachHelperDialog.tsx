@@ -101,11 +101,18 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
                 <select value={trigger} onChange={(e) => setTrigger(e.target.value as AttachHelperRequest['trigger'])}>
                   <option value="one_shot">One shot</option>
                   <option value="on_completion">On stage completion</option>
+                  <option value="pre_completion">Pre-completion review</option>
                   <option value="checkpoints">At checkpoints</option>
                   <option value="on_message">On message</option>
                 </select>
               </label>
             </div>
+            {trigger === 'pre_completion' && (
+              <p className="attach-helper-hint">
+                Runs after the stage agent finishes its turn, before verify. A required helper that returns needs changes sends the work
+                back to the stage agent; an advisory helper never blocks the stage.
+              </p>
+            )}
             {trigger === 'on_message' && (
               <p className="attach-helper-hint">
                 The helper waits idle until it is sent a message; each message is one turn, and the helper stays attached afterwards.

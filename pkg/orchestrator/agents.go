@@ -324,7 +324,7 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 			artCtx += buf.String()
 		}
 
-		verifyNote := o.verifyFeedbackBlock(stageDir)
+		verifyNote := o.machineFeedbackBlock(s.ID)
 		verifyCmdNote := verifyStageNote(s.Verify)
 		// T8/D5: обязательный блок завершения строит код по фактической фазе, не шаблон — доклеивается
 		// последним, чтобы prompts_dir не мог его подменить/стереть.
@@ -378,7 +378,7 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 // и для fresh (runReviewAgent), и для feedback (runReviewWithFeedback) раннеров; feedback — см. runRetryLoop.
 func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, depPlans, artCtx string, feedback bool) {
 	o.runRetryLoop(ctx, s, phaseReview, feedback, func(retryContext string) error {
-		verifyNote := o.verifyFeedbackBlock(stageDir)
+		verifyNote := o.machineFeedbackBlock(s.ID)
 		// T8/D6: standalone review (resume/revise/pause-recovery паths) гейтится на .done так же, как
 		// embedded review — промпт теперь тоже об этом говорит.
 		contract := prompts.CompletionContract(flow.PhaseReview, o.stageDir(s.ID))
@@ -422,7 +422,7 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 		artCtx := o.collectArtifactsNoticing(s, artifactsWarnLabel)
 		depCtx := o.collectDependencyPlansNoticing(s)
 
-		verifyNote := o.verifyFeedbackBlock(stageDir)
+		verifyNote := o.machineFeedbackBlock(s.ID)
 		// T8/D5: обязательный блок завершения строит код по фактической фазе (execution_summary.md для
 		// autonomous), не шаблон — доклеивается последним.
 		contract := prompts.CompletionContract(flow.PhaseAutonomous, o.stageDir(s.ID))

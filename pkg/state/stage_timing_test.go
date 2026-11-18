@@ -126,21 +126,22 @@ func timingTestRunState(status StageStatus, started bool) *RunState {
 
 func TestClassifyStageTime_CoversEveryStatus(t *testing.T) {
 	want := map[StageStatus]TimeKind{
-		StatusPending:            TimeScheduling,
-		StatusPlanning:           TimeWork,
-		StatusAwaitingApproval:   TimeApproval,
-		StatusRevising:           TimeWork,
-		StatusReady:              TimeScheduling,
-		StatusRunning:            TimeWork,
-		StatusRetrying:           TimeBackoff,
-		StatusPaused:             TimePaused,
-		StatusAwaitingUserInput:  TimeApproval,
-		StatusDone:               TimeNone,
-		StatusFailed:             TimeNone,
-		StatusHookFailed:         TimeApproval,
-		StatusAwaitingAssistants: TimeHelpers, // no blocker: nothing waits for a human
-		StatusAwaitingPeer:       TimeHelpers,
-		StatusAwaitingQuota:      TimeBackoff,
+		StatusPending:               TimeScheduling,
+		StatusPlanning:              TimeWork,
+		StatusAwaitingApproval:      TimeApproval,
+		StatusRevising:              TimeWork,
+		StatusReady:                 TimeScheduling,
+		StatusRunning:               TimeWork,
+		StatusRetrying:              TimeBackoff,
+		StatusPaused:                TimePaused,
+		StatusAwaitingUserInput:     TimeApproval,
+		StatusDone:                  TimeNone,
+		StatusFailed:                TimeNone,
+		StatusHookFailed:            TimeApproval,
+		StatusAwaitingAssistants:    TimeHelpers, // no blocker: nothing waits for a human
+		StatusAwaitingPeer:          TimeHelpers,
+		StatusAwaitingQuota:         TimeBackoff,
+		StatusAwaitingPreCompletion: TimeHelpers, // no blocked round: nothing waits for a human
 	}
 	for _, status := range AllStatuses() {
 		kind, known := want[status]

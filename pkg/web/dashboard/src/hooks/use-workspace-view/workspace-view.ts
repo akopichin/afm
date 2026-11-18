@@ -35,6 +35,8 @@ export function attentionKindForStatus(stage: Stage): AttentionKind | null {
       return 'paused'
     case 'awaiting_assistants':
       return stage.awaitingAssistantsBlocked === true ? 'assistants' : null
+    case 'awaiting_pre_completion':
+      return stage.preCompletionBlocked === true ? 'assistants' : null
     default:
       return null
   }

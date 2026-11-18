@@ -18,15 +18,32 @@ const (
 	RequestOutcomeFailed RequestOutcome = "failed"
 )
 
-// IsOnMessageHelper reports whether t is a stage's top-level helper that takes one turn per addressed request.
+// IsOnMessageHelper reports whether t is a stage's top-level helper that takes one turn per addressed message.
 func IsOnMessageHelper(t assistants.Task) bool {
 	return t.Trigger == assistants.TriggerOnMessage && t.Scope == assistants.ScopeStage && t.ParentTaskID == nil
 }
 
-// OnMessageIdle reports whether t is an on_message helper with no request to work on: until one arrives it
-// starts no turn and holds nothing open.
-func OnMessageIdle(t TaskState) bool {
-	return IsOnMessageHelper(t.Task) && !t.Status.Terminal() && t.ActiveRequest == "" && len(t.PendingRequests) == 0
+// IsPreCompletionHelper reports whether t is a stage's top-level pre_completion helper, which takes one turn per
+// review round.
+func IsPreCompletionHelper(t assistants.Task) bool {
+	return t.Trigger == assistants.TriggerPreCompletion && t.Scope == assistants.ScopeStage && t.ParentTaskID == nil
+}
+
+// IsRequestHelper reports whether t works through a queue of requests: an on_message helper's messages or a
+// pre_completion helper's rounds.
+func IsRequestHelper(t assistants.Task) bool {
+	return IsOnMessageHelper(t) || IsPreCompletionHelper(t)
+}
+
+// IsRequestDriven reports whether a task with this trigger works through a queue of requests.
+func IsRequestDriven(trigger assistants.Trigger) bool {
+	return trigger == assistants.TriggerOnMessage || trigger == assistants.TriggerPreCompletion
+}
+
+// RequestIdle reports whether t is a request helper with no request to work on: until one arrives it starts no
+// turn and holds nothing open.
+func RequestIdle(t TaskState) bool {
+	return IsRequestHelper(t.Task) && !t.Status.Terminal() && t.ActiveRequest == "" && len(t.PendingRequests) == 0
 }
 
 // queueOnMessageRequests queues recorded msg for each on_message helper it is addressed to, unless it continues
@@ -124,7 +141,7 @@ func (ms MeshState) unreadContinuations(t *TaskState, r agentcomm.ParticipantID,
 	return n
 }
 
-// checkRequestProgress refuses a status record that would take t's requests out of order: an on_message
+// checkRequestProgress refuses a status record that would take t's requests out of order: a request
 // helper's turn names the request it works on — the active one or, when none is active, the oldest waiting one —
 // and an outcome ends the active request.
 func checkRequestProgress(t *TaskState, p TaskStatusChangedPayload, status assistants.TaskStatus) error {
@@ -141,7 +158,7 @@ func checkRequestProgress(t *TaskState, p TaskStatusChangedPayload, status assis
 		return nil
 	}
 	switch {
-	case id == "" && IsOnMessageHelper(t.Task):
+	case id == "" && IsRequestHelper(t.Task):
 		return fmt.Errorf("turn %d names no request: an on_message helper's turn works on one", p.Turn)
 	case id == "" || id == t.ActiveRequest:
 		return nil

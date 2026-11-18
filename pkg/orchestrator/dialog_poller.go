@@ -260,11 +260,12 @@ type questionMove int
 const (
 	questionAsked    questionMove = iota // the stage is the user's for this question
 	questionAnswered                     // answered since the scan: nobody is asked
-	questionDeferred                     // the stage cannot be the user's now (a Revise's feedback run owns it)
+	questionDeferred                     // a Revise's feedback run or the stage's round owns the stage now
 )
 
 // surfaceQuestion moves the stage to the user for question id, unless it was answered since the scan: decided under
-// answerMu, so an answer is either applied after this transition or seen by it.
+// answerMu, so an answer is either applied after this transition or seen by it. A question the reviewed author left
+// behind stays deferred while the round is carried out (questionHeldByRound); liveAgents changes only under answerMu.
 func (o *Orchestrator) surfaceQuestion(stageID, phase, id string) (uint64, questionMove) {
 	o.answerMu.Lock()
 	defer o.answerMu.Unlock()
@@ -274,7 +275,12 @@ func (o *Orchestrator) surfaceQuestion(stageID, phase, id string) (uint64, quest
 	// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
 	askPhase := o.correctPhaseForState(o.currentStatus(stageID), phase)
 	o.preAskPhase.Store(stageID, askPhase)
-	if _, seq, ok := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: phase}, ""); ok {
+	if o.testBeforeQuestionCommit != nil {
+		o.testBeforeQuestionCommit()
+	}
+	_, authorLive := o.liveAgents.Load(stageID)
+	notHeld := func(cur *state.RunState) bool { return !questionHeldByRound(cur.Stages[stageID], authorLive) }
+	if _, seq, ok := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: phase, Fence: notHeld}, ""); ok {
 		return seq, questionAsked
 	}
 	if o.currentStatus(stageID) == state.StatusAwaitingUserInput {

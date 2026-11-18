@@ -140,6 +140,29 @@ func TestSdk_StatusContractIncludesNewFields(t *testing.T) {
 	}
 }
 
+func TestSdk_StatusDecodesPreCompletion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"flow_name":"demo","stages":[{"id":"impl","status":"awaiting_pre_completion","pre_completion_blocked":true}]}`)
+	}))
+	defer srv.Close()
+
+	run := &Run{baseURL: srv.URL, httpClient: srv.Client()}
+	status, err := run.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Stages["impl"] != StageAwaitingPreCompletion {
+		t.Fatalf("stage impl: got %q, want %q", status.Stages["impl"], StageAwaitingPreCompletion)
+	}
+	if len(status.StageViews) != 1 || !status.StageViews[0].PreCompletionBlocked {
+		t.Fatalf("StageViews = %+v, want pre_completion_blocked decoded", status.StageViews)
+	}
+	if status.Done || status.Failed {
+		t.Errorf("Done=%v Failed=%v: awaiting_pre_completion is neither", status.Done, status.Failed)
+	}
+}
+
 func TestStatus_NonOKResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

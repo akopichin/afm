@@ -214,7 +214,7 @@ export type AttachHelperRequest = {
   title: string
   instruction: string
   mode: 'advisory' | 'required'
-  trigger: 'one_shot' | 'checkpoints' | 'on_completion' | 'on_message'
+  trigger: 'one_shot' | 'checkpoints' | 'on_completion' | 'pre_completion' | 'on_message'
 }
 
 // Task-level lifecycle mutations — POST /api/assistants/{id}/{action}. Distinct from the stage-level
@@ -286,6 +286,9 @@ export type AssistantTaskWire = {
   // helper X" even though blocks_root_completion stays structurally true.
   waived?: boolean
   waiver_reason?: string
+  // pre_completion_round/pre_completion_outcome — round a pre_completion helper reviews and its verdict ('' while pending).
+  pre_completion_round?: number
+  pre_completion_outcome?: string
   // quota — durable usage-limit park of a queued task (same shape as StageView.quota); parsed by
   // parseStageQuota, which validates every field.
   quota?: unknown

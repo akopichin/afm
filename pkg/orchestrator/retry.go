@@ -398,6 +398,17 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		fresh:       o.verifyFreshCorrection(s),
 		patience:    o.verifyReviewPatience(s),
 	}
+	// A turn that follows a pre-completion round continues its cycle: the round carried the verify counters, and the
+	// attempt counts on from the turn it reviewed. An accepted round goes straight to the gate; the author runs again
+	// only for the correction a needs_changes round asked for.
+	startRun, gateOnly := 0, claimGateOnly(ctx)
+	if pc := o.opts.Store.Snapshot().Stages[s.ID].PreCompletion; pc != nil && preCompletionPhase(phase) {
+		correction.failures, correction.unchanged, correction.prevFingerprint = pc.VerifyFailures, pc.VerifyStalemates, pc.VerifyFingerprint
+		if pc.Accepted || pc.Decision == state.PreCompletionNeedsChanges {
+			startRun = pc.Attempt
+		}
+		gateOnly = gateOnly || pc.Accepted
+	}
 	// Quota resume restores counters; the fingerprint stays local to this loop and starts empty.
 	if verifyResume != nil {
 		correction.failures = verifyResume.quota.VerifyFailures
@@ -420,7 +431,7 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 	if phase == phasePlanning {
 		resumePhase = phasePlanning
 	}
-	for run := 0; run <= maxRetries+summaryRuns; run++ {
+	for run := startRun; run <= maxRetries+summaryRuns; run++ {
 		attempt := run - summaryRuns
 		retryCtx := ""
 		if run > 0 || resumeCtx {
@@ -438,8 +449,10 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		}
 		resumeCtx = false // только самая первая попытка резюмируемого запуска получает его
 
-		if cur := o.currentStatus(s.ID); cur == state.StatusPaused || cur == state.StatusDone || cur == state.StatusFailed {
-			return // paused in the shouldRun->register gap, or ended while queued: do not start the subprocess
+		// Paused in the shouldRun->register gap, ended while queued, or handed by another turn of this epoch to a
+		// pre-completion round, whose review the author never runs beside: do not start the subprocess.
+		if cur := o.currentStatus(s.ID); cur == state.StatusPaused || cur == state.StatusDone || cur == state.StatusFailed || cur == state.StatusAwaitingPreCompletion {
+			return
 		}
 		// A takeover since the grant (Pause, Continue, Revise — also while this runner waited for its slot) owns the stage.
 		if !o.turnOwnsStage(s.ID, epoch) {
@@ -456,10 +469,10 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		}
 		// Пробуждение verify-парка: автор уже отработал, первая попытка идёт сразу в completionCheck, и verify
 		// продолжает припаркованный проход (RunVerification).
-		resumesVerify := run == 0 && verifyResume != nil
+		resumesVerify := run == startRun && verifyResume != nil
 		// The marker may have appeared while the correction was being reserved: nothing left for the author to do.
-		runsAgent := !resumesVerify && !weighsIssued && (!justReserved || !summaryProbePasses(stageDir))
-		justReserved, weighsIssued = false, false
+		runsAgent := !resumesVerify && !gateOnly && !weighsIssued && (!justReserved || !summaryProbePasses(stageDir))
+		justReserved, weighsIssued, gateOnly = false, false, false
 		if runsAgent {
 			// Admission провайдера — после слота команды и before-hook (мы внутри lease), на каждом ходе, в том числе на
 			// пробуждении: другая стадия того же провайдера, запаркованная пока мы ждали слот, держит и эту. Парк по
@@ -518,12 +531,26 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			// работа сделана и ход ни на кого не ждёт, стадия завершается.
 			dialog := s.Interactive || phase == phaseAutonomous
 			if dialog && o.currentStatus(s.ID) == state.StatusAwaitingUserInput && o.hasOpenQuestion(s.ID, phase) &&
-				len(o.turnEpisode(meshStageParticipantID(s.ID), waitsBefore)) == 0 && (completionCheck == nil || completionCheck() == nil) {
-				o.stopAnswering(s.ID)
-				o.completeAgent(ctx, s.ID, phase, &epoch)
-				return
+				len(o.turnEpisode(meshStageParticipantID(s.ID), waitsBefore)) == 0 {
+				var abandonedCheck error
+				if completionCheck != nil {
+					abandonedCheck = completionCheck()
+				}
+				var due *preCompletionDue
+				switch {
+				case abandonedCheck == nil:
+					o.stopAnswering(s.ID)
+					o.completeAgent(ctx, s.ID, phase, &epoch)
+					return
+				case errors.As(abandonedCheck, &due):
+					o.stopAnswering(s.ID)
+					o.parkForPreCompletion(ctx, s, epoch, correction.preCompletionStep(phase, attempt, feedback), onUserInterrupted)
+					return
+				default:
+					// Not complete after all: the turn goes on below as for any other open question.
+				}
 			}
-			switch o.leaveWithUser(s.ID, phase, epoch, dialog) {
+			switch o.leaveWithUser(s.ID, phase, epoch, dialog && !questionsSettledByRound(o.opts.Store.Snapshot().Stages[s.ID])) {
 			case dialogLeft:
 				o.turnLeftForAnswer(s.ID)
 				return
@@ -568,6 +595,13 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 				o.completeAgent(ctx, s.ID, phase, &epoch)
 				return
 			}
+			// The author's turn is complete and its pre_completion helpers review it before verify: the stage leaves the
+			// lease with the round and the loop ends; the decision starts the next turn.
+			var due *preCompletionDue
+			if errors.As(checkErr, &due) {
+				o.parkForPreCompletion(ctx, s, epoch, correction.preCompletionStep(phase, attempt, feedback), onUserInterrupted)
+				return
+			}
 			// AI-verify: верификатор слушает тот же interruptChans, что и автор — Pause/Revise во время verify
 			// всплывает сюда либо этим сентинелом, либо уже долговечным paused/revising-статусом.
 			if errors.Is(checkErr, executor.ErrUserInterrupted) {
@@ -580,6 +614,12 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			if errors.As(checkErr, &verifyLimit) {
 				o.parkVerifyForQuota(ctx, s, phase, epoch, verifyLimit, correction.counters(), feedback, onUserInterrupted)
 				return
+			}
+			// An accepted round answers for the turn it reviewed only: whatever else fails here, the work goes back to the author
+			// and the next completion gets a new round. A verify rejection carries its counters from the branch below.
+			var rejection *VerifyRejectedError
+			if ctx.Err() == nil && !errors.As(checkErr, &rejection) { // a run being stopped keeps the intent for its restart
+				o.consumeAcceptedRound(s.ID, epoch, correction.preCompletionStep(phase, attempt, feedback))
 			}
 			// A missing or empty execution_summary.md has its own budget; an unreadable one is the exact file error.
 			verdict, instruction := o.decideSummaryFailure(s, phase, stageDir, epoch, checkErr, cliOutcome, onUserInterrupted)
@@ -620,6 +660,7 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 						correction.failures++
 						dropSessionForFreshCorrection(correction.fresh, stageDir, phase)
 					}
+					o.consumeAcceptedRound(s.ID, epoch, correction.preCompletionStep(phase, attempt+1, feedback))
 					incompleteReason = checkErr.Error()
 					// Раньше публиковалось как EventStageStatusChanged с Data- сообщением — фронт рисовал это пустым
 					// бейджем "→ ", и на reload сообщение терялось.

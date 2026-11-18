@@ -43,6 +43,8 @@ function toAssistantTask(raw: AssistantTaskWire): AssistantTask {
     blocksRootCompletion: raw.blocks_root_completion === true,
     waived: raw.waived === true,
     waiverReason: raw.waiver_reason ?? '',
+    preCompletionRound: typeof raw.pre_completion_round === 'number' && raw.pre_completion_round > 0 ? raw.pre_completion_round : undefined,
+    preCompletionOutcome: raw.pre_completion_outcome !== '' ? raw.pre_completion_outcome : undefined,
     quota: parseStageQuota(raw.quota),
     activeRequestId: raw.active_request_id !== '' ? raw.active_request_id : undefined,
     queuedRequests: parsePendingRequestCount(raw.pending_requests),
@@ -103,7 +105,7 @@ function tasksSignature(tasks: AssistantTask[]): string {
   return tasks
     .map(
       (t) =>
-        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}|${t.blocksRootCompletion}|${t.waived}|${quotaSignature(t)}|${t.activeRequestId ?? ''}|${t.queuedRequests ?? ''}|${t.lastRequestId ?? ''}|${t.lastOutcome ?? ''}|${t.turn ?? ''}`,
+        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}|${t.blocksRootCompletion}|${t.waived}|${quotaSignature(t)}|${t.activeRequestId ?? ''}|${t.queuedRequests ?? ''}|${t.lastRequestId ?? ''}|${t.lastOutcome ?? ''}|${t.turn ?? ''}|${t.preCompletionRound ?? ''}|${t.preCompletionOutcome ?? ''}`,
     )
     .join('\n')
 }

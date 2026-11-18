@@ -70,6 +70,7 @@ func cloneStage(s flow.Stage) flow.Stage {
 	s.Hooks = cloneHooks(s.Hooks)
 	s.Browser = clonePtr(s.Browser)
 	s.Assistants = cloneAssistants(s.Assistants)
+	s.PreCompletion = clonePreCompletion(s.PreCompletion)
 	return s
 }
 
@@ -107,6 +108,13 @@ func cloneHooks(hooks []lifecyclehooks.Hook) []lifecyclehooks.Hook {
 		out[i].ResolvedEnv = maps.Clone(out[i].ResolvedEnv)
 	}
 	return out
+}
+
+func clonePreCompletion(spec *flow.PreCompletionSpec) *flow.PreCompletionSpec {
+	if spec == nil {
+		return nil
+	}
+	return &flow.PreCompletionSpec{MaxFailures: clonePtr(spec.MaxFailures)}
 }
 
 func clonePtr[T any](p *T) *T {

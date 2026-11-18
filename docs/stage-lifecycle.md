@@ -29,6 +29,17 @@ running → awaiting_quota → running
 - `awaiting_assistants` — the stage's own work is finished, but a
   [required helper](collaboration.md) has not passed or been waived; the stage
   completes when the required helper gate closes
+- `awaiting_pre_completion` — the agent's turn passed the completion check and
+  the stage's [`pre_completion` helpers](collaboration.md#pre-completion-review)
+  are reviewing it, before `verify:`. The agent's execution slot is released
+  meanwhile. Accepted → verify (or completion without it); a required
+  `needs_changes` → `running` again with the remarks in the agent's prompt, then
+  a new round; budget spent → `failed`. It needs your decision (Retry the helper
+  or **Waive…**) when a required helper has failed or is inconclusive.
+  **Pause** forbids starting a helper, the author or verify and holds the round's
+  decision; helper turns that are already running may finish, and **Continue**
+  resumes the same phase without rerunning an accepted pass; **Revise**, **Retry** and
+  **Cancel** drop the old continuation and start a fresh budget.
 - `awaiting_peer` — the stage agent yielded while waiting for an Agent Mesh reply;
   it resumes when that wait resolves (see [Team conversations](collaboration.md#team-conversations))
 - `awaiting_quota` — an agent hit a provider usage limit. afm records the wait in
@@ -99,6 +110,9 @@ When you invoke `afm run` again, the tool automatically:
 - Preserves stages awaiting approval (`awaiting_approval`)
 - Rechecks the required-helper gate for stages in `awaiting_assistants`, without
   rerunning their completed main agent
+- Continues a stage in `awaiting_pre_completion` from the journal: an accepted
+  round goes on to verify, a rejected one to the correction if it has not started,
+  and the author is never rerun just because `execution_summary.md` exists
 - Restores pending Agent Mesh waits for stages in `awaiting_peer` and resumes the
   stage when its wait resolves; a `running` stage whose turn had already
   yielded on waits (`afm agent wait` answered `yield`) is parked on them

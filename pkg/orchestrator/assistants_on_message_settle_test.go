@@ -287,7 +287,7 @@ func TestOnMessage_RequestRacingTheCloseIsTakenOrRefused(t *testing.T) {
 	var once sync.Once
 	r.o.settlePlannedHook = func() {
 		tk := r.taskState()
-		if r.stageStatus() == state.StatusAwaitingAssistants && tk.Status == assistants.StatusWatching && state.OnMessageIdle(*tk) {
+		if r.stageStatus() == state.StatusAwaitingAssistants && tk.Status == assistants.StatusWatching && state.RequestIdle(*tk) {
 			once.Do(func() { raced <- r.send("m2") })
 		}
 	}
@@ -783,7 +783,7 @@ func TestOnMessage_RetryOfAFailedHelperResumesItsRequests(t *testing.T) {
 			}
 			r.requireAnswered(m1, tc.firstTurn, fmt.Sprintf("answer %d", tc.firstTurn), "")
 			r.requireAnswered(m2, tc.firstTurn+1, fmt.Sprintf("answer %d", tc.firstTurn+1), "")
-			if tk := waitForTaskStatus(t, r.store, r.task, assistants.StatusWatching, 2*time.Second); !state.OnMessageIdle(*tk) {
+			if tk := waitForTaskStatus(t, r.store, r.task, assistants.StatusWatching, 2*time.Second); !state.RequestIdle(*tk) {
 				t.Fatalf("helper after its requests: active %q pending %v, want resting", tk.ActiveRequest, tk.PendingRequests)
 			}
 		})
@@ -1036,8 +1036,8 @@ func TestOnMessage_FailedStageRunEndsAfterTheLastRequest(t *testing.T) {
 	if !queueMarker() {
 		t.Fatal("no room for the marker in the event queue")
 	}
-	if d := receive(t, drained); d.allowed || state.OnMessageIdle(*d.rs.Assistants.Tasks[helper]) {
-		t.Fatalf("drained loop: exit allowed %v, helper idle %v; want the run held by the request under way", d.allowed, state.OnMessageIdle(*d.rs.Assistants.Tasks[helper]))
+	if d := receive(t, drained); d.allowed || state.RequestIdle(*d.rs.Assistants.Tasks[helper]) {
+		t.Fatalf("drained loop: exit allowed %v, helper idle %v; want the run held by the request under way", d.allowed, state.RequestIdle(*d.rs.Assistants.Tasks[helper]))
 	}
 	close(release)
 

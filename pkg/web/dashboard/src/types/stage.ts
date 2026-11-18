@@ -38,11 +38,24 @@ export type Stage = {
   // StageView.AwaitingAssistantsBlocked (omitempty на бэке). Опционально и здесь же — чтобы существующие
   // Stage-фикстуры в тестах не пришлось поголовно трогать (как cost/verify выше).
   awaitingAssistantsBlocked?: boolean
+  // preCompletion — состояние цикла pre-completion ревью (Go StageView.PreCompletion); undefined, пока цикла нет.
+  preCompletion?: StagePreCompletion
+  // preCompletionBlocked — раунд ревью требует решения человека (Go StageView.PreCompletionBlocked).
+  preCompletionBlocked?: boolean
   // quota — durable-ожидание сброса лимита подписки (Go StageView.Quota). Есть только у awaiting_quota и у
   // paused, припаркованной по лимиту; у остальных стадий undefined.
   quota?: StageQuota
   // timing — учёт времени стадии (Go StageView.Timing). undefined — старый сервер без поля.
   timing?: StageTiming
+}
+
+// StageDecision — итог раунда pre-completion ревью; пустая строка — раунд ещё идёт.
+export const PRE_COMPLETION_DECISIONS = ['accepted', 'needs_changes', 'exhausted', 'failed'] as const
+export type StagePreCompletion = {
+  round: number
+  corrections: number
+  maxFailures: number
+  decision: (typeof PRE_COMPLETION_DECISIONS)[number] | ''
 }
 
 // StageQuota — малый общий вид quota-парковки стадии или helper-задачи (сервер отдаёт RFC3339 в UTC; не вся
@@ -162,6 +175,22 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   // awaiting_quota — стадия припаркована до сброса лимита подписки провайдера и продолжит сама; это машинное
   // ожидание, не решение человека. Причина и время — в stage.quota.
   awaiting_quota: 'Usage limit',
+  // awaiting_pre_completion — агент стадии закончил ход, helpers pre-completion ревью проверяют результат до verify;
+  // машинное ожидание, человека требует только stage.preCompletionBlocked.
+  awaiting_pre_completion: 'Pre-completion review',
+}
+
+// isBlockedGate — стадия ждёт helpers (required-гейт или pre-completion ревью), и раунд требует решения человека.
+export function isBlockedGate(stage: Pick<Stage, 'status' | 'awaitingAssistantsBlocked' | 'preCompletionBlocked'>): boolean {
+  if (stage.status === 'awaiting_assistants') return stage.awaitingAssistantsBlocked === true
+  return stage.status === 'awaiting_pre_completion' && stage.preCompletionBlocked === true
+}
+
+// stageStatusText — подпись статуса; у pre-completion ревью добавляет номер раунда.
+export function stageStatusText(stage: Pick<Stage, 'status' | 'preCompletion'>): string {
+  const label = STAGE_STATUS_LABELS[stage.status]
+  if (stage.status !== 'awaiting_pre_completion' || stage.preCompletion === undefined) return label
+  return `${label} · round ${stage.preCompletion.round}`
 }
 
 // Статусы, считающиеся «активными» — стадия либо в работе, либо блокирует прогресс флоу и ждёт решения
@@ -178,5 +207,6 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'awaiting_assistants',
   'awaiting_peer',
   'awaiting_quota',
+  'awaiting_pre_completion',
 ])
 

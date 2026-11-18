@@ -84,6 +84,7 @@ stages:
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
 | `buttons` | no | Named one-click prompts for the stage's live agent, shown in the header of the selected stage, after its name and status (see [Dashboard](dashboard.md#stage-buttons)) |
 | `assistants` | no | Helper profiles to attach automatically when this stage starts execution. A profile name, an object, or a list of either; see [Declared helpers](#declared-helpers) |
+| `pre_completion` | no | An object `{ max_failures: N }` for execution stages (not planning-only or script stages): the number of corrections a [`pre_completion` helper](collaboration.md#pre-completion-review) round may send back to the stage's agent before the stage fails. Default 1; `0` fails on the first `needs_changes`; negative is rejected. Needs no declared helper: one can be attached while the run goes |
 | `reflect` | no | An object `{ file, mode }` that opts the stage into [agent memory](agent-memory.md): `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (default `rw`). Requires the flow-level `memory:` block |
 | `memory_use` | no | Overrides the flow-level `memory.memory_use` for this stage (`true`/`false`; unset = inherit). Controls whether the stage **reads** [memory](agent-memory.md) |
 
@@ -116,7 +117,7 @@ stages:
 
 Object fields are `profile` (required), `title`, `instruction`, `mode`
 (`advisory` or `required`), `trigger` (`one_shot`, `checkpoints`,
-`on_completion`, or `on_message`), `skills`, and `skills_dir`. Omitted mode and trigger default to
+`on_completion`, `on_message`, or `pre_completion`), `skills`, and `skills_dir`. Omitted mode and trigger default to
 `advisory` and `one_shot`. `skills` and `skills_dir` follow the
 [agent skills](#agent-skills) rules; a helper does not inherit its stage's skills.
 Profiles must be defined in `collaboration.profiles`; an unknown profile stops

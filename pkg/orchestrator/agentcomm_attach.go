@@ -290,6 +290,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
 		return AttachAndSendResult{}, err
 	}
+	if req.Trigger == assistants.TriggerPreCompletion {
+		return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "trigger pre_completion is attached to a stage without a first message — its rounds, not messages, are its requests")
+	}
 	treq := topLevelTaskRequest{
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: req.Scope, StageID: req.StageID,
 		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Trigger: req.Trigger, Origin: req.Origin, Actor: req.Actor,

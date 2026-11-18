@@ -192,6 +192,9 @@ type Stage struct {
 	// Assistants — helper profiles auto-attached at the start of this stage's execution phase, the same way
 	// a manual dashboard Attach click would. See pkg/flow/assistants.go.
 	Assistants StageAssistants `yaml:"assistants,omitempty"`
+	// PreCompletion is the budget of the pre_completion helper round that runs before verify. See
+	// pkg/flow/pre_completion.go.
+	PreCompletion *PreCompletionSpec `yaml:"pre_completion,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -765,6 +768,12 @@ func (f *Flow) validate() error {
 	}
 
 	for _, s := range f.Stages {
+		if err := s.validatePreCompletion(); err != nil {
+			return err
+		}
+	}
+
+	for _, s := range f.Stages {
 		if len(s.Buttons) == 0 {
 			continue
 		}
@@ -811,7 +820,7 @@ func (f *Flow) validate() error {
 				return fmt.Errorf("stage %q: assistants[%d]: mode must be %q or %q, got %q", s.ID, i, assistants.ModeAdvisory, assistants.ModeRequired, a.Mode)
 			}
 			if !a.Trigger.Valid() {
-				return fmt.Errorf("stage %q: assistants[%d]: trigger must be %q, %q, %q, or %q, got %q", s.ID, i, assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage, a.Trigger)
+				return fmt.Errorf("stage %q: assistants[%d]: trigger must be %q, %q, %q, %q, or %q, got %q", s.ID, i, assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage, assistants.TriggerPreCompletion, a.Trigger)
 			}
 		}
 	}

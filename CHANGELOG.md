@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-18
+
+### Improvement:
+
+- Add `trigger: pre_completion` for stage helpers. After the stage agent finishes its
+  turn and the completion check passes, the helpers review the result before `verify:`.
+  A required `needs_changes` returns the helper's remarks, word for word, to the stage
+  agent for a correction; every correction is followed by a new review round, and verify
+  runs only after the review is accepted. The number of corrections is set per stage with
+  `pre_completion.max_failures` (default 1). The stage shows the new
+  `awaiting_pre_completion` status with the round number, and the dashboard Attach dialog
+  offers **Pre-completion review**.
+
 ## 2026-11-10
 
 ### Fix:

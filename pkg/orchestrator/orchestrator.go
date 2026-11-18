@@ -342,6 +342,7 @@ type Orchestrator struct {
 	// Continue can race startup recovery. Keep its status transition and the
 	// per-process continuation marker atomic with recovery's status read.
 	continueMu           sync.Mutex
+	roundMu              sync.Mutex // serializes the start and the decision of pre-completion rounds and their feedback files
 	continuedThisProcess sync.Map
 
 	// pauseGen растёт при каждом Pause; before-hook сверяет generation, чтобы не запускать mainFn после
@@ -471,6 +472,21 @@ type Orchestrator struct {
 	// testAfterAttachSnapshot runs in Attach and AttachAndSend right after they read the snapshot they plan from, so
 	// a test can commit a competing attach (the alias race initTeam retries) or a stage failure in between.
 	testAfterAttachSnapshot func()
+	// testAfterPreCompletionSnapshot runs in the completion gate between its look at the stage's pre_completion helpers and the
+	// commit of an empty acceptance, where an Attach can come in.
+	testAfterPreCompletionSnapshot func()
+	// testAfterRoundDecided runs once a round's decision is committed and before the author's continuation is
+	// spawned, where a Pause, a Continue or a crash can come in.
+	testAfterRoundDecided func()
+	// testAfterRoundOpened runs once a round is committed and announced and before its helpers are woken, where a Pause
+	// and a Continue can wake and decide it first.
+	testAfterRoundOpened func()
+	// testAfterCorrectionClaim runs in the turn of a needs_changes round's correction once it holds the stage, with
+	// whether it still owns the correction.
+	testAfterCorrectionClaim func(owned bool)
+	// testBeforeQuestionCommit runs in surfaceQuestion once the question is found open and before the stage is moved to
+	// the user, where a round's acceptance can come in.
+	testBeforeQuestionCommit func()
 
 	// testAfterBoardTaskLookup runs in BoardTask right after its lookup of a committed request with the same id
 	// found none, so a test can commit a concurrent duplicate of the request in between.
@@ -989,8 +1005,8 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		return nil
 	}
 
-	// Check all phases for fresh questions.
-	if current != state.StatusAwaitingUserInput {
+	// Check all phases for fresh questions. After an accepted round of helpers the author has not run since its turn.
+	if current != state.StatusAwaitingUserInput && !questionsSettledByRound(st) {
 		if o.askIfStillOpen(ev.StageID, agentType, fence) {
 			return nil
 		}

@@ -368,6 +368,9 @@ func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskVie
 			view.LastOutcome = string(queue.LastOutcome)
 			view.Turn = queue.Turn
 		}
+		if round, outcome, ok := r.orch.TaskPreCompletion(t.ID); ok {
+			view.PreCompletionRound, view.PreCompletionOutcome = round, string(outcome)
+		}
 		if passes, lastSeq, hasLast, ok := r.orch.WatcherStatus(t.ID); ok {
 			view.WatchPasses = &passes
 			if hasLast {

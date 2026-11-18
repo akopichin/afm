@@ -77,6 +77,11 @@ type AssistantTaskView struct {
 	LastRequestID   string `json:"last_request_id,omitempty"`
 	LastOutcome     string `json:"last_outcome,omitempty"`
 	Turn            uint64 `json:"turn,omitempty"`
+	// PreCompletionRound and PreCompletionOutcome — a pre_completion helper's standing in its stage's current review round:
+	// the round's number and how the helper's request of it ended (pass, needs_changes, inconclusive, failed, waived), empty
+	// while it is still working. Both absent for any other task.
+	PreCompletionRound   int    `json:"pre_completion_round,omitempty"`
+	PreCompletionOutcome string `json:"pre_completion_outcome,omitempty"`
 }
 
 // AssistantEventView is one entry of a task's event history page — GET /api/assistants/{id}/events.

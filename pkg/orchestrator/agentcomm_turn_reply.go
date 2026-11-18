@@ -44,7 +44,7 @@ func wakingMessage(ms state.MeshState, inbox []agentcomm.MessageID) (*agentcomm.
 // turnRequest is the message t's current turn works on: an on_message helper's active request, whatever else the
 // turn was handed, or else the message that woke the turn (wakingMessage).
 func turnRequest(ms state.MeshState, t *state.TaskState) (*agentcomm.Message, bool) {
-	if state.IsOnMessageHelper(t.Task) {
+	if state.IsRequestHelper(t.Task) {
 		m := ms.Messages[t.ActiveRequest]
 		return m, m != nil
 	}
