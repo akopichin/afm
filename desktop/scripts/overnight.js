@@ -67,8 +67,12 @@ async function main() {
   run('npm', ['run', 'sidecar'], desktop);
   // One verified AFM for the tests, the package build and the package check; the hash is compared at the end.
   process.env.AFM_DESKTOP_BINARY = path.join(desktop, 'dist', 'sidecars', 'darwin-' + process.arch, 'afm');
-  for (const command of ['check', 'test', 'perf', 'build', 'check:package', 'smoke:mac']) run('npm', ['run', command], desktop);
-  console.log('Ready: ' + path.join(desktop, 'dist', 'AFM Desktop-darwin-' + process.arch, 'AFM Desktop.app'));
+  for (const command of ['check', 'build']) run('npm', ['run', command], desktop);
+  const bundle = path.join(desktop, 'dist', 'AFM Desktop-darwin-' + process.arch, 'AFM Desktop.app');
+  console.log('Built ' + bundle + '. If macOS asks, approve this bundle. Keep it for the remaining checks.');
+  process.env.AFM_DESKTOP_BINARY = path.join(bundle, 'Contents', 'Resources', 'afm');
+  for (const command of ['test', 'perf', 'check:package', 'smoke:mac']) run('npm', ['run', command], desktop);
+  console.log('Ready: ' + bundle);
 }
 
 main().catch(error => { console.error(error.message); process.exitCode = 1; });

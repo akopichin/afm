@@ -25,10 +25,28 @@ class DashboardPages extends Map {
     }
     return this;
   }
-  drop(key){this.get(key)?.remove();this.delete(key)}
+  drop(key){
+    const frame=this.get(key);
+    if(frame?.dataset.runKey)nativeAFM.dropDashboard(frame.dataset.runKey).catch(showNativeError);
+    frame?.remove();this.delete(key);
+  }
   retain(live){for(const key of [...this.keys()])if(!live.has(key))this.drop(key)}
 }
 const dashboards = new DashboardPages();
+function dashboardMessage(frame, message) {
+  if (!frame) return;
+  if (frame.dataset.runKey) nativeAFM.dashboardCommand(frame.dataset.runKey, message).catch(showNativeError);
+  else frame.contentWindow?.postMessage(message, '*');
+}
+function onDashboardMessage(callback) {
+  window.addEventListener('message', event => {
+    if (!event.source) return;
+    const frame = [...dashboards.values()].find(item => item.contentWindow === event.source);
+    if (frame) callback(frame, event.data);
+  });
+  document.addEventListener('native-dashboard-message', event => callback(event.detail.frame, event.detail.message));
+}
+
 // A dialog returns focus to where it came from, including a dashboard page, or to the shell if that is gone.
 const showDialog = HTMLDialogElement.prototype.showModal;
 HTMLDialogElement.prototype.showModal = function(){
@@ -106,7 +124,12 @@ function render(){
   if(!isDemo&&!r.can.open){area.innerHTML=`<p class="empty">${esc(unavailable(r))}</p>`;return}
   let frame=dashboards.touch(r.id);
   if(!frame){
-    frame=document.createElement('iframe');
+    frame=document.createElement(isDemo ? 'iframe' : 'div');
+    if (!isDemo) {
+      frame.dataset.runKey=r.key;
+      frame.tabIndex=0;
+      frame.addEventListener('focus',()=>dashboardMessage(frame,'focus'));
+    }
     stage.append(frame);
     dashboards.set(r.id,frame);
   }
@@ -115,8 +138,10 @@ function render(){
     if(!frame.dataset.requested){
       frame.dataset.requested='yes';
       frame.title=r.flow+' dashboard';
-      frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms');
-      window.nativeAFM.dashboard(r.rawId,r.instance).then(url=>{if(frame.getAttribute('src')!==url)frame.src=url}).catch(error=>{
+      window.nativeAFM.dashboard(r.rawId,r.instance).then(() => {
+        if (!frame.isConnected) return nativeAFM.dropDashboard(r.key);
+        frame.dataset.ready='yes';
+      }).catch(error=>{
         delete frame.dataset.requested;showNativeError(error);
       });
     }
@@ -150,11 +175,11 @@ $('quick').onclick=showPicker;
 $('home').onclick=()=>{location.hash=''};
 document.querySelector('kbd').textContent=/Mac/i.test(navigator.platform)?'⌘ K':'Ctrl K';
 document.addEventListener('keydown',e=>{if(!e.repeat&&!e.isComposing&&primary(e)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='k'){e.preventDefault();if($('picker').open)$('picker').close();else showPicker()}});
-window.addEventListener('message',e=>{
+onDashboardMessage((frame,message)=>{
   const {p,r}=selection();
-  if(!r||e.source!==dashboards.get(r.id)?.contentWindow)return;
-  if(e.data==='switch-project')showPicker();
-  if(e.data==='new-run')openLauncher(p);
+  if(!r||frame!==dashboards.get(r.id)||frame.hidden)return;
+  if(message==='switch-project')showPicker();
+  if(message==='new-run')openLauncher(p);
 
 });
 document.addEventListener('click',e=>{

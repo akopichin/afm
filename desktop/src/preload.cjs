@@ -1,5 +1,9 @@
 const {contextBridge,ipcRenderer}=require('electron');
 if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
+  dashboardLayout: (key,bounds) => ipcRenderer.invoke('dashboard:layout',key,bounds),
+  dashboardCommand: (key,message) => ipcRenderer.invoke('dashboard:command',key,message),
+  dropDashboard: key => ipcRenderer.invoke('dashboard:drop',key),
+  onDashboardEvent: callback => ipcRenderer.on('dashboard:event',(_event,key,message)=>callback(key,message)),
   focusLive:stage=>ipcRenderer.invoke('live:focus',stage),
   liveLayout:(bounds,stage)=>ipcRenderer.invoke('live:layout',bounds,stage),
   onLiveShortcut:callback=>ipcRenderer.on('live:shortcut',(_event,action)=>callback(action)),

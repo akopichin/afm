@@ -315,7 +315,12 @@ async function openNativeProject(summary){
   if(!summary)return;
   $('open-project').close();
   await refreshNative();
-  const project=projects.find(item=>item.id===summary.id);
+  let project=projects.find(item=>item.id===summary.id);
+  if(!project){
+    // A poll started before registration can finish with the previous project list.
+    await refreshNative();
+    project=projects.find(item=>item.id===summary.id);
+  }
   if(project)openProject(project);
 }
 $('browse-project').onclick=async()=>{

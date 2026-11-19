@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { Desktop } from './desktop.js';
 import { LiveView } from './live-view.js';
 import { afmBinary } from './binary.js';
+import { DashboardViews } from './dashboard-views.js';
 import { Workspace } from './workspace.js';
 import { DashboardOrigins, allowRequest } from './protocol.js';
 import { Assistant } from './assistant/assistant.js';
@@ -20,6 +21,7 @@ const root = app.getAppPath();
 // Files excluded from the asar archive live next to it.
 const unpacked = file => file.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 let window;
+let dashboardViews;
 // Stage browsers: runs started by the host Desktop starts open their browser stage inside the app.
 const stageBrowsers = new StageBrowsers({
   home, inspect: createInspector(), product: 'Chrome/' + process.versions.chrome,
@@ -103,9 +105,18 @@ handle('runs:project', id => desktop.runs.forProject(id));
 handle('runs:open', async (id,instanceId,external) => {
   const origin=await desktop.runs.open(id,instanceId);
   if (external) await shell.openExternal(origin);
-  else origins.add(origin, `${instanceId}:${id}`);
+  else {
+    origins.add(origin, `${instanceId}:${id}`);
+    await dashboardViews.open(`${instanceId}:${id}`, origin);
+  }
   return origin;
 });
+handle('dashboard:layout', (key, bounds) => {
+  if (bounds && !['x','y','width','height'].every(k => Number.isSafeInteger(bounds[k]) && bounds[k] >= 0)) throw Error('Invalid dashboard bounds.');
+  dashboardViews.place(key, bounds);
+});
+handle('dashboard:command', (key, message) => dashboardViews.command(key, message));
+handle('dashboard:drop', key => dashboardViews.drop(key));
 handle('launch:preview', request => desktop.runs.preview(request));
 handle('runs:start', async request => {
   // The first renderer sent a folder and a worktree name; accept it by registering the folder as a project.
@@ -156,6 +167,7 @@ workspace.onChange(pushWorkspace);
 function openWindow(){
   window=new BrowserWindow({width:1350,height:870,minWidth:480,minHeight:420,backgroundColor:'#0b111b',
     webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,preload:path.join(root,'src/preload.cjs')}});
+  dashboardViews = new DashboardViews(window, path.join(root, 'src/dashboard-keys.cjs'));
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',event=>event.preventDefault());
   function guard(event){
@@ -164,7 +176,7 @@ function openWindow(){
   }
   window.webContents.on('will-frame-navigate',guard);
   window.webContents.on('will-redirect',guard);
-  window.on('close',()=>{sampleView?.close();sampleView=null;stageBrowsers.place(null,null)});
+  window.on('close',()=>{dashboardViews.close();sampleView?.close();sampleView=null;stageBrowsers.place(null,null)});
   window.on('closed',()=>{window=null;workspace.setVisible(false)});
   // The sample app never talks to the real host.
   const watch=visible=>{if(!demo)workspace.setVisible(visible)};
@@ -177,10 +189,6 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, reply) => reply(false));
   session.defaultSession.webRequest.onBeforeRequest((details, reply) =>
     reply({ cancel: !allowRequest(details.url, { appRoot: path.resolve(root), origins, allowGitHub: demo }) }));
-  session.defaultSession.registerPreloadScript({
-    type: 'frame', filePath: path.join(root, 'src/dashboard-keys.cjs'),
-    matches: ['http://127.0.0.1/*', 'http://localhost/*']
-  });
   await openWindow();
   startStageBrowsers();
   if (process.argv.includes('--desktop-launch-check')) {
@@ -191,6 +199,21 @@ app.whenReady().then(async () => {
       return document.activeElement.id === 'chat-input' && Array.isArray(await window.nativeAFM.runs());
     })()`);
     if (!ready) throw Error('Packaged Desktop failed its first-run check.');
+    const probe = app.commandLine.getSwitchValue('desktop-check-run');
+    if (probe) {
+      const deadline = Date.now() + 12000;
+      let rendered = false;
+      while (!rendered && Date.now() < deadline) {
+        if (!dashboardViews.active) await window.webContents.executeJavaScript(`(() => {
+          const project = projects.find(p => p.runs.some(r => r.rawId === ${JSON.stringify(probe)}));
+          if (project) openProject(project, project.runs.find(r => r.rawId === ${JSON.stringify(probe)}));
+        })()`);
+        const page = dashboardViews.pages.get(dashboardViews.active);
+        if (page) rendered = await page.view.webContents.executeJavaScript("!!document.querySelector('[data-stage-id=visible-stage] .stage-row')");
+        if (!rendered) await new Promise(resolve => setTimeout(resolve, 120));
+      }
+      if (!rendered) throw Error('The real AFM stage did not render in the packaged dashboard.');
+    }
     console.log('AFM Desktop window and host ready');
     app.quit();
   }

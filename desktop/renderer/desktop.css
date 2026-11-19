@@ -31,7 +31,7 @@ dialog {margin:auto;background:var(--surface-raised);color:var(--text-primary);b
 
 body:has(#dashboard-host:not([hidden])) #screen {flex:none}
 #dashboard-host {flex:1;min-height:0}
-#dashboard-host iframe {display:block;width:100%;height:100%;border:0}
+#dashboard-host iframe,#dashboard-host [data-run-key] {display:block;width:100%;height:100%;border:0}
 #dashboard-host [hidden] {display:none}
 
 .app-body {display:flex;min-height:0;flex:1;position:relative}

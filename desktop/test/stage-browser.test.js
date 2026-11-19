@@ -1,4 +1,6 @@
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
+import { electronBackend } from '../src/stage-browser/electron-page.js';
 import assert from 'node:assert/strict';
 import { stat, readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -11,6 +13,30 @@ import { stageURL } from '../src/stage-browser/cdp-router.js';
 import { pipeFramer } from '../src/stage-browser/wire.js';
 import { Host } from '../src/host.js';
 import { Prefs } from '../src/prefs.js';
+
+test('initial stage page exposes a parseable URL before it is announced to the MCP', async () => {
+  const session = Object.assign(new EventEmitter(), {
+    setPermissionRequestHandler() {}, webRequest: { onBeforeRequest() {} }, async clearStorageData() {},
+  });
+  class View {
+    constructor() {
+      let url = '';
+      this.webContents = Object.assign(new EventEmitter(), {
+        debugger: Object.assign(new EventEmitter(), { attach() {}, detach() {} }),
+        setWindowOpenHandler() {}, isDestroyed: () => false, close() {},
+        async loadURL(value) { url = value; }, getURL: () => url, getTitle: () => '',
+      });
+    }
+    setBounds() {}
+    setVisible() {}
+  }
+  const backend = electronBackend({ electron: { session: { fromPartition: () => session }, WebContentsView: View },
+    window: () => null });
+  try {
+    const page = await backend.createPage('about:blank');
+    assert.equal(new URL(page.info().url).href, 'about:blank');
+  } finally { backend.dispose(); }
+});
 
 // Attaches like chrome-devtools-mcp (puppeteer): discover targets, auto-attach, then drive the page.
 async function attach(client) {

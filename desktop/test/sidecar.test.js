@@ -23,7 +23,7 @@ async function file(t, bytes) {
 test('the bundled AFM must match the target OS and CPU and carry the stage browser hook', async t => {
   const mac = await file(t, header('macho', 'arm64', ` ${CAPABILITY} `));
   assert.deepEqual(await executableFormat(mac), { platform: 'darwin', arch: 'arm64' });
-  assert.deepEqual(await verifySidecar(mac, { platform: 'darwin', arch: 'arm64' }), { platform: 'darwin', arch: 'arm64', version: null }, 'not run when it cannot run here');
+  assert.deepEqual(await verifySidecar(mac, { platform: 'darwin', arch: 'arm64', checkVersion: false }), { platform: 'darwin', arch: 'arm64', version: null }, 'inspect the package before macOS grants permission to run it');
   const linux = await file(t, header('elf', 'x64', CAPABILITY));
   await assert.rejects(verifySidecar(linux, { platform: 'darwin', arch: 'arm64' }), /linux\/x64, not darwin\/arm64/, 'a Linux binary never goes into the Mac app');
   await assert.rejects(verifySidecar(mac, { platform: 'darwin', arch: 'x64' }), /darwin\/arm64, not darwin\/x64/);
@@ -34,7 +34,7 @@ test('the bundled AFM must match the target OS and CPU and carry the stage brows
 });
 
 test('a branch build of this machine is accepted, and an AFM from PATH without the hook is rejected', async t => {
-  const staged = path.resolve('dist', 'sidecars', `${process.platform}-${process.arch}`, 'afm');
+  const staged = process.env.AFM_DESKTOP_BINARY || path.resolve('dist', 'sidecars', `${process.platform}-${process.arch}`, 'afm');
   const present = await access(staged).then(() => true, () => false);
   if (!present) return t.skip('no staged sidecar for this machine');
   assert.match((await verifySidecar(staged)).version, /\d+\.\d+/);

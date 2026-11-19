@@ -14,4 +14,4 @@ try { version = execFileSync('git', ['describe', '--tags', '--abbrev=0'], { cwd:
 // GOWORK=off builds against the pinned modules, as a clean checkout does.
 execFileSync('go', ['build', '-trimpath', '-ldflags', `-X main.version=${version}-desktop.${revision}`, '-o', output, './cmd/afm'],
   { cwd: repository, stdio: 'inherit', env: { ...process.env, GOWORK: process.env.GOWORK ?? 'off', CGO_ENABLED: '0' } });
-console.log(output, JSON.stringify(await verifySidecar(output)));
+console.log(output, JSON.stringify(await verifySidecar(output, { checkVersion: false })));

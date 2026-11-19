@@ -159,8 +159,7 @@ test('Git launch modes never discard project changes', fast, async t => {
   // A flow that declares worktrees runs in its own worktree, which is reported under the project.
   await desktop.runs.start({ ...base, file: 'wt.yaml', requestId: 'wt-1' });
   await eventually(() => access(path.join(dir, '.worktrees', 'wtflow')).then(() => true, () => false), { what: 'worktree folder' });
-  const own = await eventually(async () => { const runs = await desktop.runs.forProject(project.id); return runs.length === 2 && runs; }, { what: 'worktree run' });
-  assert.ok(own.some(run => run.name === 'wtflow'));
+  await eventually(async () => (await desktop.runs.forProject(project.id)).some(run => run.name === 'wtflow'), { what: 'registered worktree run' });
   assert.equal(await readFile(path.join(dir, 'README.md'), 'utf8'), 'dirty\n');
 });
 

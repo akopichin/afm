@@ -12,7 +12,7 @@ await mkdir(path.dirname(resource), { recursive: true });
 // The AFM the tests resolve is the one that ships: the same lookup (override, staged sidecar, PATH), and it must
 // match this OS and CPU and carry the stage browser hook, or the build stops.
 const source = await afmBinary();
-try { await verifySidecar(source); } catch (error) { throw Error(error.message + ' Run npm run sidecar to build the AFM of this branch.'); }
+try { await verifySidecar(source, { checkVersion: false }); } catch (error) { throw Error(error.message + ' Run npm run sidecar to build the AFM of this branch.'); }
 console.log('Bundling AFM from', source);
 await copyFile(source, resource);
 await chmod(resource, 0o755);

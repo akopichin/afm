@@ -1,39 +1,44 @@
 'use strict';
 window.addEventListener('DOMContentLoaded', () => {
-  if(parent!==window){
+  const ipc = parent === window && typeof require === 'function' ? require('electron').ipcRenderer : null;
+  if (!ipc && parent === window) return;
+  const send = message => ipc ? ipc.send('dashboard:event', message) : parent.postMessage(message, '*');
+  {
     let focus=false, ready=false;
     function sync(){
       const next=!!document.querySelector('.dashboard-body--feed-focus');
-      if(next!==focus){focus=next;parent.postMessage({type:'stage-focus',active:focus},'*')}
-      if(!ready&&document.querySelector('.stage-row')){ready=true;parent.postMessage('stage-ready','*')}
+      if(next!==focus){focus=next;send({type:'stage-focus',active:focus})}
+      if(!ready&&document.querySelector('.stage-row')){ready=true;send('stage-ready')}
     }
     const root=document.getElementById('root');
     if(root)new MutationObserver(sync).observe(root,{attributes:true,attributeFilter:['class'],childList:true,subtree:true});
-    window.addEventListener('message',e=>{
-      if(e.source!==parent)return;
-      if(e.data==='toggle-stage-focus'||(e.data==='exit-stage-focus'&&focus))document.querySelector('.feed-focus-toggle')?.click();
-      if(e.data?.type==='open-stage'&&ready){
-        const row=document.querySelector('[data-stage-id="'+CSS.escape(e.data.stage)+'"] .stage-row');
+    function command(data){
+      if(data==='toggle-stage-focus'||(data==='exit-stage-focus'&&focus))document.querySelector('.feed-focus-toggle')?.click();
+      if(data?.type==='open-stage'&&ready){
+        const row=document.querySelector('[data-stage-id="'+CSS.escape(data.stage)+'"] .stage-row');
         if(!row)return;
         row.click();
         requestAnimationFrame(()=>{
           document.querySelector('[data-tab-id="detail"]')?.click();
-          parent.postMessage('stage-opened','*');
+          send('stage-opened');
         });
       }
-    });
+    }
+    if (ipc) ipc.on('dashboard:command', (_event, data) => { if (data === 'ready') {ready=false;sync()} else command(data); });
+    else window.addEventListener('message', e => { if (e.source === parent) command(e.data); });
+    sync();
   }
   document.addEventListener('keydown',e=>{
-    if(e.isComposing||e.repeat||parent===window||document.querySelector('dialog[open]'))return;
+    if(e.isComposing||e.repeat||document.querySelector('dialog[open]'))return;
     if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
       const navigate={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant',KeyL:'live'}[e.code];
-      if(navigate){e.preventDefault();parent.postMessage({navigate},'*')}
+      if(navigate){e.preventDefault();send({navigate})}
       return;
     }
     // Command on a Mac, Control elsewhere; the other key keeps its text-editing meaning.
     const primary=/Mac/i.test(navigator.platform)?e.metaKey&&!e.ctrlKey:e.ctrlKey&&!e.metaKey;
     if(!primary||e.altKey)return;
     const key=e.key.toLowerCase();
-    if(e.shiftKey?key==='enter':key==='k'){e.preventDefault();parent.postMessage(key==='k'?'switch-project':'new-run','*')}
+    if(e.shiftKey?key==='enter':key==='k'){e.preventDefault();send(key==='k'?'switch-project':'new-run')}
   });
 });

@@ -87,7 +87,7 @@ When a stage of a run that Desktop's host started uses the managed browser (`afm
 
 Covered headlessly by `test/stage-browser.test.js` (the real wrapper and companion started the way AFM starts Chrome, a fake page backend, real unix socket) and `test/stage-browser-ui.test.js`: page creation on the first request, commands and events on the right page, navigation and closure, refusals, two stages at once, reconnect, release on stage end, grace expiry, `Browser.close` and shutdown.
 
-Not verified here: the real Chromium page, the DOM shared with a real agent, drawing and focus of the view and the packaged launch of the companion with `ELECTRON_RUN_AS_NODE` from `app.asar`. These are the native Mac checks: run a flow whose stage uses `afm_chrome`, open its Live tab, change the DOM from the agent and see it, switch to the dashboard and back, and finish the stage.
+A Linux arm64 check under Xvfb exercised a real AFM run and packaged Electron with a local test provider. Through the packaged chrome-devtools-mcp, the stage listed the first page, navigated and changed its DOM. The project’s sibling Live tab displayed the same changed DOM. The corresponding macOS check still needs manual approval for the bundled AFM process.
 
 ## Checks and packaging
 
@@ -103,8 +103,12 @@ npm run build && npm run check:package
 
 `npm run perf` runs two headless workloads. `scripts/perf.js` reconciles 100 projects and 1,000 runs in the renderer. `scripts/perf-runtime.js` drives the main process: idle polling with identical results, a burst of 200 attention notices (at most six run reads in flight, stable order), 100 project switches (no leaked subscribers, no polling while hidden) and a stream of 2,500 provider deltas (batched into a few IPC messages every 40 ms). Native cold start, keyboard latency and process-tree RSS are still pending a Mac measurement.
 
-For the Docker check, run `./scripts/docker-check.sh` in the desktop directory. It copies just the inputs into a disposable container and installs Linux dependencies there. It runs JS checks, keyboard tests, an actual temporary AFM host/launch/dashboard/cancel integration, the inventory benchmark, and native-to-container packaging. The container exits after verifying the artifact. The Mac build is generated on the Mac. Finder startup, native focus, accessibility, compositor behavior and end-to-end stage browsing need native verification.
+For the Docker check, run `./scripts/docker-check.sh` in the desktop directory. It cross-compiles the Linux AFM sidecar on the host using the checkout’s pinned Go modules, copies the inputs into a disposable container and installs Linux dependencies there. It runs JS checks, keyboard tests, an actual temporary AFM host/launch/dashboard/cancel integration, the inventory benchmark, and native-to-container packaging. The container exits after verifying the artifact. The Mac build is generated on the Mac. Finder startup, native focus, accessibility, compositor behavior and end-to-end stage browsing need native verification.
 
-The Mac launcher finishes with `npm run smoke:mac`. It opens the packaged production window in a temporary profile, checks first-run setup, assistant focus and communication with the bundled AFM host, then closes it. Successful package inspection alone does not pass this gate.
+Production run dashboards open in sandboxed top-level Electron views. Each view connects to the verified origin for its run and respects the AFM dashboard’s framing policy.
+
+The Mac launcher finishes with `npm run smoke:mac`. It opens the packaged production window in a temporary profile, checks first-run setup, assistant focus and a real stage row served by the bundled AFM host, then closes the window and cancels the temporary run. Successful package inspection alone does not pass this gate.
 
 On the development Mac, the first launch attempt was terminated during signature assessment. After retrying the packaged app, both Finder launch and the isolated production window check passed. The local build uses an ad-hoc signature. Set AFM_DESKTOP_SIGN_IDENTITY to use an available signing identity when building on a Mac that requires one.
+
+On a Mac that requires manual approval, the overnight launcher builds the complete app before starting its executable checks. Open the reported bundle and approve the macOS request. If a check was interrupted, keep that build and rerun `npm test && npm run perf && npm run check:package && npm run smoke:mac` from the desktop package directory.

@@ -44,6 +44,10 @@ document.addEventListener('click',event=>{
   }
 });
 if(!isDemo){
+  nativeAFM.onDashboardEvent((key,message)=>{
+    const frame=[...dashboards.values()].find(page=>page.dataset.runKey===key);
+    if(frame)document.dispatchEvent(new CustomEvent('native-dashboard-message',{detail:{frame,message}}));
+  });
   const unsubscribe=nativeAFM.onWorkspace(applyWorkspace);
   addEventListener('pagehide',unsubscribe);
   nativeAFM.workspace().then(applyWorkspace).catch(showNativeError);
@@ -53,16 +57,36 @@ if(!isDemo){
 }
 // Both modes place a native view over the Live tab. A stage browser names its view; the demo has one sample.
 {
-  let tab, lastBounds, lastStage;
+  let tab, lastBounds, lastStage, lastDashboard, dashboardKey;
+  function positionDashboard(overlaysClear){
+    if(isDemo)return;
+    const host=$('dashboard-host');
+    const page=host.hidden ? null : host.querySelector('[data-ready]:not([hidden])');
+    const key=page?.dataset.runKey;
+    const box=page && overlaysClear ? host.getBoundingClientRect() : null;
+    const bounds=box ? {x:Math.max(0,Math.round(box.x)),y:Math.max(0,Math.round(box.y)),width:Math.round(box.width),height:Math.round(box.height)} : null;
+    const signature=JSON.stringify([key,bounds]);
+    if(signature===lastDashboard)return;
+    lastDashboard=signature;
+    const changed=dashboardKey!==(bounds?key:null);
+    dashboardKey=bounds?key:null;
+    nativeAFM.dashboardLayout(dashboardKey,bounds).then(()=>{
+      if(changed && bounds && dashboardKey===key){
+        dashboardMessage(page,'ready');
+        if(document.activeElement===page)dashboardMessage(page,'focus');
+      }
+    }).catch(showNativeError);
+  }
   function layout(){
     const next=$('native-live-tab');
     if(next!==tab){
       if(tab)resizer.unobserve(tab);
       tab=next;if(tab)resizer.observe(tab);
     }
-    const visible=tab && !document.querySelector('dialog[open]') && $('notice-list').hidden && !document.body.classList.contains('sizing-assistant')
+    const overlaysClear=!document.querySelector('dialog[open]') && $('notice-list').hidden && !document.body.classList.contains('sizing-assistant')
       && !(innerWidth<=800&&!$('assistant').hidden);
-    const rect=visible && tab.getBoundingClientRect();
+    positionDashboard(overlaysClear);
+    const rect=tab && overlaysClear && tab.getBoundingClientRect();
     const bounds=rect?{x:Math.round(rect.x),y:Math.round(rect.y),width:Math.round(rect.width),height:Math.round(rect.height)}:null;
     const stage=tab?.dataset.stageBrowser;
     const signature=JSON.stringify([bounds,stage]);
@@ -75,7 +99,8 @@ if(!isDemo){
     nativeAFM.liveLayout(bounds,target).catch(showNativeError);
   }
   const resizer=new ResizeObserver(layout);
-  new MutationObserver(layout).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['open','hidden']});
+  if(!isDemo)resizer.observe($('dashboard-host'));
+  new MutationObserver(layout).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['open','hidden','data-ready']});
   // A native view ignores pointer-events: none, so it steps aside while the assistant grip is dragged.
   new MutationObserver(layout).observe(document.body,{attributes:true,attributeFilter:['class']});
   nativeAFM.onLiveShortcut(action=>{

@@ -24,14 +24,14 @@ export async function executableFormat(file) {
 
 // Refuses an executable that is for another OS or CPU, or that lacks the stage browser hook.
 // Runs it for its version only when it can run here. Returns what was verified.
-export async function verifySidecar(file, { platform = process.platform, arch = process.arch } = {}) {
+export async function verifySidecar(file, { platform = process.platform, arch = process.arch, checkVersion = true } = {}) {
   const format = await executableFormat(file);
   if (!format) throw Error(`${file} is not a native executable.`);
   if (format.platform !== platform || (format.arch && format.arch !== arch))
     throw Error(`${file} is built for ${format.platform}/${format.arch ?? '?'}, not ${platform}/${arch}.`);
   if (!(await readFile(file)).includes(CAPABILITY))
     throw Error(`${file} does not support ${CAPABILITY}, so the stage browser would not reach Desktop. Build AFM from this branch (npm run sidecar).`);
-  const runnable = platform === process.platform && arch === process.arch;
+  const runnable = checkVersion && platform === process.platform && arch === process.arch;
   const version = runnable ? execFileSync(file, ['--version'], { encoding: 'utf8' }).trim() : null;
   return { platform, arch, version };
 }

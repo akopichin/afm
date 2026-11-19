@@ -108,6 +108,9 @@ export function electronBackend({ electron, window, shortcut, blocked = () => []
         if (action) { event.preventDefault(); window()?.webContents.focus(); shortcut(action); }
       });
       attach(page);
+      // A fresh WebContentsView has an empty URL, which the pinned MCP excludes from its page list.
+      try { await view.webContents.loadURL('about:blank'); }
+      catch (error) { page.close(); throw error; }
       if (url !== 'about:blank') view.webContents.loadURL(url).catch(() => {});
       return page;
     },

@@ -241,7 +241,7 @@ test('a stage page may open web pages but never an AFM server', () => {
 
 test('the Electron stage session applies the AFM server block to every request', async () => {
   let policy;
-  const contents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, isDestroyed: () => false, close() {}, getURL: () => '', getTitle: () => '',
+  const contents = Object.assign(new EventEmitter(), { async loadURL() {}, setWindowOpenHandler() {}, isDestroyed: () => false, close() {}, getURL: () => '', getTitle: () => '',
     debugger: Object.assign(new EventEmitter(), { attach() {}, detach() {}, sendCommand: async () => ({}) }) });
   class View { constructor() { this.webContents = contents; } setBounds() {} setVisible() {} }
   const session = { setPermissionRequestHandler() {}, on() {}, webRequest: { onBeforeRequest: fn => { policy = fn; } }, clearStorageData: async () => {} };
@@ -390,8 +390,8 @@ test('Alt+L from the dashboard reaches the shell, which opens the Live tab and f
   w.shell.openProject(w.shell.projects[0], w.shell.projects[0].runs[0], 'run');
   await tick(30);
   assert.equal(d.getElementById('native-live-tab'), null, 'the run tab, not Live, is open');
-  const frame = d.querySelector('#dashboard-host iframe:not([hidden])');
-  w.dispatchEvent(new w.MessageEvent('message', { source: frame.contentWindow, data: { navigate: 'live' } }));
+  const frame = d.querySelector('#dashboard-host [data-run-key]:not([hidden])');
+  native.emitDashboard(frame.dataset.runKey, {navigate: 'live'});
   await tick(150);
   assert.ok(d.getElementById('native-live-tab'), 'the Live tab was opened');
   assert.equal(focused.at(-1), 'handle-ra', 'and its native view got the keyboard');

@@ -59,6 +59,14 @@ export function fakeNative(initial) {
     workspace: async () => native.snapshot,
     refreshWorkspace: async () => native.snapshot,
     onWorkspace: callback => { native.listeners.add(callback); return () => native.listeners.delete(callback); },
+    dashboardLayout: async () => {},
+    dropDashboard: async () => {},
+    dashboardCommand: async (key, message) => {
+      native.dashboardMessages ??= new Map();
+      if (!native.dashboardMessages.has(key)) native.dashboardMessages.set(key, []);
+      native.dashboardMessages.get(key).push(message);
+    },
+    onDashboardEvent: listener => { native.emitDashboard = listener; },
     dashboard: async (id, instance, external) => {
       native.calls.dashboard++;
       try { if (external) native.opened.push([id, instance]); return `http://127.0.0.1:${4000 + (Number(String(id).replace(/\D/g, '')) || 0)}`; }

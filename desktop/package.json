@@ -11,7 +11,7 @@
   "scripts": {
     "start": "npm run prepare:assets && electron .",
     "prepare:assets": "node scripts/assets.js",
-    "test": "node --test test/*.test.js",
+    "test": "node --test --test-concurrency=3 test/*.test.js",
     "check": "node scripts/check.js",
     "sidecar": "node scripts/sidecar.js",
     "build": "npm run prepare:assets && node scripts/build.js",

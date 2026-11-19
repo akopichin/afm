@@ -15,33 +15,19 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
-// Frames the shell created, with the messages each one received.
-function watchFrames(d) {
-  const received = new Map();
-  const attach = () => d.querySelectorAll('#dashboard-host iframe').forEach(frame => {
-    if (received.has(frame)) return;
-    const list = [];
-    frame.contentWindow.addEventListener('message', event => list.push(JSON.parse(JSON.stringify(event.data))));
-    received.set(frame, list);
-  });
-  return { attach, received };
-}
-
 test('notices lead to the exact project, run and stage, in a stable queue, whichever project is open', async t => {
   const { w, d, get, key, native } = await openShell(t, twoProjects(queue));
   assert.equal(get('notice-count').textContent, '3');
   assert.equal(get('attention').hidden, false);
   assert.match(get('notice-list').textContent, /S1/);
-  const frames = watchFrames(d);
   const visit = async code => {
     key(code, code.slice(3).toLowerCase(), { altKey: true });
     await tick();
-    frames.attach();
-    const frame = d.querySelector('#dashboard-host iframe:not([hidden])');
+    const frame = d.querySelector('#dashboard-host [data-run-key]:not([hidden])');
     // The page announces itself; only then is the stage request delivered.
-    w.dispatchEvent(new w.MessageEvent('message', { source: frame.contentWindow, data: 'stage-ready' }));
+    native.emitDashboard(frame.dataset.runKey, 'stage-ready');
     await tick();
-    return { hash: decodeURIComponent(w.location.hash), delivered: frames.received.get(frame).filter(m => m.type === 'open-stage').at(-1)?.stage };
+    return { hash: decodeURIComponent(w.location.hash), delivered: native.dashboardMessages.get(frame.dataset.runKey).filter(m => m.type === 'open-stage').at(-1)?.stage };
   };
   let at = await visit('KeyJ');
   assert.deepEqual([at.hash, at.delivered], ['#a/i-ra:ra/run', 's1']);
@@ -91,24 +77,24 @@ test('dashboard pages are created lazily, bounded across 100 project switches an
   const rows = Array.from({ length: 20 }, (_, i) => runRow('r' + i));
   const snapshot = snapshotOf(rows.map((run, i) => projectRow('p' + i, [run])));
   const { w, d, native } = await openShell(t, snapshot);
-  assert.equal(d.querySelectorAll('#dashboard-host iframe').length, 0, 'nothing is opened before the user visits a run');
+  assert.equal(d.querySelectorAll('#dashboard-host [data-run-key]').length, 0, 'nothing is opened before the user visits a run');
   assert.equal(native.calls.dashboard, 0);
   for (let i = 0; i < 100; i++) {
     w.shell.openProject(w.shell.projects[(i * 7) % 20]);
     await tick(1);
   }
   await tick(20);
-  const frames = [...d.querySelectorAll('#dashboard-host iframe')];
+  const frames = [...d.querySelectorAll('#dashboard-host [data-run-key]')];
   assert.ok(frames.length <= 8, `${frames.length} pages stayed open`);
   assert.equal(frames.filter(frame => !frame.hidden).length, 1, 'exactly one page is shown');
   assert.equal(native.calls.dashboard, native.calls.settled, 'a dashboard request is still outstanding');
   assert.equal(native.listeners.size, 1, 'the page subscribed more than once');
   native.publish(snapshotOf(rows.slice(0, 3).map((run, i) => projectRow('p' + i, [run]))));
   await tick(10);
-  assert.ok(d.querySelectorAll('#dashboard-host iframe').length <= 3, 'pages of vanished runs stayed open');
+  assert.ok(d.querySelectorAll('#dashboard-host [data-run-key]').length <= 3, 'pages of vanished runs stayed open');
   native.publish(snapshotOf([]));
   await tick(10);
-  assert.equal(d.querySelectorAll('#dashboard-host iframe').length, 0);
+  assert.equal(d.querySelectorAll('#dashboard-host [data-run-key]').length, 0);
 });
 
 test('a page waiting for a person is the last one a full pool closes', async t => {
@@ -116,7 +102,7 @@ test('a page waiting for a person is the last one a full pool closes', async t =
   const waiting = notice(rows[0].key, 'ask', 1, 'question');
   const { w, d } = await openShell(t, snapshotOf(rows.map((run, i) => projectRow('p' + i, [run])), [waiting]));
   for (let i = 0; i < 12; i++) { w.shell.openProject(w.shell.projects[i]); await tick(2); }
-  const titles = [...d.querySelectorAll('#dashboard-host iframe')].map(frame => frame.title);
+  const titles = [...d.querySelectorAll('#dashboard-host [data-run-key]')].map(frame => frame.title);
   assert.ok(titles.includes('flow-r0 dashboard'), 'the run that needs a reply was closed first');
   assert.ok(titles.length <= 8);
 });
@@ -125,9 +111,9 @@ test('closing a modal returns focus to the dashboard page it came from', async t
   const { w, d, get, native } = await openShell(t, twoProjects([]));
   w.shell.openProject(w.shell.projects[0]);
   await tick();
-  const frame = d.querySelector('#dashboard-host iframe:not([hidden])');
+  const frame = d.querySelector('#dashboard-host [data-run-key]:not([hidden])');
   assert.equal(d.activeElement, frame, 'opening a run focuses its page');
-  w.dispatchEvent(new w.MessageEvent('message', { source: frame.contentWindow, data: 'switch-project' }));
+  native.emitDashboard(frame.dataset.runKey, 'switch-project');
   assert.ok(get('picker').open);
   get('picker').close();
   assert.equal(d.activeElement, frame);

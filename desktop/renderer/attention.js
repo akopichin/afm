@@ -37,14 +37,14 @@ function paintQueue(){
   $('notice-list').innerHTML=`<div class="queue-title"><strong>Notifications</strong><kbd>${altKey}J / K</kbd></div>`+items.map(({id,p,r,text,stageName})=>`<button data-notice="${esc(id)}"><span><strong>${esc(p.name)}</strong> / ${esc(r.flow)}</span><small>${esc(text)}${stageName?' · '+esc(stageName):''}</small></button>`).join('');
 }
 function closeFocus(){
-  if(focusedFrame)focusedFrame.contentWindow?.postMessage('exit-stage-focus','*');
+  dashboardMessage(focusedFrame,'exit-stage-focus');
   focusedFrame=null;
   document.body.classList.remove('desktop-focus');
 }
 function deliverStage(){
   const {r,tab}=selection();
   if(!pendingStage||pendingStage.r.id!==r?.id||tab==='live')return;
-  dashboards.get(r.id)?.contentWindow?.postMessage({type:'open-stage',stage:pendingStage.stage},'*');
+  dashboardMessage(dashboards.get(r.id),{type:'open-stage',stage:pendingStage.stage});
 }
 function jumpTo(item){
   if(!item)return;
@@ -108,7 +108,7 @@ document.addEventListener('keydown',e=>{
   if(e.target.closest('input,textarea,select,[contenteditable="true"]')||e.ctrlKey||e.metaKey||e.shiftKey)return;
   const {r,tab}=selection(),frame=dashboards.get(r?.id);
   if(frame&&!frame.hidden&&tab!=='live'&&(e.code==='KeyF'||(focusedFrame&&e.key==='Escape'))){
-    e.preventDefault();frame.contentWindow.postMessage(e.key==='Escape'?'exit-stage-focus':'toggle-stage-focus','*');
+    e.preventDefault();dashboardMessage(frame,e.key==='Escape'?'exit-stage-focus':'toggle-stage-focus');
   }
 });
 function resolveNotice(msg){
@@ -125,10 +125,7 @@ window.addEventListener('storage',e=>{
     if(selection().r?.id===msg.runId)render();
   }
 });
-window.addEventListener('message',e=>{
-  const frame=[...dashboards.values()].find(f=>f.contentWindow===e.source);
-  if(!frame)return;
-  const msg=e.data;
+onDashboardMessage((frame,msg)=>{
   if(msg?.type==='notice-resolved'&&dashboards.get(msg.runId)===frame){resolveNotice(msg);return}
   const {r,tab}=selection();
   if(!r||tab==='live'||frame!==dashboards.get(r.id)||frame.hidden)return;

@@ -32,7 +32,7 @@ function toolFailure(name, text) {
 // one otherwise. The host it starts keeps running after the app quits, because runs it manages are
 // only reachable through it; the owner file records which host is ours so controls stay honest.
 export class Host {
-  constructor(home, binary, { attempts = 35, interval = 150, env = process.env } = {}) {
+  constructor(home, binary, { attempts = process.platform === 'darwin' ? 140 : 35, interval = 150, env = process.env } = {}) {
     this.env = env;
     this.home = home;
     this.file = path.join(home, '.afm', 'serve', 'host.json');
@@ -117,7 +117,9 @@ export class Host {
       try {
         const process_ = spawn(binary, ['serve', '--port', '0'], { detached: true, stdio: ['ignore', log, log], windowsHide: true, env });
         process_.on('error', error => { child.failed = error; });
-        process_.on('exit', code => { if (code) child.failed = Error(`afm serve exited with ${code}: ${this.#logTail()}`); });
+        process_.on('exit', (code, signal) => {
+          if (signal || code) child.failed = Error(`afm serve exited with ${signal || code}: ${this.#logTail()}`);
+        });
         child.pid = this.spawnedPid = process_.pid;
         process_.unref();
         this.#recordOwner(process_.pid);
@@ -181,7 +183,7 @@ export class Host {
     await client.close().catch(() => {});
     process.kill(pid, 'SIGTERM');
     for (let i = 0; i < 100; i++) {
-      if (!(await this.#hostInfo()) || !alive(pid)) break;
+      if (!alive(pid)) break;
       await delay(50);
     }
     if (alive(pid)) throw new HostError('restart_failed', 'The AFM host did not stop.');
