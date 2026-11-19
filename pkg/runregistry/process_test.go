@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"syscall"
 	"testing"
 )
 
@@ -38,7 +39,11 @@ func TestProcessStartMissingProcess(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ProcessStart(cmd.Process.Pid); err == nil || errors.Is(err, ErrUnsupported) {
-		t.Errorf("ProcessStart(exited pid) error = %v, want a lookup failure", err)
+	_, err := ProcessStart(cmd.Process.Pid)
+	if errors.Is(err, ErrUnsupported) {
+		t.Skip("process start marker is not supported on this platform")
+	}
+	if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ESRCH) {
+		t.Errorf("ProcessStart(exited pid) error = %v, want confirmed absence", err)
 	}
 }

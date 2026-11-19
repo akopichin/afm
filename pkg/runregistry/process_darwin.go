@@ -12,6 +12,10 @@ import (
 func ProcessStart(pid int) (string, error) {
 	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {
+		// An empty kern.proc.pid result is EIO in SysctlKinfoProc. Confirm absence before reaping a record.
+		if err == unix.EIO && unix.Kill(pid, 0) == unix.ESRCH {
+			return "", unix.ESRCH
+		}
 		return "", err
 	}
 	if int(kp.Proc.P_pid) != pid {
