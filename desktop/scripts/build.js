@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { packager } from '@electron/packager';
-import { copyFile, chmod, mkdir } from 'node:fs/promises';
+import { copyFile, chmod, mkdir, readdir, access } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { afmBinary } from '../src/binary.js';
 import { verifySidecar } from '../src/sidecar.js';
@@ -15,10 +16,32 @@ try { await verifySidecar(source); } catch (error) { throw Error(error.message +
 console.log('Bundling AFM from', source);
 await copyFile(source, resource);
 await chmod(resource, 0o755);
+
+// Electron's zip is looked up locally first so the build needs no network: ELECTRON_ZIP_DIR, a copy kept in dist/,
+// then Electron's own download cache. A zip found in the cache is kept in dist/ for runs with another HOME.
+const electronVersion = (await import('electron/package.json', { with: { type: 'json' } })).default.version;
+const zipName = `electron-v${electronVersion}-${process.platform}-${process.arch}.zip`;
+const keptZips = path.resolve('dist', 'electron-zip');
+async function findElectronZip() {
+  const exists = file => access(file).then(() => true, () => false);
+  const dirs = [process.env.ELECTRON_ZIP_DIR, keptZips].filter(Boolean);
+  for (const dir of dirs) if (await exists(path.join(dir, zipName))) return dir;
+  const cacheRoot = process.env.ELECTRON_CACHE || path.join(os.homedir(), '.cache', 'electron');
+  for (const entry of await readdir(cacheRoot).catch(() => [])) {
+    const candidate = path.join(cacheRoot, entry, zipName);
+    if (await exists(candidate)) {
+      await mkdir(keptZips, { recursive: true });
+      await copyFile(candidate, path.join(keptZips, zipName));
+      return keptZips;
+    }
+  }
+  return undefined;
+}
+const electronZipDir = await findElectronZip();
 const identity = process.env.AFM_DESKTOP_SIGN_IDENTITY;
 const dirs = await packager({
   dir: '.', name: 'AFM Desktop', out: 'dist', overwrite: true, asar: { unpackDir: 'node_modules/chrome-devtools-mcp' },
-  appBundleId: 'dev.afm.desktop', osxSign: identity ? {identity, continueOnError: false} : undefined, extraResource: [resource],
+  appBundleId: 'dev.afm.desktop', ...(electronZipDir ? { electronZipDir } : {}), osxSign: identity ? {identity, continueOnError: false} : undefined, extraResource: [resource],
   ignore: [/^\/\.generated\/resources/, /^\/(dist|test|scripts|workflow)(\/|$)/]
 });
 if (process.platform === 'darwin') {
