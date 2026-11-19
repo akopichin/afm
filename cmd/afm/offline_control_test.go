@@ -224,17 +224,20 @@ func TestOfflineRevise_EmptyFeedback(t *testing.T) {
 	lastTransition(t, runDir, 1)
 }
 
-func TestOfflineRevise_MissingPlanChangesNothing(t *testing.T) {
+// Движок терпит отсутствие plan.md: ревизия фиксируется и фидбэк сохраняется.
+func TestOfflineRevise_MissingPlanStillRecordsFeedback(t *testing.T) {
 	chdirTemp(t)
 	runDir := makeRunState(t, "flow-20260101-120000", offlineStage, state.StatusAwaitingApproval)
 
-	_, err := runOffline(t, newReviseCmd(), "--feedback", "x", offlineStage)
-	if err == nil || !strings.HasPrefix(err.Error(), "version plan: plan.md not found: ") {
-		t.Fatalf("err = %v", err)
+	if _, err := runOffline(t, newReviseCmd(), "--feedback", "x", offlineStage); err != nil {
+		t.Fatalf("revise: %v", err)
 	}
-	lastTransition(t, runDir, 1)
-	if _, err := os.Stat(filepath.Join(runDir, offlineStage, "feedback.md")); !os.IsNotExist(err) {
-		t.Errorf("feedback.md must not be written, stat err=%v", err)
+	if tr := lastTransition(t, runDir, 2); tr.To != state.StatusRevising || tr.Reason != "x" {
+		t.Errorf("transition = %+v, want revising with reason x", tr)
+	}
+	fb, err := os.ReadFile(filepath.Join(runDir, offlineStage, "feedback.md"))
+	if err != nil || !strings.Contains(string(fb), "\nx\n") {
+		t.Errorf("feedback.md = %q, err = %v", fb, err)
 	}
 }
 

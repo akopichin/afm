@@ -3,6 +3,13 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-19
+
+### Improvement:
+
+- Add the helper trigger `pre_completion`: helpers review the stage agent's result before verify. The stage waits in the new status `awaiting_pre_completion`; a required helper that asks for changes sends the work back to the agent, limited by the new stage field `pre_completion.max_failures` (default 1). Update afm-engine to v1.2.3 and contracts to v0.4.0. See `docs/collaboration.md`.
+- Show the review round in `/api/status` stage views, the MCP `afm_run_status` summary (`pre_completion`, `pre_completion_blocked`, a pending `assistants_blocked` action with reason `pre_completion`), `afm check` and the Go SDK (`StageAwaitingPreCompletion`). The dashboard labels the status, shows the corrections used and treats only a round that needs a decision as attention. The Attach helper dialog offers **Pre-completion review**.
+
 ## 2026-11-17
 
 ### Improvement:

@@ -50,13 +50,15 @@ export function typedMentionHandles(draft: string): string[] {
   return out
 }
 
+const HELPER_WAIT_STATUSES: ReadonlySet<string> = new Set(['awaiting_assistants', 'awaiting_pre_completion'])
+
 // recipientProblem — why p cannot get a message from the human right now, or null. A stage agent waiting for
 // its helpers has finished its turn: the server would accept the message, but the agent reads it only when a
 // Revise restarts it, so the composer says so instead of letting it sit unread.
 export function recipientProblem(p: MeshParticipant, handle: string, stages: StageStatusLike[]): string | null {
   if (p.kind === 'user') return `@${handle} is you — you can't write to yourself`
   if (!p.reachable) return `@${handle} can't receive messages: ${p.unreachable_reason !== undefined && p.unreachable_reason !== '' ? p.unreachable_reason : 'unavailable'}`
-  if (p.kind === 'stage_agent' && stages.find((s) => s.id === p.stage_id)?.status === 'awaiting_assistants') {
+  if (p.kind === 'stage_agent' && HELPER_WAIT_STATUSES.has(stages.find((s) => s.id === p.stage_id)?.status ?? '')) {
     return `@${handle} has finished its turn and waits for its helpers — it reads a note only through Restart with note`
   }
   return null
@@ -158,7 +160,7 @@ export function awaitingAgentNeedsRestart({ recipients, defaultProblem, stageId,
   stageId: string
   stages: StageStatusLike[]
 }): boolean {
-  if (stages.find((s) => s.id === stageId)?.status !== 'awaiting_assistants') return false
+  if (!HELPER_WAIT_STATUSES.has(stages.find((s) => s.id === stageId)?.status ?? '')) return false
   if (recipients.length === 0) return defaultProblem !== null
   return recipients.some((r) => r.participantId === `stage:${stageId}`)
 }

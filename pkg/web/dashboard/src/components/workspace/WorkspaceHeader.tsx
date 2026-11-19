@@ -1,12 +1,12 @@
 import { type ReactElement, type ReactNode } from 'react'
-import type { Stage } from '../../types'
-import { STAGE_STATUS_LABELS } from '../../types'
+import type { Stage, StagePreCompletion } from '../../types'
+import { STAGE_STATUS_LABELS, isGateBlocked } from '../../types'
 import { QuotaCountdown } from '../stages-list/QuotaCountdown'
 import { useStageAction } from '../../hooks/use-stage-retry'
 import { continueStage, pauseStage, retryHookStage, retryStage, triggerStageButton } from '../../api/run-client'
 import type { AttentionKind } from '../../hooks/use-workspace-view'
 
-const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota'])
+const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota', 'awaiting_pre_completion'])
 
 // Кнопки из flow.yaml доставляются через Revise, поэтому нужен живой агент: running/awaiting_approval, не скрипт.
 const BUTTON_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
@@ -80,6 +80,12 @@ const PLAY_ICON = icon(<path d="m8 4 12 8-12 8Z" />)
 const EXPAND_ICON = icon(<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />)
 const COLLAPSE_ICON = icon(<path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5" />)
 
+// preCompletionDetail — "corrections N of M · decision" next to the status; the round ID stays in the tooltip.
+function preCompletionDetail(round: StagePreCompletion): string {
+  const decision = round.decision.replace(/_/g, ' ')
+  return `corrections ${round.correctionCount} of ${round.maxFailures}${decision !== '' ? ` · ${decision}` : ''}`
+}
+
 // WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + чип статуса (точка, слово,
 // «thinking» во время running) и справа действия: ответ ждут, People, ожидание (в фокусе), Retry,
 // Pause/Continue иконкой, Focus.
@@ -95,7 +101,7 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
           id="detail-status"
           className="status-badge"
           data-status={stage.status}
-          data-blocked={stage.status === 'awaiting_assistants' && stage.awaitingAssistantsBlocked === true ? 'true' : undefined}
+          data-blocked={isGateBlocked(stage) ? 'true' : undefined}
         >
           {STAGE_STATUS_LABELS[stage.status]}
           {stage.status === 'running' && connected && (
@@ -107,6 +113,9 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
             </span>
           )}
         </span>
+        {stage.status === 'awaiting_pre_completion' && stage.preCompletion !== undefined && (
+          <span className="pre-completion-detail" title={`Round ${stage.preCompletion.roundId}`}>{preCompletionDetail(stage.preCompletion)}</span>
+        )}
         {stage.status === 'awaiting_quota' && stage.quota !== undefined && <QuotaCountdown quota={stage.quota} live={statusAvailable} compact />}
         {budgetHeld && <span className="budget-held-chip">Stopped by budget</span>}
       </span>

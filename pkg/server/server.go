@@ -138,6 +138,8 @@ type StageConfig struct {
 	Artifacts []DeclaredArtifact
 	// Assistants are the helpers the stage declares in flow.yaml, in YAML order, reduced to what a reader shows.
 	Assistants []DeclaredAssistant
+	// PreCompletionMaxFailures is the stage's effective correction budget (default 1, explicit 0 allowed).
+	PreCompletionMaxFailures int
 }
 
 // DeclaredAssistant is one helper a stage declares, with Trigger and Mode already defaulted. It carries no

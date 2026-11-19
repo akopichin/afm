@@ -292,7 +292,7 @@ stages:
 	if err == nil {
 		t.Fatal("ParseFile: want error, got nil")
 	}
-	if want := `trigger must be "one_shot", "checkpoints", "on_completion", or "on_message", got "on_complete"`; !strings.Contains(err.Error(), want) {
+	if want := `trigger must be "one_shot", "checkpoints", "pre_completion", "on_completion", or "on_message", got "on_complete"`; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %q, want it to contain %q", err.Error(), want)
 	}
 }
@@ -647,5 +647,43 @@ func TestStageAssistants_SeventeenStagesWithSameLoopProfile(t *testing.T) {
 	}
 	if _, err := flow.ParseFile(writeTemp(t, doc)); err != nil {
 		t.Fatalf("ParseFile: %v", err)
+	}
+}
+
+func TestPreCompletionContract(t *testing.T) {
+	const stage = "name: test\nstages:\n  - id: build\n    agents: [auto]\n    assistants: [{profile: qa, trigger: pre_completion, mode: required}]\n"
+	for _, tc := range []struct {
+		spec  string
+		limit int
+	}{
+		{"", 1}, {"{}", 1}, {"{max_failures: 0}", 0}, {"{max_failures: 2}", 2},
+		{"{max_failures: -1}", -1}, {"{max_failures: 1.5}", -1}, {"{max_failure: 2}", -1},
+	} {
+		doc := stage
+		if tc.spec != "" {
+			doc += "    pre_completion: " + tc.spec + "\n"
+		}
+		f, err := flow.ParseFile(writeTemp(t, doc))
+		if tc.limit < 0 {
+			if err == nil {
+				t.Errorf("%s: expected validation error", tc.spec)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := yaml.Marshal(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err = flow.ParseFile(writeTemp(t, string(raw)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := f.Stages[0]
+		if s.PreCompletion.CorrectionLimit() != tc.limit || s.Assistants[0].Trigger != assistants.TriggerPreCompletion {
+			t.Fatalf("%s: incorrect round trip", tc.spec)
+		}
 	}
 }

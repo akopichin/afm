@@ -80,6 +80,20 @@ describe('AttachHelperDialog', () => {
     expect(attachSpy).toHaveBeenCalledWith('impl', expect.objectContaining({ trigger: 'on_message', mode: 'advisory' }))
   })
 
+  test('attaches a pre-completion helper and says it runs after the stage agent, before verify', async () => {
+    const attachSpy = vi.spyOn(runClient, 'attachAssistant').mockResolvedValue({ taskId: 't-4' })
+    const { onAttached } = renderDialog()
+
+    expect(screen.queryByText(/before verify/i)).toBeNull()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Trigger' }), { target: { value: 'pre_completion' } })
+    expect(screen.getByText(/after the stage agent finishes its turn, before verify/i)).toBeTruthy()
+
+    fireEvent.change(screen.getByPlaceholderText('What should this helper do?'), { target: { value: 'Review the diff' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Attach helper' }))
+    await waitFor(() => expect(onAttached).toHaveBeenCalledWith('t-4'))
+    expect(attachSpy).toHaveBeenCalledWith('impl', expect.objectContaining({ trigger: 'pre_completion' }))
+  })
+
   test('surfaces a server error without closing', async () => {
     vi.spyOn(runClient, 'attachAssistant').mockRejectedValue(new Error('invalid_status'))
     const { onAttached } = renderDialog()

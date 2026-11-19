@@ -46,6 +46,7 @@ new behavior is introduced only through deltas.
 | HLP | | [helpers-staleness](helpers-staleness/spec.md) | Turn ownership fences, discarded outcomes, late results, answer acceptance |
 | HLP | | [helpers-recovery](helpers-recovery/spec.md) | Replay of helper state, settle/resume at startup, crash points, owed passes |
 | HLP | | [helpers-admission](helpers-admission/spec.md) | Admission order, delegation limits, slots, size limits, budgets, usage-limit parks, run-open rules |
+| HLP | | [helpers-pre-completion](helpers-pre-completion/spec.md) | `pre_completion` review round in stage view, attach over HTTP, dashboard, `afm check`, MCP, SDK |
 | MESH | Agent mesh | [agent-mesh](agent-mesh/spec.md) | Collaboration policy and mode, Assistant toggle, roster, team and run agents, tokens, agent jobs |
 | MESH | | [agent-mesh-messaging](agent-mesh-messaging/spec.md) | send/reply threads, human member, inbox, turn prompts, limits, redaction |
 | MESH | | [agent-mesh-waits](agent-mesh-waits/spec.md) | Non-blocking `wait`, conditions, target checks, refusals, cycle detection, batches |
@@ -82,8 +83,10 @@ Cross-domain hot spots: helper waits live in `agent-mesh-waits` (`MESH-R36`) and
 
 ## Out of the baseline
 
-Behavior absent from the baseline commits — including any **pre-completion** helper
-stage — is not specified here and must arrive as a delta. `docs/superpowers/` plans
+Behavior absent from the baseline commits is not specified here and must arrive as a
+delta. The `pre_completion` helper trigger is specified in
+[helpers-pre-completion](helpers-pre-completion/spec.md), except HLP-R80 (review order,
+correction budget and placement), which is still unpublished. `docs/superpowers/` plans
 are not evidence of current behavior.
 
 ## Maintaining specs

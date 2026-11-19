@@ -13,7 +13,7 @@ import (
 // Нечитаемое тело не должно скрывать ошибку стадии: сначала её существование, статус и тип, потом тело.
 func TestStageCommandBrokenBodyReportsStageErrorFirst(t *testing.T) {
 	const (
-		reviseStatuses = "stage is pending, not running, awaiting_approval or awaiting_assistants"
+		reviseStatuses = "stage is pending, not running, awaiting_approval, awaiting_assistants or awaiting_pre_completion"
 		buttonStatuses = "stage is pending, not awaiting_approval or running"
 	)
 	script := StageConfig{IsScript: true}
@@ -67,7 +67,7 @@ func TestStageCommandChecksStageBeforeReadingBody(t *testing.T) {
 		from, to     state.StageStatus
 		wantResponse string
 	}{
-		{"revise", "revise", state.StatusPending, state.StatusRunning, "stage is pending, not running, awaiting_approval or awaiting_assistants"},
+		{"revise", "revise", state.StatusPending, state.StatusRunning, "stage is pending, not running, awaiting_approval, awaiting_assistants or awaiting_pre_completion"},
 		{"button", "button", state.StatusPending, state.StatusRunning, "stage is pending, not awaiting_approval or running"},
 		{"note", "note", state.StatusRunning, state.StatusDone, "stage is running, not pending"},
 	}

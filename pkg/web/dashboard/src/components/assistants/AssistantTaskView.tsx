@@ -183,6 +183,12 @@ export function AssistantTaskView({
 
       {task.trigger === 'on_message' && <OnMessageBlock task={task} />}
 
+      {task.trigger === 'pre_completion' && (
+        <div className="assistant-task-view-watch" data-trigger="pre_completion">
+          <span className="assistant-task-view-watch-trigger">Reviews before verify</span>
+        </div>
+      )}
+
       <AssistantActivityStatus
         last={latestAction(activity.entries)}
         connected={connected}
@@ -205,8 +211,10 @@ export function AssistantTaskView({
 
 // resultPassed — закрывает ли вердикт pass гейт Waive. У on_message упавший запрос не пишет task_result,
 // поэтому старый pass не считается, если после него принят или идёт новый запрос либо последний исход failed.
+// У pre_completion тот же task ID живёт между раундами: pass прошлого раунда не действует, пока задача не completed.
 function resultPassed(task: AssistantTask, result: AssistantResult | null): boolean {
   if (result?.verdict !== 'pass') return false
+  if (task.trigger === 'pre_completion') return task.status === 'completed'
   if (task.trigger !== 'on_message') return true
   const newerRequest = task.activeRequestId !== undefined || (task.queuedRequests ?? 0) > 0
   return !newerRequest && task.lastOutcome !== 'failed' && result.requestId === task.lastRequestId

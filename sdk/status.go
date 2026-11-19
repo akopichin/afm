@@ -27,7 +27,9 @@ const (
 	// or "actually stuck", rather than seeing an unrecognized raw string.
 	StageAwaitingAssistants StageStatus = "awaiting_assistants"
 	StageAwaitingPeer       StageStatus = "awaiting_peer"
-	StagePaused             StageStatus = "paused"
+	// StageAwaitingPreCompletion: required helpers review the author's result before verify.
+	StageAwaitingPreCompletion StageStatus = "awaiting_pre_completion"
+	StagePaused                StageStatus = "paused"
 )
 
 // Values of RunStatus.RunState. Finished, Failed and Interrupted are terminal.
@@ -37,6 +39,17 @@ const (
 	RunStateFailed      = "failed"
 	RunStateInterrupted = "interrupted"
 )
+
+// PreCompletionView is the pre-completion review round of a stage. Decision is reviewing, needs_decision,
+// correct, verify or fail.
+type PreCompletionView struct {
+	RoundID         string   `json:"round_id"`
+	Phase           string   `json:"phase"`
+	Decision        string   `json:"decision"`
+	CorrectionCount int      `json:"correction_count"`
+	MaxFailures     int      `json:"max_failures"`
+	TaskIDs         []string `json:"task_ids"`
+}
 
 // StageView is the dashboard's joined runtime and configuration view. It has
 // updated_at but no per-stage sequence or conditional action token.
@@ -55,6 +68,9 @@ type StageView struct {
 	ShowDialog                bool        `json:"show_dialog"`
 	Buttons                   []string    `json:"buttons,omitempty"`
 	AwaitingAssistantsBlocked bool        `json:"awaiting_assistants_blocked,omitempty"`
+	// PreCompletion is set once a review round is recorded; PreCompletionBlocked only while it waits for a person.
+	PreCompletion        *PreCompletionView `json:"pre_completion,omitempty"`
+	PreCompletionBlocked bool               `json:"pre_completion_blocked,omitempty"`
 }
 
 type Capabilities struct {

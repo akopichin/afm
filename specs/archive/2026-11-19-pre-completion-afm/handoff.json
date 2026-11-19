@@ -1,0 +1,81 @@
+{
+  "schema_version": 2,
+  "baseline_head": "55f113380964249f9f27670c76223038aefdf3a7",
+  "delta_sha256": "e37e391612e85ff68c282e74cbe50b8efc2f789c0b6eea977b61d2b6b9f49bcf",
+  "acceptance": "FAIL",
+  "decision": "override",
+  "criteria": [
+    {
+      "id": "L1",
+      "scenario": "HLP-S130",
+      "status": "PASS"
+    },
+    {
+      "id": "L2",
+      "scenario": "HLP-S131",
+      "status": "PASS"
+    },
+    {
+      "id": "L3",
+      "scenario": "HLP-S134",
+      "status": "PASS"
+    },
+    {
+      "id": "L4",
+      "scenario": "HLP-S136",
+      "status": "PASS"
+    },
+    {
+      "id": "L5",
+      "scenario": "HLP-S137",
+      "status": "PASS"
+    },
+    {
+      "id": "L6",
+      "scenario": "HLP-S138",
+      "status": "PASS"
+    },
+    {
+      "id": "L7",
+      "scenario": "HLP-S140",
+      "status": "PASS"
+    },
+    {
+      "id": "L8",
+      "scenario": "HLP-S141",
+      "status": "PASS"
+    },
+    {
+      "id": "L9",
+      "scenario": "HLP-S142",
+      "status": "PASS"
+    },
+    {
+      "id": "L10",
+      "scenario": "HLP-S132",
+      "status": "FAIL"
+    },
+    {
+      "id": "L11",
+      "scenario": "HLP-S135",
+      "status": "PASS"
+    },
+    {
+      "id": "L12",
+      "scenario": "HLP-S139",
+      "status": "PASS"
+    },
+    {
+      "id": "L13",
+      "scenario": "HLP-S133",
+      "status": "PASS"
+    }
+  ],
+  "non_live": [
+    "HLP-S143",
+    "HLP-S144"
+  ],
+  "deferred_requirements": [
+    "HLP-R80"
+  ]
+}

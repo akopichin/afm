@@ -70,6 +70,14 @@ fails with `not_allowed`.
 | `afm_stage_pause`, `afm_stage_continue` | Pause or continue a stage. |
 | `afm_budget_adjust`, `afm_budget_resume` | Set or remove the limit of a [budget](budgets.md) scope, or continue a scope held by its limit. |
 
+A stage with a [pre-completion review](collaboration.md#pre-completion-review) round
+reports `pre_completion` in its `afm_run_status` summary (`round_id`, `phase`,
+`decision`, `correction_count`, `max_failures`, `task_ids`), plus
+`pre_completion_blocked: true` while the stage is `awaiting_pre_completion` with the
+decision `needs_decision`. Exactly such a stage has a pending action of type
+`assistants_blocked` with `reason: "pre_completion"`; a round that is still
+`reviewing` is not a pending action.
+
 Every control call takes the `run_id` from `afm_run_status`. A call with the id of
 another run (for example after a [repeat](flow-reference.md#repeat-run-successful-flows-again)
 cycle) fails with `run_changed` and changes nothing. A successful control call

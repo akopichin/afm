@@ -82,7 +82,7 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 }
 
 // REVISE_STATUSES — the statuses POST /api/stages/{id}/revise accepts (pkg/server handleRevise).
-const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_approval', 'awaiting_assistants'])
+const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_approval', 'awaiting_assistants', 'awaiting_pre_completion'])
 // NO_DELIVERIES — no delivery receipts (the stage Feed's mesh UI is off).
 const NO_DELIVERIES: ReadonlySet<string> = new Set()
 // NO_PARTICIPANTS — no locally added run agents in the current run.

@@ -94,3 +94,18 @@ Compatibility rules:
 
 Publish this revision (suggested tag `contracts/v0.2.0`) before an engine version that
 uses it.
+
+## Pre-completion review (v0.4.0)
+
+A stage helper can declare `trigger: pre_completion`. The engine schedules
+this review after the author's execution passes its artifact checks and before
+verify. A required helper returns its usual result envelope with an explicit
+`needs_changes` verdict and free-form feedback in `summary` or
+`suggested_change`. The stage-level `pre_completion.max_failures` sets the
+number of author corrections. Omitting it allows one correction. Zero makes
+the first rejection final.
+
+Embedding engines can expose `state.StatusAwaitingPreCompletion` and the
+current round in `StageState.PreCompletion`. Its task IDs refer to the helper
+results. The engine owns scheduling, feedback delivery and replay of the
+recorded decision.

@@ -3,13 +3,14 @@ import type { AttachHelperRequest } from '../api/run-client'
 type HelperTrigger = AttachHelperRequest['trigger']
 
 // Порядок опций диалога Attach; подписи общие для диалога и tooltip орбиты.
-export const HELPER_TRIGGERS: readonly HelperTrigger[] = ['one_shot', 'on_completion', 'checkpoints', 'on_message']
+export const HELPER_TRIGGERS: readonly HelperTrigger[] = ['one_shot', 'on_completion', 'checkpoints', 'on_message', 'pre_completion']
 
 export const HELPER_TRIGGER_LABELS: Record<HelperTrigger, string> = {
   one_shot: 'One shot',
   on_completion: 'On stage completion',
   checkpoints: 'At checkpoints',
   on_message: 'On message',
+  pre_completion: 'Pre-completion review',
 }
 
 // helperTriggerLabel: неизвестный trigger остаётся текстом сервера; loopEvery добавляет период цикла.

@@ -69,6 +69,7 @@ function statusTone(status: string): FeedTone {
     case 'retrying':
     case 'paused':
     case 'awaiting_quota':
+    case 'awaiting_pre_completion':
       return 'warning'
     case 'awaiting_approval':
     case 'awaiting_user_input':
@@ -128,6 +129,23 @@ type Mapped = {
   budgetEditable?: boolean
   // once — событие-эпизод: повтор того же dedupeId (история и WS отдали одну копию) не получает второй строки.
   once?: boolean
+}
+
+// preCompletionDecisionRow — the tone and text of a round's decision; an unknown decision stays readable.
+function preCompletionDecisionRow(decision: string, obj: Record<string, unknown>): Pick<Mapped, 'tone' | 'text'> {
+  const reason = str(obj.reason)
+  switch (decision) {
+    case 'verify':
+      return { tone: 'success', text: 'Pre-completion review accepted, verify next' }
+    case 'correct':
+      return { tone: 'warning', text: `Pre-completion review requested changes · correction ${str(obj.correction_count)} sent to the stage agent · ${str(obj.feedback)}` }
+    case 'fail':
+      return { tone: 'danger', text: `Pre-completion review: correction budget spent · stage failed${reason !== '' ? `: ${reason}` : ''}` }
+    case 'needs_decision':
+      return { tone: 'warning', text: `Pre-completion review needs your decision${reason !== '' ? `: ${reason}` : ''}` }
+    default:
+      return { tone: 'neutral', text: `Pre-completion review decision: ${decision}` }
+  }
 }
 
 // mapEvent — единственная точка соответствия «тип события → презентация».
@@ -299,6 +317,17 @@ function mapEvent(event: AfmEvent, unknownPrefix: string | undefined, budgetName
         mono: false,
         dedupeId: `helper:${taskId}:repaired`,
       }
+    }
+    case 'pre_completion_round': {
+      const round = str(obj.round)
+      const helpers = Array.isArray(obj.tasks) ? obj.tasks.length : 0
+      const text = `Pre-completion review ${round} started · ${helpers} ${helpers === 1 ? 'helper' : 'helpers'}`
+      return { actor: 'system', tone: 'neutral', kind: 'status', text, mono: false, dedupeId: `pre-completion:${round}:opened`, once: true }
+    }
+    case 'pre_completion_decision': {
+      const round = str(obj.round)
+      const decision = str(obj.decision)
+      return { ...preCompletionDecisionRow(decision, obj), actor: 'system', kind: 'status', mono: false, dedupeId: `pre-completion:${round}:${decision}`, once: true }
     }
     case 'helper_tree_modified': {
       // The working tree changed while a helper's turn ran — observational only. Anybody may have changed it

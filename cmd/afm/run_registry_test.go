@@ -101,3 +101,20 @@ func TestDashboardStageConfigCarriesDeclaredArtifacts(t *testing.T) {
 		t.Fatalf("Artifacts = %+v, want %+v", cfg["a"].Artifacts, want)
 	}
 }
+
+func TestDashboardStageConfigPreCompletionBudget(t *testing.T) {
+	zero, three := 0, 3
+	cfg := dashboardStageConfig([]flow.Stage{
+		{ID: "default"},
+		{ID: "zero", PreCompletion: &flow.PreCompletionSpec{MaxFailures: &zero}},
+		{ID: "three", PreCompletion: &flow.PreCompletionSpec{MaxFailures: &three}},
+	}, profileTitles(nil))
+	got := map[string]int{}
+	for id, c := range cfg {
+		got[id] = c.PreCompletionMaxFailures
+	}
+	want := map[string]int{"default": 1, "zero": 0, "three": 3}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("budgets = %v, want %v", got, want)
+	}
+}

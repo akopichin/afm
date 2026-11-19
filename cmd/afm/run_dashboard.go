@@ -40,14 +40,15 @@ func dashboardStageConfig(stages []flow.Stage, profileTitle func(string) string)
 			declared = append(declared, server.DeclaredArtifact{Name: a.Name, Path: a.Path})
 		}
 		configs[s.ID] = server.StageConfig{
-			Name:        s.Name,
-			Interactive: s.Interactive,
-			AutoApprove: s.AutoApprove,
-			IsScript:    s.IsScript(),
-			DependsOn:   s.DependsOn,
-			Buttons:     s.Buttons.Labels(),
-			Artifacts:   declared,
-			Assistants:  declaredAssistants(s.Assistants, profileTitle),
+			Name:                     s.Name,
+			Interactive:              s.Interactive,
+			AutoApprove:              s.AutoApprove,
+			IsScript:                 s.IsScript(),
+			DependsOn:                s.DependsOn,
+			Buttons:                  s.Buttons.Labels(),
+			Artifacts:                declared,
+			Assistants:               declaredAssistants(s.Assistants, profileTitle),
+			PreCompletionMaxFailures: s.PreCompletion.CorrectionLimit(),
 		}
 	}
 	return configs

@@ -262,7 +262,7 @@ func (a StageAssistant) validate() error {
 		return fmt.Errorf("mode must be %q or %q%s", assistants.ModeAdvisory, assistants.ModeRequired, a.rejected(string(a.Mode)))
 	}
 	if !a.Trigger.Valid() {
-		return fmt.Errorf("trigger must be %q, %q, %q, or %q%s", assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, assistants.TriggerOnMessage, a.rejected(string(a.Trigger)))
+		return fmt.Errorf("trigger must be %q, %q, %q, %q, or %q%s", assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerPreCompletion, assistants.TriggerOnCompletion, assistants.TriggerOnMessage, a.rejected(string(a.Trigger)))
 	}
 	return a.validateLoop()
 }

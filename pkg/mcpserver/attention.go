@@ -139,6 +139,13 @@ func (s *Service) stageAction(ctx context.Context, id string, st state.StageStat
 			return pendingAction{}, false
 		}
 		action.Type = actionAssistants
+	case state.StatusAwaitingPreCompletion:
+		// Only a review nobody can settle by waiting is the person's decision; a running review is machine work.
+		if st.PreCompletion == nil || st.PreCompletion.Decision != state.PreCompletionNeedsDecision {
+			return pendingAction{}, false
+		}
+		action.Type = actionAssistants
+		action.Reason = "pre_completion"
 	default:
 		return pendingAction{}, false
 	}

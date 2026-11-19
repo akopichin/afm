@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -10,9 +11,11 @@ import (
 
 	"github.com/akopichin/afm-engine/engine"
 	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/assistants"
 	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/control"
 	"github.com/akopichin/afm/contracts/state"
+	"github.com/akopichin/afm/pkg/server"
 )
 
 func actionsOf(t *testing.T, res statusResult, typ string) []pendingAction {
@@ -263,5 +266,75 @@ func TestStatusToolOverMCP(t *testing.T) {
 	decode(t, res, &got)
 	if got.RunID != "run-1" || len(got.PendingActions) != 1 || got.Cursor == "" || !slices.Equal(got.Permissions, []Group{GroupReply}) {
 		t.Fatalf("status = %+v", got)
+	}
+}
+
+// TestStatusReportsPreCompletionRounds checks the raw JSON, because the keys are the contract: a blocked round
+// carries the blocked flag and one pending action, a running review neither, a stage without a round no key.
+func TestStatusReportsPreCompletionRounds(t *testing.T) {
+	ds := &declaredStages{configs: map[string]server.StageConfig{
+		"blocked":   {PreCompletionMaxFailures: 2},
+		"reviewing": {PreCompletionMaxFailures: 1},
+	}}
+	h := newHarness(t, "", func(c *Config) { c.Stages = ds })
+	round := func(id string, decision state.PreCompletionDecision) *state.PreCompletionRound {
+		return &state.PreCompletionRound{
+			ID: id, Phase: "execution", CorrectionCount: 1, Decision: decision,
+			TaskIDs: []assistants.TaskID{"t-1"},
+		}
+	}
+	h.run.setStage("blocked", state.StageState{
+		Status: state.StatusAwaitingPreCompletion, PreCompletion: round("round-3", state.PreCompletionNeedsDecision),
+	})
+	h.run.setStage("reviewing", state.StageState{
+		Status: state.StatusAwaitingPreCompletion, PreCompletion: round("round-5", state.PreCompletionReviewing),
+	})
+	h.run.setStatus("plain", state.StatusRunning)
+	session := h.connect(t, nil)
+
+	res, err := session.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "afm_run_status"})
+	if err != nil || res.IsError {
+		t.Fatalf("call: %v %+v", err, res)
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Stages         []map[string]any `json:"stages"`
+		PendingActions []map[string]any `json:"pending_actions"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	byID := map[string]map[string]any{}
+	for _, st := range got.Stages {
+		byID[st["id"].(string)] = st
+	}
+
+	blocked := byID["blocked"]
+	wantRound := map[string]any{
+		"round_id": "round-3", "phase": "execution", "decision": "needs_decision",
+		"correction_count": float64(1), "max_failures": float64(2), "task_ids": []any{"t-1"},
+	}
+	if !reflect.DeepEqual(blocked["pre_completion"], wantRound) || blocked["pre_completion_blocked"] != any(true) {
+		t.Fatalf("blocked stage = %v", blocked)
+	}
+	reviewing := byID["reviewing"]
+	if round, _ := reviewing["pre_completion"].(map[string]any); round["decision"] != "reviewing" {
+		t.Fatalf("reviewing stage = %v", reviewing)
+	}
+	if _, ok := reviewing["pre_completion_blocked"]; ok {
+		t.Fatalf("a running review must not be blocked: %v", reviewing)
+	}
+	for _, key := range []string{"pre_completion", "pre_completion_blocked"} {
+		if _, ok := byID["plain"][key]; ok {
+			t.Fatalf("stage without a round has %q: %v", key, byID["plain"])
+		}
+	}
+
+	if len(got.PendingActions) != 1 || got.PendingActions[0]["stage_id"] != "blocked" ||
+		got.PendingActions[0]["type"] != "assistants_blocked" || got.PendingActions[0]["reason"] != "pre_completion" {
+		t.Fatalf("pending_actions = %v", got.PendingActions)
 	}
 }

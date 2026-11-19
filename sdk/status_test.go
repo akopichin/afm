@@ -151,3 +151,33 @@ func TestStatus_NonOKResponse(t *testing.T) {
 		t.Fatal("expected error on 500 response")
 	}
 }
+
+func TestStatus_DecodesPreCompletionRound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"flow_name":"demo","stages":[{"id":"a","status":"awaiting_pre_completion",`+
+			`"pre_completion":{"round_id":"round-4","phase":"execution","decision":"needs_decision",`+
+			`"correction_count":1,"max_failures":2,"task_ids":["t-1","t-2"]},"pre_completion_blocked":true}]}`)
+	}))
+	defer srv.Close()
+
+	run := &Run{baseURL: srv.URL, httpClient: srv.Client()}
+	status, err := run.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Stages["a"] != StageAwaitingPreCompletion {
+		t.Fatalf("status = %q, want %q", status.Stages["a"], StageAwaitingPreCompletion)
+	}
+	stage := status.StageViews[0]
+	round := stage.PreCompletion
+	if round == nil || round.RoundID != "round-4" || round.Phase != "execution" || round.Decision != "needs_decision" ||
+		round.CorrectionCount != 1 || round.MaxFailures != 2 || len(round.TaskIDs) != 2 {
+		t.Fatalf("round = %+v", round)
+	}
+	if !stage.PreCompletionBlocked {
+		t.Error("PreCompletionBlocked = false, want true")
+	}
+	if status.Done || status.Failed {
+		t.Errorf("a stage in review is neither done nor failed: %+v", status)
+	}
+}

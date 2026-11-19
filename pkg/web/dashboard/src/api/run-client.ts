@@ -214,7 +214,7 @@ export type AttachHelperRequest = {
   title: string
   instruction: string
   mode: 'advisory' | 'required'
-  trigger: 'one_shot' | 'checkpoints' | 'on_completion' | 'on_message'
+  trigger: 'one_shot' | 'checkpoints' | 'on_completion' | 'on_message' | 'pre_completion'
 }
 
 // Task-level lifecycle mutations — POST /api/assistants/{id}/{action}. Distinct from the stage-level

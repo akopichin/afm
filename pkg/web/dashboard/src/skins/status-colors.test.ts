@@ -66,6 +66,17 @@ describe('awaiting_quota uses a real amber token in the rail, the header badge a
   })
 })
 
+describe('awaiting_pre_completion uses an amber token in the rail and the header badge', () => {
+  it('declares --c-awaiting-pre-completion in the active-amber family', () => {
+    expect(decl(tokensCss, '--c-awaiting-pre-completion')).toBe('var(--amber)')
+  })
+  it('rail dot and workspace badge read it, and blocked turns them failed', () => {
+    expect(declInRule(stagesListCss, '.status-dot[data-status="awaiting_pre_completion"]', 'color')).toBe('var(--c-awaiting-pre-completion)')
+    expect(declInRule(layoutCss, '.status-badge[data-status="awaiting_pre_completion"]', '--status-tone')).toBe('var(--c-awaiting-pre-completion)')
+    expect(layoutCss).toContain('.status-badge[data-status="awaiting_pre_completion"][data-blocked="true"] { --status-tone: var(--c-failed); }')
+  })
+})
+
 describe('DRY: no skin index.css redeclares the status-color map', () => {
   it('every skin leaves --c-* to the base layer', () => {
     for (const [name, css] of [

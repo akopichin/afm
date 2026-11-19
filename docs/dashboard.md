@@ -543,7 +543,7 @@ The breakdown splits the time into three groups:
 | Group | Statuses |
 |---|---|
 | **Working** | `planning`, `running`, `revising` |
-| **Waiting** | **Approval & replies** — `awaiting_approval`, `awaiting_user_input`, `hook_failed`, and `awaiting_assistants` when a required helper task needs your decision; **Helpers & colleagues** — `awaiting_peer`, and `awaiting_assistants` while a helper is still working; **Backoff & usage limits** — `retrying`, `awaiting_quota`; **Scheduling** — a started stage that is `pending` or `ready` again (shown only when above zero) |
+| **Waiting** | **Approval & replies** — `awaiting_approval`, `awaiting_user_input`, `hook_failed`, and `awaiting_assistants` or `awaiting_pre_completion` when a required helper task needs your decision; **Helpers & colleagues** — `awaiting_peer`, and `awaiting_assistants` or `awaiting_pre_completion` while helpers are still working; **Backoff & usage limits** — `retrying`, `awaiting_quota`; **Scheduling** — a started stage that is `pending` or `ready` again (shown only when above zero) |
 | **Paused** | `paused` |
 
 The figures come from the server and are derived from the
@@ -700,7 +700,7 @@ you wrote:
   whatever the stage's status.
 - **Restart with note** — the agent stops and restarts its current phase with your
   note as new instructions. The button is there only while the stage can be restarted: `running`, `awaiting_approval` or
-  `awaiting_assistants`, and not during a review pause.
+  `awaiting_assistants` or `awaiting_pre_completion`, and not during a review pause.
 
 Choosing a way sends nothing. The text, the attached images, the selection and the
 cursor stay exactly as they were, and the keyboard focus stays on the button you
@@ -935,6 +935,19 @@ resizing still works, but the width is not retained.
   to every stage); **Attach helper to stage…** opens the stage's **Attach
   helper** dialog (a helper that works for this stage's agent). The second is
   shown only while the stage can take a helper.
+- In the **Attach helper** dialog, **Trigger** also offers **Pre-completion review**,
+  with a hint that the helper runs after the stage agent finishes its turn, before
+  verify, and that a required one sends the work back while an advisory one never
+  blocks. See [Pre-completion review](collaboration.md#pre-completion-review).
+- A stage in `awaiting_pre_completion` is shown as **Pre-completion review** in the
+  stage list and the workspace header. The header adds the used corrections and
+  the budget (for example `corrections 0 of 1`) and the decision; the round ID is
+  in its tooltip. A reviewing round is background work with no attention badge;
+  only a round that needs your decision shows the blocked badge and enters the
+  attention queue. Open the helper task and **Waive…** it to decide the round
+  again. Pause and Restart with note are available in this status. The feed
+  shows the opened rounds, the requested changes with the correction count and the
+  accepted round as readable rows that stay after a reload.
 - In the **Attach helper** dialog, **Trigger** offers **On message**: the helper
   waits idle until it is sent a message, answers each one in its own turn and
   stays attached; its task view then shows **Waiting for message** and the last

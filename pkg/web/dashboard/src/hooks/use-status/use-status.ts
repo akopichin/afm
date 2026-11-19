@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Stage, StageStatus, StageVerify } from '../../types'
-import { STAGE_STATUSES, parseStageQuota } from '../../types'
+import { STAGE_STATUSES, parseStageQuota, parseStagePreCompletion } from '../../types'
 import { parseDeclaredAssistants, parseStageTiming } from '../../types/stage'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 import { parseUsageAnalyticsStatus, type UsageAnalyticsStatus } from '../../types/usage-analytics'
@@ -318,6 +318,8 @@ function toStage(raw: unknown): Stage | null {
     cost,
     verify,
     awaitingAssistantsBlocked: obj.awaiting_assistants_blocked === true,
+    preCompletion: parseStagePreCompletion(obj.pre_completion),
+    preCompletionBlocked: obj.pre_completion_blocked === true,
     quota: parseStageQuota(obj.quota),
     timing: parseStageTiming(obj.timing),
     declaredAssistants: parseDeclaredAssistants(obj.declared_assistants),

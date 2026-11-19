@@ -362,3 +362,94 @@ func TestValidateFlowFile_MissingRatesNameScopeCommandModelAndCategories(t *test
 		}
 	}
 }
+
+// The trigger is named for every assistants: form contracts accept; any other error stays exactly the contracts one.
+func TestValidateFlowFile_PreCompletionHelperOnPlanningOnlyStageNamesTrigger(t *testing.T) {
+	planOnly := func(assistants string) string {
+		return "  - id: plan-only\n    agents: [planning]\n    assistants: " + assistants + "\n"
+	}
+	build := func(assistants string) string {
+		return "  - id: build\n    agents: [auto]\n    assistants: " + assistants + "\n"
+	}
+	const helper = "{profile: qa, trigger: pre_completion}"
+	cases := []struct {
+		name         string
+		stages       string
+		namesTrigger bool
+	}{
+		{"list of objects", planOnly("[{profile: qa, trigger: pre_completion, mode: required}]"), true},
+		{"single object", planOnly(helper), true},
+		{"list mixing a profile name and an object", planOnly("[other, " + helper + "]"), true},
+		{"profile name on a stage before", build("other") + planOnly("["+helper+"]"), true},
+		{"profile name on a stage after", planOnly("["+helper+"]") + build("other"), true},
+		{"aliased object", build("&helper "+helper) + planOnly("*helper"), true},
+		{"aliased list", build("&helpers ["+helper+"]") + planOnly("*helpers"), true},
+		{"aliased object in a mixed list", build("&helper "+helper) + planOnly("[other, *helper]"), true},
+		{"aliased profile name in a mixed list", build("&name other") + planOnly("[*name, "+helper+"]"), true},
+		{"aliased trigger", planOnly("[{profile: qa, title: &trigger pre_completion, trigger: *trigger}]"), true},
+		// A bare name is a profile, not a trigger, even a profile called pre_completion.
+		{"profile name", planOnly("qa"), false},
+		{"profile named pre_completion", planOnly("pre_completion"), false},
+		{"list of profile names", planOnly("[qa, pre_completion]"), false},
+		// Only the rejected stage counts: a pre_completion helper on a valid stage is not the cause.
+		{"one_shot trigger", planOnly("[{profile: qa, trigger: one_shot}]") + build("["+helper+"]"), false},
+		{"on_message trigger", planOnly("[{profile: qa, trigger: on_message}]") + build("["+helper+"]"), false},
+		{"on_completion trigger", planOnly("[{profile: qa, trigger: on_completion}]") + build("["+helper+"]"), false},
+		{"checkpoints trigger", planOnly("[{profile: qa, trigger: checkpoints}]") + build("["+helper+"]"), false},
+		{"earlier stage fails first", planOnly("other") + "  - id: second\n    agents: [planning]\n    assistants: [" + helper + "]\n", false},
+		{"script stage", "  - id: plan-only\n    script: echo ok\n    assistants: [" + helper + "]\n", false},
+		{"stage pre_completion block", planOnly("["+helper+"]") + "    pre_completion: {max_failures: 1}\n", false},
+		{"unknown trigger", planOnly("[{profile: qa, trigger: other}]"), false},
+		{"malformed YAML", "  - id: plan-only\n    agents: [planning\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTestFlow(t, "name: test-flow\nstages:\n"+tc.stages)
+			_, original := flow.ParseFile(path)
+			if original == nil {
+				t.Fatal("flow.ParseFile accepted the flow")
+			}
+			named := nameMisplacedPreCompletion(path, original)
+			if tc.namesTrigger {
+				if named == original || !errors.Is(named, original) {
+					t.Errorf("error %q must wrap the original %q", named, original)
+				}
+				for _, want := range []string{`stage "plan-only"`, "pre_completion"} {
+					if !strings.Contains(named.Error(), want) {
+						t.Errorf("error %q must mention %s", named, want)
+					}
+				}
+			} else if named != original {
+				t.Errorf("error %q, want the original %q", named, original)
+			}
+			if _, err := validateFlowFile(path); err == nil || err.Error() != "invalid flow.yaml: "+named.Error() {
+				t.Errorf("validateFlowFile = %v, want invalid flow.yaml: %v", err, named)
+			}
+		})
+	}
+}
+
+// When the file is gone, no longer YAML or has no rejected stage, the contracts error is the best there is.
+func TestValidateFlowFile_PreCompletionNamingKeepsErrorItCannotExplain(t *testing.T) {
+	original := errors.New(`stage "plan-only": ` + planningOnlyAssistantsError)
+	paths := map[string]string{
+		"unreadable file":       filepath.Join(t.TempDir(), "absent.yaml"),
+		"malformed YAML":        writeTestFlow(t, "stages: [\n"),
+		"stage not in the file": writeTestFlow(t, "name: test-flow\nstages:\n  - id: another\n    agents: [planning]\n    assistants: [{profile: qa, trigger: pre_completion}]\n"),
+	}
+	for name, path := range paths {
+		t.Run(name, func(t *testing.T) {
+			if got := nameMisplacedPreCompletion(path, original); got != original {
+				t.Errorf("error %q, want the original %q", got, original)
+			}
+		})
+	}
+}
+
+func TestValidateFlowFile_PreCompletionHelperOnExecutionStageReturnsOK(t *testing.T) {
+	writeValidateConfig(t, "")
+	path := writeTestFlow(t, "name: test-flow\nstages:\n  - id: build\n    agents: [auto]\n    assistants: {profile: default, trigger: pre_completion}\n")
+	if _, err := validateFlowFile(path); err != nil {
+		t.Fatalf("validateFlowFile: %v", err)
+	}
+}

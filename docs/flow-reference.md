@@ -117,7 +117,7 @@ stages:
 
 Object fields are `profile` (required), `title`, `instruction`, `mode`
 (`advisory` or `required`), `trigger` (`one_shot`, `checkpoints`,
-`on_completion`, or `on_message`), `skills`, `skills_dir`, `loop`, and `budget`
+`on_completion`, `on_message`, or `pre_completion`), `skills`, `skills_dir`, `loop`, and `budget`
 (a [spending limit](budgets.md) for this helper that replaces the profile default). Omitted mode and trigger default to
 `advisory` and `one_shot`. `skills` and `skills_dir` follow the
 [agent skills](#agent-skills) rules; a helper does not inherit its stage's skills.
@@ -128,6 +128,12 @@ planning-only stages. A helper with `trigger: on_message` rests until it is sent
 a message and then answers each one in its own turn; see
 [Helpers that wait for messages](collaboration.md#helpers-that-wait-for-messages)
 and [`examples/on-message-helper/`](https://github.com/akopichin/afm/tree/main/examples/on-message-helper).
+A helper with `trigger: pre_completion` reviews each result of the stage agent
+before verify; its stage-level budget is `pre_completion.max_failures`, an
+integer of at least 0 (default 1) that limits how many corrections the review may
+send back to the agent. The stage field is a mapping with that one key, and any
+other key or a non-integer value is a validation error. See
+[Pre-completion review](collaboration.md#pre-completion-review).
 See [Helpers and collaboration](collaboration.md) for completion gates and
 behavior when collaboration is disabled.
 

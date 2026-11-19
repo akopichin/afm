@@ -197,6 +197,16 @@ describe('AssistantTaskView', () => {
     expect(screen.queryByRole('button', { name: 'Waive…' })).toBeNull()
   })
 
+  test('a pre-completion pass from an earlier round does not hide waive once the task failed later', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_result', data: { verdict: 'pass', summary: 'Round 1 ok.' } }]))
+    const { rerender } = render(<AssistantTaskView task={makeTask({ mode: 'required', trigger: 'pre_completion', status: 'completed' })} />)
+    await waitFor(() => expect(screen.getByText('Round 1 ok.')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Waive…' })).toBeNull()
+
+    rerender(<AssistantTaskView task={makeTask({ mode: 'required', trigger: 'pre_completion', status: 'failed' })} />)
+    expect(screen.getByRole('button', { name: 'Waive…' })).toBeInTheDocument()
+  })
+
   test('an event of another type that carries a summary is not read as the result', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_delegated', data: { summary: 'Splitting the work.' } }]))
     render(<AssistantTaskView task={makeTask({ status: 'completed' })} />)
@@ -266,6 +276,13 @@ describe('AssistantTaskView', () => {
     expect(screen.getByText('Passes: 3')).toBeInTheDocument()
     expect(screen.getByText('Last checkpoint: #42')).toBeInTheDocument()
     await flushLoads()
+  })
+
+  test('a pre-completion helper is marked as reviewing before verify', async () => {
+    render(<AssistantTaskView task={makeTask({ trigger: 'pre_completion' })} />)
+    await flushLoads()
+    expect(screen.getByText('Reviews before verify')).toBeInTheDocument()
+    expect(screen.queryByText(/^Watches:/)).not.toBeInTheDocument()
   })
 
   test('a plain one_shot task shows no watcher status line', async () => {

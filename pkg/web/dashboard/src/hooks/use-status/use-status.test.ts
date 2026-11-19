@@ -93,6 +93,7 @@ describe('useStatus', () => {
       preNote: '',
       buttons: [],
       awaitingAssistantsBlocked: false,
+      preCompletionBlocked: false,
     })
     expect(result.current.stages[1]?.status).toBe('running')
   })
@@ -197,6 +198,23 @@ describe('useStatus', () => {
     expect(byId.get('s2')?.awaitingAssistantsBlocked).toBe(false)
     expect(byId.get('s3')?.awaitingAssistantsBlocked).toBe(false)
     expect(byId.get('s4')?.awaitingAssistantsBlocked).toBe(false)
+  })
+
+  test('parses the pre-completion round and its blocked flag, ignoring a round without an id', () => {
+    const round = { round_id: 'round-7', phase: 'reviewing', decision: 'needs_decision', correction_count: 1, max_failures: 2, task_ids: ['t1', 3] }
+    const { stages } = normalizeStatus({
+      flow_name: 'demo',
+      stages: [
+        { id: 's1', status: 'awaiting_pre_completion', pre_completion: round, pre_completion_blocked: true },
+        { id: 's2', status: 'awaiting_pre_completion', pre_completion: { ...round, round_id: '' } },
+        { id: 's3', status: 'running' },
+      ],
+    })
+    expect(stages[0]?.preCompletion).toEqual({ roundId: 'round-7', phase: 'reviewing', decision: 'needs_decision', correctionCount: 1, maxFailures: 2, taskIds: ['t1'] })
+    expect(stages[0]?.preCompletionBlocked).toBe(true)
+    expect(stages[1]?.preCompletion).toBeUndefined()
+    expect(stages[1]?.preCompletionBlocked).toBe(false)
+    expect(stages[2]?.preCompletion).toBeUndefined()
   })
 
   test('парсит interactive/autonomous/has_dialog с дефолтом false', () => {

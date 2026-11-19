@@ -93,6 +93,20 @@ it('pauses and continues through the API and disables actions while status is st
 })
 
 
+it('shows the pre-completion review with its corrections and round, blocked only for a decision', () => {
+  const preCompletion = { roundId: 'round-4', phase: 'reviewing', decision: 'reviewing', correctionCount: 0, maxFailures: 1, taskIds: ['t1'] }
+  const { container, rerender } = render(<WorkspaceHeader stage={stage({ status: 'awaiting_pre_completion', preCompletion })} connected />)
+  expect(document.getElementById('detail-status')).toHaveTextContent('Pre-completion review')
+  expect(document.getElementById('detail-status')).not.toHaveAttribute('data-blocked')
+  expect(container.querySelector('.pre-completion-detail')).toHaveTextContent('corrections 0 of 1 · reviewing')
+  expect(container.querySelector('.pre-completion-detail')).toHaveAttribute('title', 'Round round-4')
+  expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled()
+
+  rerender(<WorkspaceHeader stage={stage({ status: 'awaiting_pre_completion', preCompletion: { ...preCompletion, decision: 'needs_decision' }, preCompletionBlocked: true })} connected />)
+  expect(document.getElementById('detail-status')).toHaveAttribute('data-blocked', 'true')
+  expect(container.querySelector('.pre-completion-detail')).toHaveTextContent('corrections 0 of 1 · needs decision')
+})
+
 it('offers Pause for lifecycle waits but never for an executing script', () => {
   const { rerender } = render(<WorkspaceHeader stage={stage({ status: 'running', isScript: true })} connected />)
   expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()

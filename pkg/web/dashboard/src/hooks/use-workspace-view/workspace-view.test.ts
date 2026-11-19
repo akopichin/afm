@@ -67,6 +67,17 @@ describe('attentionKindForStatus', () => {
   })
 })
 
+describe('pre-completion attention', () => {
+  const round = (blocked?: boolean): Stage => ({ ...stage('a', 'awaiting_pre_completion'), preCompletionBlocked: blocked })
+
+  it('treats only a round that needs a decision as attention', () => {
+    expect(attentionKindForStatus(round(true))).toBe('assistants')
+    expect(attentionKindForStatus(round(false))).toBeNull()
+    expect(attentionKindForStatus(round())).toBeNull()
+    expect(attentionKindForStatus(stage('a', 'paused'))).toBe('paused')
+  })
+})
+
 describe('deriveAttentionItems', () => {
   it('keeps server (topological) order and filters non-actionable stages', () => {
     const stages = [

@@ -1,3 +1,4 @@
+import { isGateBlocked } from '../../types'
 import type { Stage } from '../../types'
 
 // WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла стадий. 'assistant' — лента
@@ -34,7 +35,8 @@ export function attentionKindForStatus(stage: Stage): AttentionKind | null {
     case 'paused':
       return 'paused'
     case 'awaiting_assistants':
-      return stage.awaitingAssistantsBlocked === true ? 'assistants' : null
+    case 'awaiting_pre_completion':
+      return isGateBlocked(stage) ? 'assistants' : null
     default:
       return null
   }

@@ -21,7 +21,10 @@ type stageSummary struct {
 	PausedFrom state.StageStatus `json:"paused_from,omitempty"`
 	Verify     string            `json:"verify,omitempty"`
 	Quota      *server.QuotaView `json:"quota,omitempty"`
-	Artifacts  []artifactRef     `json:"artifacts,omitempty"`
+	// PreCompletion and PreCompletionBlocked repeat the dashboard projection of the review round.
+	PreCompletion        *server.PreCompletionView `json:"pre_completion,omitempty"`
+	PreCompletionBlocked bool                      `json:"pre_completion_blocked,omitempty"`
+	Artifacts            []artifactRef             `json:"artifacts,omitempty"`
 }
 
 // statusResult is the body of afm_run_status and of the status resource.
@@ -92,7 +95,8 @@ func (s *Service) stageSummaries(rs state.RunState, costs map[string]*accounting
 	views := server.BuildStageViews(rs, s.cfg.RunDir, configs, costs)
 	out := make([]stageSummary, 0, len(views))
 	for _, v := range views {
-		sum := stageSummary{ID: v.ID, Name: v.Name, Status: v.Status, PausedFrom: v.PausedFrom, Quota: v.Quota}
+		sum := stageSummary{ID: v.ID, Name: v.Name, Status: v.Status, PausedFrom: v.PausedFrom, Quota: v.Quota,
+			PreCompletion: v.PreCompletion, PreCompletionBlocked: v.PreCompletionBlocked}
 		if v.Verify != nil {
 			sum.Verify = v.Verify.Phase
 		}

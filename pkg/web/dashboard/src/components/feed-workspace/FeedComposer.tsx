@@ -79,7 +79,7 @@ type FeedComposerProps = {
   onBlur?: (hasDraft: boolean) => void
   onResumeNow?: () => void
   mesh?: FeedComposerMeshProps
-  // reviseAvailable — the stage takes a Restart with note now (running, awaiting_approval, awaiting_assistants).
+  // reviseAvailable — the stage takes a Restart with note now (running, awaiting_approval, awaiting_assistants, awaiting_pre_completion).
   reviseAvailable?: boolean
   // conversationMessages — the stage feed's conversation messages (FeedWorkspace's one poll), for the receipts.
   conversationMessages?: MeshMessage[]
@@ -630,7 +630,7 @@ function restartUnavailableReason(status: string | undefined): string {
   if (status === undefined) return 'the stage is not running'
   if (status === 'revising') return 'the agent is already restarting with a note'
   if (status === 'done' || status === 'failed') return 'the stage has finished'
-  if (status === 'running' || status === 'awaiting_approval' || status === 'awaiting_assistants') return 'the run is paused'
+  if (status === 'running' || status === 'awaiting_approval' || status === 'awaiting_assistants' || status === 'awaiting_pre_completion') return 'the run is paused'
   return `the stage is ${status.replace(/_/g, ' ')}`
 }
 

@@ -64,9 +64,13 @@ func waitForStageStatus(ctx context.Context, t *testing.T, run *Run, stageID str
 
 // isolateHome points HOME (USERPROFILE on Windows) at a temp dir and clears CODEX_HOME, so neither the developer's global afm/Docker
 // config nor their real skill directories (afm run syncs skills into ~/.afm, ~/.claude and $CODEX_HOME)
-// are touched.
+// are touched. It also drops the container markers of an enclosing afm run, which would otherwise redirect the agents' cwd.
 func isolateHome(t *testing.T) {
 	t.Helper()
+	for _, k := range []string{"AFM_IN_DOCKER", "AFM_DOCKER_WORKTREE"} {
+		t.Setenv(k, "") // registers the restore; the next line removes the variable itself
+		_ = os.Unsetenv(k)
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

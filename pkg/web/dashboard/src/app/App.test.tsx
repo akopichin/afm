@@ -3292,6 +3292,12 @@ describe('App', () => {
     expect(sendAs().getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true')
   })
 
+  test('composer gate: awaiting_pre_completion also gets Restart with note', async () => {
+    await renderGate('awaiting_pre_completion', 'running')
+    await screen.findByRole('combobox', { name: /message the mesh/i })
+    expect(sendAs().getByRole('button', { name: 'Restart with note' })).toBeInTheDocument()
+  })
+
   test('composer gate: no composer once the run has ended', async () => {
     await renderGate('done', 'finished')
     await new Promise((r) => setTimeout(r, 30))

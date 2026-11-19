@@ -173,6 +173,12 @@ describe("the stage agent as a required recipient of a thought reply", () => {
     expect(r.recipients[0]?.problem).toMatch(/waits for its helpers/)
   })
 
+  it('carries the same waiting problem while the stage is in its pre-completion review', () => {
+    const reviewing = [{ id: 'impl', status: 'awaiting_pre_completion' }, { id: 'docs', status: 'running' }]
+    const r = composerRecipients({ participants, stages: reviewing, stageId: 'impl', picked: [], draft: 'why?', ...thoughtReply })
+    expect(r.recipients[0]?.problem).toMatch(/waits for its helpers/)
+  })
+
   it('is marked finished, not an error, once the stage is done', () => {
     const r = composerRecipients({ participants: [user, { ...impl, reachable: false }, qa], stages: doneStages, stageId: 'impl', picked: [], draft: 'why?', ...thoughtReply })
     expect(r.recipients.map((x) => [x.source, x.problem, x.note])).toEqual([['reply', null, FINISHED_STAGE_NOTE]])

@@ -38,6 +38,10 @@ export type Stage = {
   // StageView.AwaitingAssistantsBlocked (omitempty на бэке). Опционально и здесь же — чтобы существующие
   // Stage-фикстуры в тестах не пришлось поголовно трогать (как cost/verify выше).
   awaitingAssistantsBlocked?: boolean
+  // preCompletion — the recorded pre-completion review round (Go StageView.PreCompletion); undefined until a
+  // round opens. preCompletionBlocked is true only for awaiting_pre_completion + needs_decision.
+  preCompletion?: StagePreCompletion
+  preCompletionBlocked?: boolean
   // quota — durable-ожидание сброса лимита подписки (Go StageView.Quota). Есть только у awaiting_quota и у
   // paused, припаркованной по лимиту; у остальных стадий undefined.
   quota?: StageQuota
@@ -72,6 +76,41 @@ export function parseDeclaredAssistants(raw: unknown): DeclaredAssistant[] | und
     list.push({ profile: obj.profile, name, trigger: obj.trigger, mode, loopEvery })
   }
   return list.length > 0 ? list : undefined
+}
+
+// StagePreCompletion — the recorded review round of a stage (Go StageView.PreCompletion). decision is a free
+// string so a newer engine decision still renders; correctionCount/maxFailures feed "corrections N of M".
+export type StagePreCompletion = {
+  roundId: string
+  phase: string
+  decision: string
+  correctionCount: number
+  maxFailures: number
+  taskIds: string[]
+}
+
+// parseStagePreCompletion — undefined without a round_id, as the round is useless without its identity.
+export function parseStagePreCompletion(raw: unknown): StagePreCompletion | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.round_id !== 'string' || obj.round_id === '') return undefined
+  const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  return {
+    roundId: obj.round_id,
+    phase: typeof obj.phase === 'string' ? obj.phase : '',
+    decision: typeof obj.decision === 'string' ? obj.decision : '',
+    correctionCount: count(obj.correction_count),
+    maxFailures: count(obj.max_failures),
+    taskIds: Array.isArray(obj.task_ids) ? obj.task_ids.filter((x): x is string => typeof x === 'string') : [],
+  }
+}
+
+// isGateBlocked — a helper gate (awaiting_assistants or awaiting_pre_completion) needs a human decision
+// rather than just waiting for machine work. The one place the two statuses' blocked flags are read.
+export function isGateBlocked(stage: Pick<Stage, 'status' | 'awaitingAssistantsBlocked' | 'preCompletionBlocked'>): boolean {
+  if (stage.status === 'awaiting_assistants') return stage.awaitingAssistantsBlocked === true
+  if (stage.status === 'awaiting_pre_completion') return stage.preCompletionBlocked === true
+  return false
 }
 
 // StageQuota — малый общий вид quota-парковки стадии или helper-задачи (сервер отдаёт RFC3339 в UTC; не вся
@@ -185,6 +224,9 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   // помощник закроет свой гейт. Сам по себе ярлык не различает «помощник ещё работает» и «нужно решение
   // человека» — это несёт stage.awaitingAssistantsBlocked (см. use-attention/attentionKindFor).
   awaiting_assistants: 'Awaiting helpers',
+  // awaiting_pre_completion — helpers review the stage agent's work before verify; machine work unless the
+  // round needs a human decision (stage.preCompletionBlocked).
+  awaiting_pre_completion: 'Pre-completion review',
   // awaiting_peer (Agent Mesh Phase 5, T5.1) — the stage's executor registered a wait on a colleague and
   // exited; it resumes automatically once the colleague replies. Machine work, not a human decision.
   awaiting_peer: 'Awaiting colleague',
@@ -205,6 +247,7 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'awaiting_approval',
   'hook_failed',
   'awaiting_assistants',
+  'awaiting_pre_completion',
   'awaiting_peer',
   'awaiting_quota',
 ])

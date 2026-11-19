@@ -21,7 +21,10 @@ fmt.Println(status.FlowName, status.RunState)
 `Run.Status` includes stage views, capabilities, run identity and state. The
 SDK also reads plans, dialog, discussion and Agent Mesh conversations; answers
 questions, sends messages, attaches profile-backed agents, and controls stages
-with approve, retry, revise, pause and continue.
+with approve, retry, revise, pause and continue. A stage in a
+[pre-completion review](collaboration.md#pre-completion-review) has the status
+`StageAwaitingPreCompletion`; its view carries `PreCompletion` (the round) and
+`PreCompletionBlocked`.
 
 For a run your service creates, `Client.Start(ctx, flowPath, workDir)` starts an
 `afm` subprocess and waits for its dashboard. The SDK uses `workDir` both as

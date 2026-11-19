@@ -355,6 +355,43 @@ describe('helper_result_repaired — a helper answer needed mechanical repair', 
   })
 })
 
+describe('pre-completion notices', () => {
+  const at = '2026-07-10T10:00:00Z'
+
+  it('renders the opened round, then each decision with its tone, in order', () => {
+    const items = toFeedItems([
+      ev('pre_completion_round', { round: 'round-3', tasks: ['t1', 't2'], correction_count: 0 }, 's1', at),
+      ev('pre_completion_decision', { round: 'round-3', decision: 'correct', correction_count: 1, feedback: 'pre_completion/feedback.md' }, 's1', at),
+      ev('pre_completion_round', { round: 'round-5', tasks: ['t1', 't2'], correction_count: 1 }, 's1', at),
+      ev('pre_completion_decision', { round: 'round-5', decision: 'verify', correction_count: 1 }, 's1', at),
+    ])
+    expect(items.map((i) => [i.tone, i.text])).toEqual([
+      ['neutral', 'Pre-completion review round-3 started · 2 helpers'],
+      ['warning', 'Pre-completion review requested changes · correction 1 sent to the stage agent · pre_completion/feedback.md'],
+      ['neutral', 'Pre-completion review round-5 started · 2 helpers'],
+      ['success', 'Pre-completion review accepted, verify next'],
+    ])
+  })
+
+  it('shows failure and decision reasons, and keeps an unknown decision readable', () => {
+    const items = toFeedItems([
+      ev('pre_completion_decision', { round: 'r', decision: 'fail', reason: 'budget 1 spent' }, 's1', at),
+      ev('pre_completion_decision', { round: 'r', decision: 'needs_decision', reason: 'helper inconclusive' }, 's1', at),
+      ev('pre_completion_decision', { round: 'r', decision: 'shrug' }, 's1', at),
+    ])
+    expect(items.map((i) => [i.tone, i.text])).toEqual([
+      ['danger', 'Pre-completion review: correction budget spent · stage failed: budget 1 spent'],
+      ['warning', 'Pre-completion review needs your decision: helper inconclusive'],
+      ['neutral', 'Pre-completion review decision: shrug'],
+    ])
+  })
+
+  it('does not duplicate a notice replayed from history and the live socket', () => {
+    const live = ev('pre_completion_round', { round: 'round-3', tasks: ['t1'] }, 's1', at)
+    expect(toFeedItems([live, live])).toHaveLength(1)
+  })
+})
+
 describe('helper_tree_modified — the working tree changed during a helper turn', () => {
   it('renders a neutral warning naming the agent, without blaming it', () => {
     const items = toFeedItems([

@@ -15,6 +15,7 @@ import (
 
 	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
 	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/assistants"
 	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/contracts/mcp"
 )
@@ -55,10 +56,39 @@ type StageView struct {
 	// Quota — usage-limit wait: only while the stage is awaiting_quota or paused out of such a wait (an unwaitable
 	// limit or a manual Pause), the same after a restart because it is read from the journal state.
 	Quota *QuotaView `json:"quota,omitempty"`
+	// PreCompletion is the recorded pre-completion review round; absent when the stage has none.
+	PreCompletion *PreCompletionView `json:"pre_completion,omitempty"`
+	// PreCompletionBlocked is true only while the round waits for a person (awaiting_pre_completion + needs_decision).
+	PreCompletionBlocked bool `json:"pre_completion_blocked,omitempty"`
 	// Timing is the stage's time ledger; it does not depend on accounting.
 	Timing *StageTimingView `json:"timing,omitempty"`
 	// DeclaredAssistants are the helpers flow.yaml declares for the stage; absent while collaboration is off.
 	DeclaredAssistants []DeclaredAssistant `json:"declared_assistants,omitempty"`
+}
+
+// PreCompletionView is the client form of state.PreCompletionRound. MaxFailures comes from the stage
+// configuration, because the round does not store its budget.
+type PreCompletionView struct {
+	RoundID         string                      `json:"round_id"`
+	Phase           string                      `json:"phase"`
+	Decision        state.PreCompletionDecision `json:"decision"`
+	CorrectionCount int                         `json:"correction_count"`
+	MaxFailures     int                         `json:"max_failures"`
+	TaskIDs         []assistants.TaskID         `json:"task_ids"`
+}
+
+func newPreCompletionView(round *state.PreCompletionRound, maxFailures int) *PreCompletionView {
+	if round == nil {
+		return nil
+	}
+	return &PreCompletionView{
+		RoundID:         round.ID,
+		Phase:           round.Phase,
+		Decision:        round.Decision,
+		CorrectionCount: round.CorrectionCount,
+		MaxFailures:     maxFailures,
+		TaskIDs:         round.TaskIDs,
+	}
 }
 
 // StageTimingView is the client form of state.StageTiming. The sums are present only for a started stage with
@@ -211,8 +241,11 @@ func BuildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 			Verify:                    verifyByStage[id],
 			AwaitingAssistantsBlocked: awaitingAssistantsBlocked,
 			Quota:                     NewQuotaView(implorchestrator.StageQuota(st)),
-			Timing:                    newStageTimingView(st.Timing),
-			DeclaredAssistants:        cfg.Assistants,
+			PreCompletion:             newPreCompletionView(st.PreCompletion, cfg.PreCompletionMaxFailures),
+			PreCompletionBlocked: st.Status == state.StatusAwaitingPreCompletion &&
+				st.PreCompletion != nil && st.PreCompletion.Decision == state.PreCompletionNeedsDecision,
+			Timing:             newStageTimingView(st.Timing),
+			DeclaredAssistants: cfg.Assistants,
 		})
 	}
 	return views

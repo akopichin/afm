@@ -29,6 +29,11 @@ running → awaiting_quota → running
 - `awaiting_assistants` — the stage's own work is finished, but a
   [required helper](collaboration.md) has not passed or been waived; the stage
   completes when the required helper gate closes
+- `awaiting_pre_completion` — the stage agent's result passed its completion check and
+  the helpers of a [pre-completion review](collaboration.md#pre-completion-review) are
+  reviewing it, before verify. A decision `needs_decision` waits for a person; other
+  decisions are machine work. Pause and Continue keep the round, Revise drops it and
+  resets the correction count
 - `awaiting_peer` — the stage agent yielded while waiting for an Agent Mesh reply;
   it resumes when that wait resolves (see [Team conversations](collaboration.md#team-conversations))
 - `awaiting_quota` — an agent hit a provider usage limit. afm records the wait in
@@ -99,6 +104,8 @@ When you invoke `afm run` again, the tool automatically:
 - Preserves stages awaiting approval (`awaiting_approval`)
 - Rechecks the required-helper gate for stages in `awaiting_assistants`, without
   rerunning their completed main agent
+- Keeps the round of a stage in `awaiting_pre_completion` with its decision and
+  correction count, without rerunning the author
 - Restores pending Agent Mesh waits for stages in `awaiting_peer` and resumes the
   stage when its wait resolves; a `running` stage whose turn had already
   yielded on waits (`afm agent wait` answered `yield`) is parked on them

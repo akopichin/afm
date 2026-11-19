@@ -33,7 +33,8 @@ func statusColor(s state.StageStatus) string {
 		return colorGreen
 	case state.StatusFailed:
 		return colorRed
-	case state.StatusAwaitingApproval, state.StatusPaused, state.StatusAwaitingAssistants, state.StatusAwaitingQuota:
+	case state.StatusAwaitingApproval, state.StatusPaused, state.StatusAwaitingAssistants, state.StatusAwaitingQuota,
+		state.StatusAwaitingPreCompletion:
 		return colorYellow
 	case state.StatusRunning, state.StatusPlanning:
 		return colorBlue
@@ -97,18 +98,18 @@ func newCheckCmd() *cobra.Command {
 			fmt.Printf("Run: %s\n\n", filepath.Base(latest))
 			switch {
 			case showCost:
-				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %-10s  %s\n",
+				fmt.Printf("%-20s  %-23s  %-10s  %-8s  %-20s  %-10s  %s\n",
 					"STAGE", "STATUS", "UPDATED", "TOKENS", "CACHE", "EST. COST", "LAST ACTION")
-				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %-10s  %s\n",
+				fmt.Printf("%-20s  %-23s  %-10s  %-8s  %-20s  %-10s  %s\n",
 					"-----", "------", "-------", "------", "-----", "---------", "-----------")
 			case hasUsage:
-				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %s\n",
+				fmt.Printf("%-20s  %-23s  %-10s  %-8s  %-20s  %s\n",
 					"STAGE", "STATUS", "UPDATED", "TOKENS", "CACHE", "LAST ACTION")
-				fmt.Printf("%-20s  %-22s  %-10s  %-8s  %-20s  %s\n",
+				fmt.Printf("%-20s  %-23s  %-10s  %-8s  %-20s  %s\n",
 					"-----", "------", "-------", "------", "-----", "-----------")
 			default:
-				fmt.Printf("%-20s  %-22s  %-10s  %s\n", "STAGE", "STATUS", "UPDATED", "LAST ACTION")
-				fmt.Printf("%-20s  %-22s  %-10s  %s\n", "-----", "------", "-------", "-----------")
+				fmt.Printf("%-20s  %-23s  %-10s  %s\n", "STAGE", "STATUS", "UPDATED", "LAST ACTION")
+				fmt.Printf("%-20s  %-23s  %-10s  %s\n", "-----", "------", "-------", "-----------")
 			}
 
 			type row struct{ id, status, updated, lastAction, tokens, cache, cost string }
@@ -119,6 +120,9 @@ func newCheckCmd() *cobra.Command {
 					if blocked := blockingTaskNote(rs, id); blocked != "" {
 						action = blocked
 					}
+				}
+				if s.PreCompletion != nil && s.Status == state.StatusAwaitingPreCompletion {
+					action = preCompletionNote(s.PreCompletion)
 				}
 				if q := implorchestrator.StageQuota(s); q != nil {
 					action = implorchestrator.StageQuotaMessage(s, q) // the agent's last log line says nothing about the wait
@@ -152,13 +156,13 @@ func newCheckCmd() *cobra.Command {
 				color := statusColor(state.StageStatus(r.status))
 				switch {
 				case showCost:
-					fmt.Printf("%-20s  %s%-22s%s  %-10s  %-8s  %-20s  %-10s  %s\n",
+					fmt.Printf("%-20s  %s%-23s%s  %-10s  %-8s  %-20s  %-10s  %s\n",
 						r.id, color, r.status, colorReset, r.updated, r.tokens, r.cache, r.cost, r.lastAction)
 				case hasUsage:
-					fmt.Printf("%-20s  %s%-22s%s  %-10s  %-8s  %-20s  %s\n",
+					fmt.Printf("%-20s  %s%-23s%s  %-10s  %-8s  %-20s  %s\n",
 						r.id, color, r.status, colorReset, r.updated, r.tokens, r.cache, r.lastAction)
 				default:
-					fmt.Printf("%-20s  %s%-22s%s  %-10s  %s\n",
+					fmt.Printf("%-20s  %s%-23s%s  %-10s  %s\n",
 						r.id, color, r.status, colorReset, r.updated, r.lastAction)
 				}
 			}
@@ -253,6 +257,12 @@ func blockingTaskNote(rs state.RunState, stageID string) string {
 		title = string(blocker.ID)
 	}
 	return fmt.Sprintf("blocked by required task %s (%s, profile %s): %s", blocker.ID, blocker.Status, blocker.ProfileID, title)
+}
+
+// preCompletionNote names the review round in LAST ACTION: the agent's last log line says nothing about a review
+// that other helpers are running.
+func preCompletionNote(round *state.PreCompletionRound) string {
+	return fmt.Sprintf("pre-completion %s: %s, %d corrections", round.ID, round.Decision, round.CorrectionCount)
 }
 
 func lastLogAction(stageDir string) string {

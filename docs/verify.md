@@ -23,6 +23,14 @@ verify: shell and/or AI, run in order
     └── user paused/revised        → existing pause/revise/cancel path
 ```
 
+## Order with a pre-completion review
+
+If the stage has a [pre-completion review](collaboration.md#pre-completion-review),
+the order is author → pre-completion review → verify. Verify starts only after the
+round is accepted. Each result of the author, including a correction that verify
+requested, is reviewed by a new round before verify runs again. The two correction
+budgets, `pre_completion.max_failures` and `verify.max_failures`, are independent.
+
 ## The YAML forms
 
 ### 1. Scalar string (legacy, unchanged)

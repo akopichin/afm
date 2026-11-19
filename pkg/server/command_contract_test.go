@@ -397,7 +397,7 @@ func TestCommandContract_Revise(t *testing.T) {
 	t.Run("wrong_status", func(t *testing.T) {
 		env := newContractEnv(t, contractOpts{status: state.StatusPending})
 		wantResponse(t, env.postStage(t, "revise", `{"feedback":"x"}`), http.StatusBadRequest, contentTypeText,
-			textBody("stage is pending, not running, awaiting_approval or awaiting_assistants"))
+			textBody("stage is pending, not running, awaiting_approval, awaiting_assistants or awaiting_pre_completion"))
 	})
 
 	t.Run("unknown_stage", func(t *testing.T) {

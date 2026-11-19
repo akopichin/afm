@@ -9,10 +9,12 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/akopichin/afm-engine/engine"
 	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
 	"github.com/akopichin/afm/contracts/accounting"
+	"github.com/akopichin/afm/contracts/assistants"
 	"github.com/akopichin/afm/contracts/budget"
 	"github.com/akopichin/afm/contracts/config"
 	"github.com/akopichin/afm/contracts/flow"
@@ -26,7 +28,7 @@ import (
 func validateFlowFile(path string) (string, error) {
 	f, err := flow.ParseFile(path)
 	if err != nil {
-		return "", fmt.Errorf("invalid flow.yaml: %w", err)
+		return "", fmt.Errorf("invalid flow.yaml: %w", nameMisplacedPreCompletion(path, err))
 	}
 	if err := validateHelperProfiles(f); err != nil {
 		return "", fmt.Errorf("invalid flow.yaml: %w", err)
@@ -35,6 +37,35 @@ func validateFlowFile(path string) (string, error) {
 		return "", fmt.Errorf("invalid flow.yaml: %w", err)
 	}
 	return fmt.Sprintf("OK: %q — %d stage(s), valid", f.Name, len(f.Stages)), nil
+}
+
+// planningOnlyAssistantsError is the contracts message for helpers on a stage that never reaches completion.
+const planningOnlyAssistantsError = "assistants requires an execution stage"
+
+// nameMisplacedPreCompletion names the pre_completion trigger the generic planning-only error omits; other errors
+// pass through. Decoding into flow.Flow reads every assistants: form contracts accept, so no helper is missed.
+func nameMisplacedPreCompletion(path string, err error) error {
+	if !strings.Contains(err.Error(), planningOnlyAssistantsError) {
+		return err
+	}
+	raw, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return err
+	}
+	var doc flow.Flow
+	if yaml.Unmarshal(raw, &doc) != nil {
+		return err
+	}
+	isPreCompletion := func(a flow.StageAssistant) bool { return a.Trigger == assistants.TriggerPreCompletion }
+	for _, s := range doc.Stages {
+		if !strings.Contains(err.Error(), fmt.Sprintf("stage %q:", s.ID)) {
+			continue
+		}
+		if slices.ContainsFunc(s.Assistants, isPreCompletion) {
+			return fmt.Errorf("%w (helper trigger %q is declared on it)", err, assistants.TriggerPreCompletion)
+		}
+	}
+	return err
 }
 
 // validateHelperProfiles checks the stage assistants and the team against the builtin default and the global

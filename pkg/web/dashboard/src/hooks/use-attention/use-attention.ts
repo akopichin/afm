@@ -1,15 +1,13 @@
 import { useMemo } from 'react'
+import { isGateBlocked } from '../../types'
 import type { Stage, StageStatus } from '../../types'
 
 export type AttentionKind = 'dialog' | 'plan' | 'failed' | 'paused' | 'assistants'
 export type Attention = { needsAttention: boolean; kind: AttentionKind | null }
 export type AttentionEntry = { stage: Stage; kind: AttentionKind }
 
-// ATTENTION_STATUSES — statuses whose STATUS ALONE is enough to need attention. 'awaiting_assistants' is
-// deliberately NOT here (Этап 7, T7.9): most of the time that status just means a required helper task is
-// still working — ordinary background progress, not something the user needs to look at. Whether it counts
-// as attention additionally depends on stage.awaitingAssistantsBlocked — see attentionKindFor below, the
-// single point that actually decides.
+// ATTENTION_STATUSES — statuses that need attention by themselves. The two helper-gate statuses are not here:
+// they are background work unless isGateBlocked, which attentionKindFor decides.
 export const ATTENTION_STATUSES: ReadonlySet<StageStatus> = new Set<StageStatus>([
   'awaiting_user_input',
   'awaiting_approval',
@@ -28,7 +26,7 @@ export function attentionKindFor(stage: Stage): AttentionKind | null {
   if (stage.status === 'awaiting_approval') return 'plan'
   if (stage.status === 'failed' || stage.status === 'hook_failed') return 'failed'
   if (stage.status === 'paused') return 'paused'
-  if (stage.status === 'awaiting_assistants') return stage.awaitingAssistantsBlocked === true ? 'assistants' : null
+  if (stage.status === 'awaiting_assistants' || stage.status === 'awaiting_pre_completion') return isGateBlocked(stage) ? 'assistants' : null
   return null
 }
 

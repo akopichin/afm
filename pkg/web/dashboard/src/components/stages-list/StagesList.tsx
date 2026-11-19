@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactElement } from 'react'
-import { STAGE_STATUS_LABELS, type Stage, type StageVerify } from '../../types'
+import { STAGE_STATUS_LABELS, isGateBlocked, type Stage, type StageVerify } from '../../types'
 import type { AccountingState, Coverage } from '../../types/cost'
 import { attentionKindFor } from '../../hooks/use-attention'
 import { formatStageDuration, type StageTimes } from '../../lib/stage-timing'
@@ -232,7 +232,7 @@ export function StagesList({
           const isExpandedBranch = hasBranch && expandedBranches.has(stage.id)
           // awaitingAssistantsBlocked (T7.9) — true only when awaiting_assistants' own required gate needs a
           // human decision, not merely "a helper is still working" (see attentionKindFor's own doc comment).
-          const awaitingAssistantsBlocked = stage.status === 'awaiting_assistants' && stage.awaitingAssistantsBlocked === true
+          const awaitingAssistantsBlocked = isGateBlocked(stage)
           return (
           <Fragment key={stage.id}>
           <li
@@ -291,7 +291,7 @@ export function StagesList({
               <QuotaCountdown quota={stage.quota} live={statusAvailable} compact />
             )}
             {awaitingAssistantsBlocked && (
-              <span className="assistants-blocked-badge" title="A required helper task needs your decision">⚠</span>
+              <span className="assistants-blocked-badge" title={stage.status === 'awaiting_pre_completion' ? 'The pre-completion review needs your decision' : 'A required helper task needs your decision'}>⚠</span>
             )}
             {isOrbitVisible(stage, collaborationEnabled) && stage.declaredAssistants !== undefined && (
               <StageOrbit

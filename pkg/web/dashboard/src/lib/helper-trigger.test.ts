@@ -4,7 +4,7 @@ import { HELPER_TRIGGERS, HELPER_TRIGGER_LABELS, helperTriggerLabel } from './he
 describe('helperTriggerLabel', () => {
   it('labels every known trigger', () => {
     expect(HELPER_TRIGGERS.map((t) => helperTriggerLabel(t))).toEqual([
-      'One shot', 'On stage completion', 'At checkpoints', 'On message',
+      'One shot', 'On stage completion', 'At checkpoints', 'On message', 'Pre-completion review',
     ])
     expect(Object.keys(HELPER_TRIGGER_LABELS).sort()).toEqual([...HELPER_TRIGGERS].sort())
   })

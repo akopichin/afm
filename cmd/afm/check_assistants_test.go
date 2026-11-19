@@ -138,3 +138,35 @@ func TestCheck_ReadsDynamicStageIds(t *testing.T) {
 		}
 	}
 }
+
+// TestCheck_ShowsPreCompletionRound seeds the round with the journal's own park transition, so the check reads it
+// back through the same replay as a real run.
+func TestCheck_ShowsPreCompletionRound(t *testing.T) {
+	chdirTemp(t)
+	runDir := makeRunState(t, "flow-20260101-120000", "impl", state.StatusAwaitingPreCompletion)
+	line := `{"seq":1,"time":"2026-01-01T12:00:00Z","stage_id":"impl","from":"pending","to":"awaiting_pre_completion",` +
+		`"event":"await_pre_completion","pre_completion":{"schema_version":1,"task_ids":["t-1"],"decision":"reviewing"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(runDir, "events.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout := captureStdout(t, func() {
+		if err := newCheckCmd().Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "awaiting_pre_completion") {
+		t.Fatalf("status missing:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "pre-completion round-1: reviewing, 0 corrections") {
+		t.Fatalf("round note missing:\n%s", stdout)
+	}
+	// The status column must fit the longest status without pushing the next column out of line.
+	if !strings.Contains(stdout, "awaiting_pre_completion"+colorReset+"  ") {
+		t.Fatalf("status column too narrow:\n%s", stdout)
+	}
+	if statusColor(state.StatusAwaitingPreCompletion) != colorYellow {
+		t.Fatal("awaiting_pre_completion must be yellow")
+	}
+}
