@@ -1,0 +1,15 @@
+schema_version: 2
+name: desktop-dev
+version: 0.1.0
+description: Spec-driven Electron delivery in an existing Desktop worktree
+entrypoint: flow.yaml
+agents: agents.yaml
+roles:
+  writer: {command: desktop-dev-writer}
+  review_runtime: {command: desktop-dev-review-runtime}
+  review_interface: {command: desktop-dev-review-interface}
+  review_integrations: {command: desktop-dev-review-integrations}
+  verifier: {command: desktop-dev-verify}
+requirements:
+  docker_auto_shim: true
+  tools: [node, npm, git, afm]

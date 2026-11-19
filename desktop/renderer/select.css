@@ -1,0 +1,90 @@
+/* Keep the dropdown on the top layer so dialogs and scrolling panels cannot clip it. */
+:where(select:not([multiple], [size])) {
+  color-scheme: dark;
+}
+:root[data-theme="light"] select { color-scheme: light; }
+
+@supports (appearance: base-select) {
+  select:not([multiple], [size]), select:not([multiple], [size])::picker(select) {
+    appearance: base-select;
+  }
+  select:not([multiple], [size]) {
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+  }
+  select:not([multiple], [size])::picker-icon {
+    content: "";
+    width: 7px;
+    height: 7px;
+    flex: none;
+    margin: -3px 3px 0 auto;
+    color: var(--text-muted);
+    border: solid currentColor;
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+  select:open::picker-icon { transform: translateY(3px) rotate(225deg); }
+  select:not([multiple], [size])::picker(select) {
+    box-sizing: border-box;
+    margin-block: 4px;
+    padding: 4px;
+    max-height: min(280px, 50dvh);
+    overflow: auto;
+    background: var(--surface-overlay);
+    color: var(--text-primary);
+    border: 1px solid color-mix(in srgb, var(--text-muted) 32%, var(--surface-overlay));
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-overlay);
+    font: 13px/1.4 var(--font-ui);
+  }
+  select:not([multiple], [size]) option {
+    min-height: 32px;
+    padding: 6px 9px;
+    gap: 10px;
+    align-items: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  select:not([multiple], [size]) option::checkmark {
+    content: "✓";
+    order: 1;
+    margin-inline-start: auto;
+    color: var(--accent-text);
+  }
+  select:not([multiple], [size]) option:checked { background: var(--surface-hover); color: var(--text-primary); }
+  select:not([multiple], [size]) option:is(:hover, :focus-visible) {
+    background: color-mix(in srgb, var(--accent-primary) 19%, var(--surface-overlay));
+    color: var(--text-primary);
+    outline: none;
+  }
+  select:not([multiple], [size]) option:disabled { color: var(--text-disabled); cursor: default; }
+}
+select:focus-visible, select:open { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+select:disabled { color: var(--text-disabled); cursor: default; }
+
+.graphite-picker {
+  position: fixed;
+  inset: auto;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 32%, var(--surface-overlay));
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+  font: 13px/1.4 var(--font-ui);
+}
+.graphite-picker [role="option"] {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; min-height: 32px; padding: 6px 9px;
+  border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-secondary);
+  text-align: start; font: inherit; cursor: pointer;
+}
+.graphite-picker [aria-selected="true"] { background: var(--surface-hover); color: var(--text-primary); }
+.graphite-picker [aria-selected="true"]::after { content: "✓"; margin-inline-start: auto; color: var(--accent-text); }
+.graphite-picker [role="option"]:is(:hover,:focus) { background: color-mix(in srgb, var(--accent-primary) 19%, var(--surface-overlay)); color: var(--text-primary); outline: none; }

@@ -1,0 +1,32 @@
+{
+  "name": "afm-desktop",
+  "productName": "AFM Desktop",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "npm run prepare:assets && electron .",
+    "prepare:assets": "node scripts/assets.js",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.js",
+    "build": "npm run prepare:assets && node scripts/build.js",
+    "demo": "npm run prepare:assets && electron . --demo",
+    "check:package": "node scripts/check-package.js",
+    "perf": "node scripts/perf.js",
+    "smoke:mac": "node scripts/smoke-mac.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@electron/asar": "4.3.2",
+    "@electron/packager": "20.3.0",
+    "electron": "45.4.1",
+    "jsdom": "26.1.0"
+  }
+}

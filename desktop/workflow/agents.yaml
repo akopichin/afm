@@ -1,0 +1,24 @@
+docker:
+  agents:
+    desktop-dev-writer:
+      type: claude
+      model: claude-sonnet-5-5
+      reasoning: medium
+      auth: {from: "env:CLAUDE_CODE_OAUTH_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN"}
+    desktop-dev-review-runtime:
+      type: codex
+      model: gpt-6.1-sol
+      reasoning: high
+    desktop-dev-review-interface:
+      type: claude
+      model: claude-sonnet-5-5
+      reasoning: medium
+      auth: {from: "env:CLAUDE_CODE_OAUTH_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN"}
+    desktop-dev-review-integrations:
+      type: codex
+      model: gpt-6.1-sol
+      reasoning: high
+    desktop-dev-verify:
+      type: codex
+      model: gpt-6.1-sol
+      reasoning: high
