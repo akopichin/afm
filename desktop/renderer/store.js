@@ -23,10 +23,13 @@ function readStore(){
   try {return JSON.parse(localStorage.getItem(storeKey)) || seed}
   catch {return seed}
 }
-if(!isDemo){seed.projects=[];seed.sources=[]}
 const state = readStore();
+// Projects and library sources belong to the main process; only the demo keeps them in the page.
+if(!isDemo){state.projects=[];state.sources=[];state.chat=[]}
+// The real assistant's providers and conversation belong to the main process; these stay until it answers.
+if(!isDemo)state.models=[{id:'claude',name:'Claude Code'},{id:'codex',name:'Codex'}].map(m=>({...m,model:'CLI default',auth:'Checking…',permission:'ask',levels:[],permissions:['ask','read','edit','yolo'],modes:{}}));
 const projects = state.projects;
-function save(){try{localStorage.setItem(storeKey,JSON.stringify(isDemo?state:{...state,projects:projects.map(p=>({...p,runs:[]}))}))}catch{}}
+function save(){try{localStorage.setItem(storeKey,JSON.stringify(isDemo?state:{...state,projects:[],sources:[],chat:[],models:[],profile:''}))}catch{}}
 const uid = () => crypto.randomUUID();
 
 if(isDemo&&!state.attentionSeeded){
@@ -39,3 +42,5 @@ if(isDemo&&!state.attentionSeeded){
   if(checkout){checkout.liveNotice=true;checkout.noticeAt=now-60000}
   state.attentionSeeded=true;save();
 }
+// Notices the main process found in running stages; the demo derives its own from sample runs.
+let attentionItems=[];

@@ -38,3 +38,11 @@ Deliver an app with the same offline dashboard/theme assets and sidecar that tes
 6. Record native cold start, keyboard timings and memory results; report any missing checks. A screenshot, fixture reply or directly opened demo page cannot establish production integration.
 
 The seed passed Finder launch and smoke:mac on Apple Silicon after an initial signing assessment interrupted startup. Keep that native gate for the final revision. Record a native pass only when the packaged production window and its temporary AFM host both respond.
+
+### Packaging evidence from the running Desktop branch
+
+DS-08 now uses the AFM_CHROME_EXECUTABLE hook in cmd/afm/run_browser.go. The Mac host passed TestStartBrowser_ChromeExecutableEnvOverridesConfig with GOWORK=off. The unmodified AFM 3.1.11 from PATH lacks this hook. During this run the host can cross-build the branch sidecar for the Linux verifier and build it natively on macOS using cached private-module dependencies. Look for desktop/dist/sidecars/{linux,darwin}-arm64/afm; these are local build outputs. The delivery writer and runtime reviewer should verify the selected sidecar's capability and platform, reject a stale override, and keep a documented reproducible native build for a clean checkout. Rebuild if the Go hook changes during review. Running --version alone cannot distinguish capability-compatible executables.
+
+On this Mac the owner may need to approve each newly built app at first launch. After packaging, retain that exact bundle, tell the owner when to open/approve it and rerun the native window check on the approved bundle. Preserve evidence of headless success and a pending native approval separately. Rebuilding between approval and retry may invalidate the approval.
+
+For a native browser-enabled run, AFM also resolves the pinned chrome-devtools-mcp 1.12.0 executable on the child PATH. The AFM Docker image supplies it; the development Mac has no system executable. Verify and document the native path on a clean Mac. Keep the stage client bundled when promising installation from the app alone, and distinguish agent/provider credentials from bundled browser tooling. No runtime dependency download.

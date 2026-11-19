@@ -13,10 +13,11 @@
     "prepare:assets": "node scripts/assets.js",
     "test": "node --test test/*.test.js",
     "check": "node scripts/check.js",
+    "sidecar": "node scripts/sidecar.js",
     "build": "npm run prepare:assets && node scripts/build.js",
     "demo": "npm run prepare:assets && electron . --demo",
     "check:package": "node scripts/check-package.js",
-    "perf": "node scripts/perf.js",
+    "perf": "node scripts/perf.js && node scripts/perf-runtime.js",
     "smoke:mac": "node scripts/smoke-mac.js"
   },
   "dependencies": {

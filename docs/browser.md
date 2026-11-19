@@ -104,3 +104,8 @@ never installs it for you.
   next start sweeps profiles whose owning process is provably gone.
 - **One app port.** The first release publishes a single app port and hands you one
   URL; arbitrary multi-service port maps are a later addition.
+
+## Hosts that provide their own browser
+
+`AFM_CHROME_EXECUTABLE` overrides `browser.executable_path` for one process tree. AFM Desktop sets it for the `afm serve` host it starts, so a stage browser opens as a tab inside the app instead of an external Chrome. The executable must accept the arguments afm gives Chrome (`--remote-debugging-pipe`, `--user-data-dir=<profile>`) and speak CDP on file descriptors 3 and 4. Unset, nothing changes.
+

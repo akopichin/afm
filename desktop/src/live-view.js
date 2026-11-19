@@ -1,5 +1,6 @@
 import { WebContentsView } from 'electron';
 import { randomUUID } from 'node:crypto';
+import { shortcutAction } from './shortcuts.js';
 
 // The tab owns a private Chromium session. Hiding the tab preserves the agent's page.
 export class LiveView {
@@ -13,12 +14,7 @@ export class LiveView {
     wc.on('will-navigate',event=>event.preventDefault());
     wc.session.setPermissionRequestHandler((_wc,_permission,reply)=>reply(false));
     wc.on('before-input-event',(event,input)=>{
-      if(input.type!=='keyDown'||input.isAutoRepeat||input.isComposing)return;
-      let action;
-      if(input.alt&&!input.control&&!input.meta&&!input.shift)
-        action={KeyA:'assistant',KeyM:'model',KeyH:'home',KeyJ:'next',KeyK:'previous'}[input.code];
-      else if((input.meta||input.control)&&!input.alt)
-        action=input.shift&&input.code==='Enter'?'launch':!input.shift&&input.code==='KeyK'?'picker':null;
+      const action=shortcutAction(input);
       if(action){event.preventDefault();window.webContents.focus();shortcut(action)}
     });
     this.ready=wc.loadFile(file);

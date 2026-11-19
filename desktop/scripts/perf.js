@@ -2,27 +2,31 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInThisContext} from 'node:vm';
 import {performance} from 'node:perf_hooks';
-import {randomUUID} from 'node:crypto';
 import os from 'node:os';
 
 const reconcile=runInThisContext(readFileSync(new URL('../renderer/inventory.js',import.meta.url),'utf8')+'\nreconcileInventory');
 const projects=[];
-const rows=Array.from({length:1000},(_,i)=>({run_id:String(i),instance_id:'instance-'+i,
-  mode:'dashboard',project_root:'/work/p'+(i%100),run_status:'running',ownership:'attached',liveness:'active'}));
-const initial=reconcile(projects,rows,randomUUID);
+const view=i=>({key:'instance-'+i+':'+i,runId:String(i),instanceId:'instance-'+i,name:'flow-'+i,projectRoot:'/work/p'+(i%100),
+  mode:'dashboard',state:'running',origin:'external',can:{open:true,cancel:false,release:false}});
+const runs=Array.from({length:1000},(_,i)=>view(i));
+const snapshotOf=()=>({host:{state:'connected'},unassigned:[],attention:[],
+  projects:Array.from({length:100},(_,p)=>({id:'p'+p,name:'p'+p,path:'/work/p'+p,runs:runs.filter((_,i)=>i%100===p).map(run=>({...run}))}))});
+const initial=reconcile(projects,snapshotOf());
 assert.equal(initial.changed.size,100);
 const original=projects.map(p=>p.runs);
 const samples=[];
 for(let i=0;i<55;i++){
+  const next=snapshotOf();
   const start=performance.now();
-  const result=reconcile(projects,rows,randomUUID);
+  const result=reconcile(projects,next);
   if(i>=5)samples.push(performance.now()-start);
   assert.equal(result.changed.size,0,'An idle poll requested a renderer update');
-  assert.equal(result.added,false,'An idle poll requested a settings write');
+  assert.equal(result.reordered,false,'An idle poll reordered Home');
 }
 projects.forEach((p,i)=>assert.equal(p.runs,original[i]));
-rows[87].run_status='finished';
-assert.equal(reconcile(projects,rows,randomUUID).changed.size,1);
+const changed=snapshotOf();
+changed.projects[87].runs[0].state='finished';
+assert.equal(reconcile(projects,changed).changed.size,1);
 samples.sort((a,b)=>a-b);
 const p95=samples[Math.ceil(.95*samples.length)-1];
 console.log(JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,cpu:os.cpus()[0]?.model,

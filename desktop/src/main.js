@@ -1,21 +1,53 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, session, WebContentsView } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
-import { access, readdir, readFile, realpath } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { parse } from 'yaml';
-import { Host, dashboardURL } from './host.js';
+import { Desktop } from './desktop.js';
 import { LiveView } from './live-view.js';
 import { afmBinary } from './binary.js';
+import { Workspace } from './workspace.js';
+import { DashboardOrigins, allowRequest } from './protocol.js';
+import { Assistant } from './assistant/assistant.js';
+import { loginShellPath } from './assistant/detect.js';
+import { registerAssistantIpc } from './assistant/ipc.js';
+import { StageBrowsers } from './stage-browser/broker.js';
+import { createInspector } from './stage-browser/bind.js';
+import { electronBackend } from './stage-browser/electron-page.js';
 
 const home = os.homedir();
-const host = new Host(home, () => afmBinary(app.isPackaged ? process.resourcesPath : undefined));
 const root = app.getAppPath();
+let window;
+// Stage browsers: runs started by the host Desktop starts open their browser stage inside the app.
+const stageBrowsers = new StageBrowsers({
+  home, inspect: createInspector(), product: 'Chrome/' + process.versions.chrome,
+  launcher: { node: process.execPath, script: path.join(root, 'src/stage-browser/companion-main.js'), env: { ELECTRON_RUN_AS_NODE: '1' } },
+  createBackend: () => electronBackend({ electron: { WebContentsView, session }, window: () => window, shortcut: action => window?.webContents.send('live:shortcut', action), blocked: afmOrigins }),
+});
+// Origins of AFM's own servers: the host endpoint and every run's API and dashboard.
+function afmOrigins() {
+  const runs = [...(workspace.snapshot?.projects ?? []).flatMap(project => project.runs), ...(workspace.snapshot?.unassigned ?? [])];
+  return [desktop.host.state.endpoint, ...runs.map(run => run.apiUrl)].filter(Boolean);
+}
+const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined),
+  hostEnv: async () => (await desktop.prefs.get()).stageBrowser ? stageBrowsers.hostEnv() : {}});
 const entry = pathToFileURL(path.join(root, 'renderer/index.html')).href;
 const demo = process.argv.includes('--demo');
-const tabOrigins = new Set();
-let window;
-let inventory = [];
+const origins = new DashboardOrigins();
+const workspace = new Workspace({ desktop, stageBrowsers });
+// A stage browser appearing or going away changes the Live tabs at once, not at the next poll.
+stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
+// A Finder-launched app lacks the login shell's PATH; it is read once, when the assistant first needs it.
+let loginPath;
+const assistant = new Assistant({
+  home, env: process.env, loginPath: () => (loginPath ??= loginShellPath(process.env)),
+  context: {
+    endpoint: async () => { await desktop.host.connect(); return desktop.host.state.endpoint; },
+    runs: () => desktop.host.runs(),
+    project: id => desktop.projects.get(id),
+  },
+  bridge: { command: process.execPath, script: path.join(root, 'src/assistant/bridge.js'), env: { ELECTRON_RUN_AS_NODE: '1' } },
+});
 
 function handle(name, handler) {
   ipcMain.handle(name, (event, ...args) => {
@@ -24,51 +56,78 @@ function handle(name, handler) {
     return handler(...args);
   });
 }
-async function lookup(runId, instanceId) {
-  return (await host.runs()).find(row => row.run_id === runId && row.instance_id === instanceId);
+async function pickFolder() {
+  const pick = await dialog.showOpenDialog(window, {properties:['openDirectory','createDirectory']});
+  return pick.canceled ? null : realpath(pick.filePaths[0]);
 }
-async function serveConfig() {
-  try { return parse(await readFile(path.join(home,'.afm','serve.yaml'),'utf8')) || {}; }
-  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+async function projectSummary(project) {
+  const details = await desktop.projectDetails(project.id);
+  return {...project, git: details.git.git, flows: details.flows.map(f=>({name:f.name,kind:'Flow',path:f.file,policy:f.policy}))};
 }
 handle('projects:pick', async () => {
-  const pick = await dialog.showOpenDialog(window, {properties:['openDirectory']});
-  if (pick.canceled) return null;
-  const folder = await realpath(pick.filePaths[0]);
-  let flows = [];
-  try { flows = (await readdir(path.join(folder,'.afm','flows'),{withFileTypes:true}))
-    .filter(f => f.isFile() && /\.ya?ml$/.test(f.name)).map(f => ({name:f.name,kind:'Flow',path:f.name})); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const git = await access(path.join(folder,'.git')).then(()=>true,()=>false);
-  return {path:folder,git,flows};
+  const folder = await pickFolder();
+  return folder ? projectSummary(await desktop.projects.add(folder)) : null;
 });
-handle('runs:list', async () => { inventory=await host.runs();return inventory; });
+handle('projects:overview', () => desktop.overview());
+handle('workspace:get', () => workspace.get());
+handle('workspace:refresh', () => workspace.refresh());
+// A folder only a run knows about has no Home entry yet; its details are readable because the host listed it.
+handle('projects:details', async (id, folder) => {
+  try { return await desktop.projectDetails(id); }
+  catch (error) {
+    const known = (await workspace.get()).unassigned.some(run => run.projectRoot === folder);
+    if (!known) throw error;
+    return desktop.folderDetails({ id, path: folder });
+  }
+});
+handle('projects:add', async folder => projectSummary(await desktop.projects.add(await realpath(expandHome(String(folder))))));
+handle('projects:remove', async id => desktop.projects.remove(id, {active:(await desktop.runs.forProject(id)).some(r=>r.state==='running')}));
+handle('sources:list', () => desktop.sources.list());
+handle('sources:add', location => desktop.sources.add({location}));
+handle('sources:pick', async () => { const folder = await pickFolder(); return folder ? desktop.sources.add({location: folder}) : null; });
+handle('sources:remove', id => desktop.sources.remove(id));
+handle('sources:refresh', id => desktop.sources.refresh(id));
+handle('prefs:get', () => desktop.prefs.get());
+handle('prefs:set', changes => desktop.prefs.set(changes));
+handle('host:status', () => desktop.host.state);
+handle('host:restart', confirm => desktop.host.restart({confirmExternal: confirm === true}));
+handle('runs:list', async () => desktop.host.runs());
+handle('runs:project', id => desktop.runs.forProject(id));
+// The same verified origin serves the embedded dashboard and the user's own browser.
 handle('runs:open', async (id,instanceId,external) => {
-  const origin=await dashboardURL(await lookup(id,instanceId));
-  tabOrigins.add(origin);
+  const origin=await desktop.runs.open(id,instanceId);
   if (external) await shell.openExternal(origin);
+  else origins.add(origin, `${instanceId}:${id}`);
   return origin;
 });
-handle('runs:start', async ({folder,kind,file,requestId,worktree}) => {
-  const config=await serveConfig();
-  const project=config.projects?.find(p=>path.resolve(p.path)===folder);
-  if(!project)throw Error('This project is not registered in the active afm serve allowlist.');
-  return host.tool('afm_run_start',{project:project.id,mode:'dashboard',request_id:requestId,
-    ...(kind==='Pipeline'?{pipeline:file}:{flow:file}),...(worktree?{worktree}:{})});
+handle('launch:preview', request => desktop.runs.preview(request));
+handle('runs:start', async request => {
+  // The first renderer sent a folder and a worktree name; accept it by registering the folder as a project.
+  const projectId = request.projectId ?? (await desktop.projects.add(request.folder)).id;
+  const explicit = request.explicit ?? (request.worktree ? 'worktree' : undefined);
+  const worktree = request.worktree ?? undefined;
+  try { return await desktop.runs.start({...request, projectId, explicit, worktree}); }
+  // Error codes do not survive IPC, so a host Desktop did not start is reported as data the UI can confirm.
+  catch (error) { if (error.code === 'external_host') return {status: 'external_host', message: error.message}; throw error; }
 });
-handle('runs:cancel', (id) => host.tool('afm_run_cancel',{run_id:id}));
-handle('models:list', async () => {
-  const models=[];
-  for(const [id,name] of [['claude','Claude Code'],['codex','Codex'],['gemini','Gemini CLI'],['ollama','Ollama']]){
-    const found=await Promise.all((process.env.PATH||'').split(path.delimiter).filter(Boolean).map(dir=>
-      access(path.join(dir,id+(process.platform==='win32'?'.exe':''))).then(()=>true,()=>false)));
-    if(found.includes(true))models.push({id,name,model:'CLI default',auth:id==='ollama'?'Local endpoint':'Existing CLI login'});
-  }
-  return models;
+handle('runs:cancel', async (id, instanceId) => {
+  instanceId ??= (await desktop.host.runs()).find(row=>row.run_id===id)?.instance_id;
+  return desktop.runs.cancel(id, instanceId);
 });
+handle('runs:release', (id, instanceId) => desktop.runs.release(id, instanceId));
+handle('runs:attach', endpoint => desktop.runs.attach(endpoint));
+registerAssistantIpc(handle, assistant, event => window?.webContents.send('assistant:event', event));
 let sampleView;
-handle('live:layout', async (bounds) => {
-  if(!demo)return;
+handle('live:focus', async stage => {
+  if(!demo){ if(typeof stage==='string') stageBrowsers.focus(stage); return; }
+  sampleView?.view.webContents.focus();
+});
+handle('live:layout', async (bounds, stage) => {
+  if(!demo){
+    if(bounds!==null&&!(['x','y','width','height'].every(key=>Number.isSafeInteger(bounds?.[key])&&bounds[key]>=0)))throw Error('Invalid tab bounds.');
+    if(typeof stage==='string')stageBrowsers.place(stage,bounds);
+    return;
+  }
   if(!bounds){sampleView?.place(null);return}
   if(!['x','y','width','height'].every(key=>Number.isSafeInteger(bounds[key])&&bounds[key]>=0))throw Error('Invalid tab bounds.');
   if(!sampleView){
@@ -77,6 +136,17 @@ handle('live:layout', async (bounds) => {
   sampleView.place(bounds);
   await sampleView.ready;
 });
+// The broker is cheap but not needed on the first-paint path, and it is off when the user turned stage browsers off.
+function startStageBrowsers(){
+  if(demo)return;
+  desktop.prefs.get().then(prefs=>prefs.stageBrowser?stageBrowsers.start():null).catch(error=>console.error('Stage browser broker:',error));
+}
+function expandHome(folder){return folder==='~'||folder.startsWith('~/')?path.join(home,folder.slice(1)):folder}
+function pushWorkspace(snapshot){
+  origins.retain(new Set([...snapshot.projects.flatMap(p=>p.runs),...snapshot.unassigned].map(run=>run.key)));
+  window?.webContents.send('workspace:update',snapshot);
+}
+workspace.onChange(pushWorkspace);
 function openWindow(){
   window=new BrowserWindow({width:1350,height:870,minWidth:480,minHeight:420,backgroundColor:'#0b111b',
     webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,preload:path.join(root,'src/preload.cjs')}});
@@ -84,21 +154,29 @@ function openWindow(){
   window.webContents.on('will-navigate',event=>event.preventDefault());
   function guard(event){
     const url=new URL(event.url);
-    if(event.isMainFrame || !(tabOrigins.has(url.origin) || demo && url.href.startsWith(pathToFileURL(path.join(root,'.generated/run.html')).href+'?'))) event.preventDefault();
+    if(event.isMainFrame || !(origins.has(url.origin) || demo && url.href.startsWith(pathToFileURL(path.join(root,'.generated/run.html')).href+'?'))) event.preventDefault();
   }
   window.webContents.on('will-frame-navigate',guard);
   window.webContents.on('will-redirect',guard);
-  window.on('close',()=>{sampleView?.close();sampleView=null});
-  window.on('closed',()=>{window=null});
+  window.on('close',()=>{sampleView?.close();sampleView=null;stageBrowsers.place(null,null)});
+  window.on('closed',()=>{window=null;workspace.setVisible(false)});
+  // The sample app never talks to the real host.
+  const watch=visible=>{if(!demo)workspace.setVisible(visible)};
+  for(const [event,visible] of [['show',true],['restore',true],['hide',false],['minimize',false]])
+    window.on(event,()=>watch(visible));
+  watch(true);
   return window.loadURL(entry+(demo?'?demo=1':''));
 }
 app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, reply) => reply(false));
+  session.defaultSession.webRequest.onBeforeRequest((details, reply) =>
+    reply({ cancel: !allowRequest(details.url, { appRoot: path.resolve(root), origins, allowGitHub: demo }) }));
   session.defaultSession.registerPreloadScript({
     type: 'frame', filePath: path.join(root, 'src/dashboard-keys.cjs'),
     matches: ['http://127.0.0.1/*', 'http://localhost/*']
   });
   await openWindow();
+  startStageBrowsers();
   if (process.argv.includes('--desktop-launch-check')) {
     const ready = await window.webContents.executeJavaScript(`(async () => {
       if (!document.querySelector('#settings[open] #finish-setup')) return false;
@@ -114,5 +192,14 @@ app.whenReady().then(async () => {
   console.error(error);
   app.exit(1);
 });
-app.on('activate',()=>{if(app.isReady()&&!window)openWindow()});
+app.on('activate',()=>{if(app.isReady()&&!window)openWindow().then(()=>stageBrowsers.reattach())});
+// Quit waits for assistant providers to stop (SIGTERM, then SIGKILL after the grace period), at most a few seconds.
+let quitting=false;
+app.on('before-quit',event=>{
+  if(quitting)return;
+  event.preventDefault();quitting=true;
+  stageBrowsers.close();workspace.close();
+  const settled=Promise.allSettled([assistant.close(),desktop.close()]);
+  Promise.race([settled,new Promise(resolve=>setTimeout(resolve,6000))]).finally(()=>app.quit());
+});
 app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit()});

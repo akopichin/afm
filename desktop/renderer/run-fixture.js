@@ -87,8 +87,9 @@
       if(navigate){e.preventDefault();parent.postMessage({navigate},'*')}
       return;
     }
-    if(parent===window||!(e.metaKey||e.ctrlKey))return;
+    const primary=/Mac/i.test(navigator.platform)?e.metaKey&&!e.ctrlKey:e.ctrlKey&&!e.metaKey;
+    if(parent===window||!primary||e.altKey)return;
     const key=e.key.toLowerCase();
-    if(key==='k'||(key==='enter'&&e.shiftKey)){e.preventDefault();parent.postMessage(key==='k'?'switch-project':'new-run','*')}
+    if(e.shiftKey?key==='enter':key==='k'){e.preventDefault();parent.postMessage(key==='k'?'switch-project':'new-run','*')}
   });
 })();

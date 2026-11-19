@@ -63,7 +63,8 @@ async function main() {
       !report.stages.some(stage => stage.id === 'deliver') || report.stages.some(stage => stage.status !== 'done'))
     throw Error('Desktop delivery is incomplete. Inspect run ' + created[0]);
   run('npm', ['ci', '--no-audit', '--no-fund'], desktop);
-  for (const command of ['check', 'test', 'perf', 'build', 'check:package', 'smoke:mac']) run('npm', ['run', command], desktop);
+  // The sidecar is rebuilt natively from the final worktree, so the app never carries a stale or foreign AFM.
+  for (const command of ['sidecar', 'check', 'test', 'perf', 'build', 'check:package', 'smoke:mac']) run('npm', ['run', command], desktop);
   console.log('Ready: ' + path.join(desktop, 'dist', 'AFM Desktop-darwin-' + process.arch, 'AFM Desktop.app'));
 }
 

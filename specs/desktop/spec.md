@@ -26,6 +26,7 @@ The first delivery is a local macOS application. A person opens AFM Desktop.app,
 | Launch flow/pipeline in project | Command Shift Enter | Ctrl Shift Enter |
 | Next / previous item needing attention | Option J / K | Alt J / K |
 | Toggle Desktop assistant | Option A | Alt A |
+| Give the keyboard to the Live view | Option L | Alt L |
 | Quick provider, model and reasoning chooser | Option M | Alt M |
 | Enter / leave dashboard stage focus | F / Escape | F / Escape |
 | Picker, launcher and theme selects | Arrow keys, Enter, Escape; tab restores normal focus traversal | Same |
@@ -46,3 +47,19 @@ On a Mac measure ten packaged launches to usable Home (initial p95 target 3 s) a
 ## Release follow-up
 
 Consider desktop-only ds-v* tags (first candidate ds-v0.0.1), a macOS archive/DMG and Homebrew cask, a Windows installer and Linux package after native validation. Add mutually exclusive tag filters for the CLI and desktop release jobs when introducing CI. Confirm native host locking support per platform before advertising it.
+
+## Delivery evidence (headless, Linux arm64 container)
+
+Run from `desktop/`. Node v22.23.5, Electron 45.4.1 (package only), AFM sidecar `afm version 3.1.11-desktop.dev` (sha256 `2553f4e8…a569`, built from this branch on the host; the container cannot fetch the private engine module, so `npm run sidecar` is run by the Mac wrapper).
+
+| Command | Expected output | Observed |
+| --- | --- | --- |
+| `npm run check` | exit 0, no output after the banner | pass |
+| `npm test` | `# pass 120`, `# fail 0` | pass (includes real `afm serve`/`afm run` in temporary homes) |
+| `npm run perf` | inventory p95 < 50 ms, 0 identical updates, 0 outstanding requests/subscribers | p95 0.9 ms / 2.6 ms, 0, 0 |
+| `npm run build && npm run check:package` | `… afm version 3.1.11-desktop.dev linux/arm64` | pass; packaged AFM equals the staged sidecar |
+| `AFM_DESKTOP_BINARY=/usr/local/bin/afm node scripts/build.js` | refused: no `AFM_CHROME_EXECUTABLE` support | refused |
+
+Review findings are resolved with regressions in `test/review-fixes.test.js` and `test/sidecar.test.js` (runtime RR-01–06, interface UI-1–6, assistant/browser R1–R8).
+
+Not verified (native Mac gate, pending): Finder launch and `npm run smoke:mac` on the final bundle; native layout against `reference/*.png`; drag over a native Live view; the real DOM shared with an agent through chrome-devtools-mcp and Electron's debugger; blocking of a real AFM dashboard inside a stage page; hidden-view CPU; the quit handler with a real provider; cold start, keyboard latency and process-tree RSS; real Claude Code/Codex replies. Known gaps: an explicit `current`/`branch` launch of a flow that declares `worktrees: true` stays refused (the CLI has no switch to turn the policy off); stage handles are bound through the run's own API, not by process identity (the host exposes none); Windows is out of scope (no host locking).

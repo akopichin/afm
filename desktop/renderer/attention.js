@@ -5,15 +5,25 @@ $('home').title='All projects · '+altKey+'H';
 let cursorNotice=null;
 let focusedFrame=null;
 let pendingStage=null;
+// Notices of the real app come from running stages; the demo derives them from its sample runs.
+function nativeNotices(){
+  const byKey=new Map(projects.flatMap(p=>p.runs.map(r=>[r.key,{p,r}])));
+  return attentionItems.flatMap(item=>{
+    const target=byKey.get(item.runKey);
+    return target?[{id:item.id,...target,at:item.seq,text:item.text,stage:item.stageId,stageName:item.stageName}]:[];
+  });
+}
 function notices(){
+  if(!isDemo)return nativeNotices();
   return activeRuns().flatMap(({p,r})=>{
     const base={p,r,at:r.noticeAt||0};
-    if(r.state==='review')return [{...base,text:'Approve plan',stage:'review-plan'}];
-    if(r.state==='question')return [{...base,text:'Answer question',stage:'delivery'}];
-    if(r.live&&r.liveNotice)return [{...base,text:'Live browser ready',stage:''}];
+    if(r.state==='review')return [{...base,id:r.id+':review-plan',text:'Approve plan',stage:'review-plan',stageName:'review-plan'}];
+    if(r.state==='question')return [{...base,id:r.id+':delivery',text:'Answer question',stage:'delivery',stageName:'delivery'}];
+    if(r.live&&r.liveNotice)return [{...base,id:r.id+':live',text:'Live browser ready',stage:''}];
     return [];
-  }).sort((a,b)=>a.at-b.at||a.r.id.localeCompare(b.r.id));
+  }).sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id));
 }
+dashboards.isWaiting=id=>notices().some(item=>item.r.id===id);
 function closeQueue(){
   $('notice-list').hidden=true;
   $('all-notices').setAttribute('aria-expanded','false');
@@ -24,7 +34,7 @@ function paintQueue(){
   if(!items.length)closeQueue();
   $('notice-count').textContent=items.length+'';
   $('next-notice').title='Next notification · '+altKey+'J';
-  $('notice-list').innerHTML=`<div class="queue-title"><strong>Notifications</strong><kbd>${altKey}J / K</kbd></div>`+items.map(({p,r,text})=>`<button data-notice="${esc(r.id)}"><span><strong>${esc(p.name)}</strong> / ${esc(r.flow)}</span><small>${text}</small></button>`).join('');
+  $('notice-list').innerHTML=`<div class="queue-title"><strong>Notifications</strong><kbd>${altKey}J / K</kbd></div>`+items.map(({id,p,r,text,stageName})=>`<button data-notice="${esc(id)}"><span><strong>${esc(p.name)}</strong> / ${esc(r.flow)}</span><small>${esc(text)}${stageName?' · '+esc(stageName):''}</small></button>`).join('');
 }
 function closeFocus(){
   if(focusedFrame)focusedFrame.contentWindow?.postMessage('exit-stage-focus','*');
@@ -38,7 +48,7 @@ function deliverStage(){
 }
 function jumpTo(item){
   if(!item)return;
-  closeQueue();closeFocus();cursorNotice={id:item.r.id,at:item.at};
+  closeQueue();closeFocus();cursorNotice={id:item.id,at:item.at};
   pendingStage=item.stage?item:null;
   if(!item.stage){item.r.liveNotice=false;save()}
   openProject(item.p,item.r,item.stage?'run':'live');
@@ -50,7 +60,7 @@ function stepNotice(direction){
   if(!items.length)return;
   let target;
   if(cursorNotice){
-    const later=item=>item.at-cursorNotice.at||item.r.id.localeCompare(cursorNotice.id);
+    const later=item=>item.at-cursorNotice.at||item.id.localeCompare(cursorNotice.id);
     target=direction>0?items.find(item=>later(item)>0):items.findLast(item=>later(item)<0);
   }
   jumpTo(target||(direction>0?items[0]:items.at(-1)));
@@ -62,6 +72,12 @@ function navigateApp(command){
     closeQueue();closeFocus();toggleChat(open);return;
   }
   if(command==='model'){showQuickModel();return}
+  if(command==='live'){
+    // The native Live view is outside the page's tab order; this hands it the keyboard.
+    const tab=$('native-live-tab');
+    if(tab&&window.nativeAFM?.focusLive)nativeAFM.focusLive(tab.dataset.stageBrowser||null).catch(()=>{});
+    return;
+  }
   if(command==='home'){
     cursorNotice=null;pendingStage=null;closeFocus();closeQueue();location.hash='';
     $('home').focus();return;
@@ -74,13 +90,13 @@ $('all-notices').onclick=()=>{
   $('notice-list').hidden=!open;$('all-notices').setAttribute('aria-expanded',String(open));
   if(open)$('notice-list').querySelector('button')?.focus();
 };
-$('notice-list').onclick=e=>{const id=e.target.closest('button')?.dataset.notice;if(id)jumpTo(notices().find(item=>item.r.id===id))};
+$('notice-list').onclick=e=>{const id=e.target.closest('button')?.dataset.notice;if(id)jumpTo(notices().find(item=>item.id===id))};
 document.addEventListener('pointerdown',e=>{if(!$('attention').contains(e.target))closeQueue()});
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented||e.isComposing||e.repeat||document.querySelector('dialog[open]'))return;
   if(e.key==='Escape'&&!$('notice-list').hidden){closeQueue();$('all-notices').focus();return}
   if(e.altKey&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey){
-    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant'}[e.code];
+    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant',KeyL:'live'}[e.code];
     if(command){e.preventDefault();navigateApp(command)}return;
   }
   if(e.target.closest('input,textarea,select,[contenteditable="true"]')||e.ctrlKey||e.metaKey||e.shiftKey)return;

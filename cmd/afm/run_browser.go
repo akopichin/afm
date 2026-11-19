@@ -34,10 +34,17 @@ var dockerProtocolProbe = func(argv []string) (string, int) {
 	return string(out), code
 }
 
+// chromeExecutableEnv is an opt-in override of the Chrome executable. AFM Desktop sets it for the host it starts,
+// so a stage browser opens inside the app; unset, nothing changes.
+const chromeExecutableEnv = "AFM_CHROME_EXECUTABLE"
+
 // startBrowser builds and owns the managed browser Manager for a run. It generates its own random epoch
 // (never a run id).
 func startBrowser(cfg config.Config, mode browser.BrowserMode) (*browser.Manager, *browser.Descriptor, func(), error) {
 	noop := func() {}
+	if path := os.Getenv(chromeExecutableEnv); path != "" {
+		cfg.Browser.ExecutablePath = path
+	}
 	st, err := browserPreflightFn(cfg, mode)
 	if err != nil {
 		return nil, nil, noop, err // EnableOn hard failure

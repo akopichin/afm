@@ -170,3 +170,21 @@ func TestStartBrowser_DockerFreshAndResumedGetFreshEpoch(t *testing.T) {
 		t.Fatalf("docker app URL must be a host loopback publish, got %q", d1.AppURL)
 	}
 }
+
+func TestStartBrowser_ChromeExecutableEnvOverridesConfig(t *testing.T) {
+	var seen string
+	prev := browserPreflightFn
+	t.Cleanup(func() { browserPreflightFn = prev })
+	browserPreflightFn = func(cfg config.Config, _ browser.BrowserMode) (config.BrowserStatus, error) {
+		seen = cfg.Browser.ChromePath()
+		return config.BrowserStatus{}, nil
+	}
+	cfg := config.Config{Browser: config.BrowserConfig{ExecutablePath: "/configured/chrome"}}
+	if _, _, _, err := startBrowser(cfg, browser.BrowserModeNative); err != nil || seen != "/configured/chrome" {
+		t.Fatalf("without the env the configured path must win: seen=%q err=%v", seen, err)
+	}
+	t.Setenv(chromeExecutableEnv, "/desktop/stage-chrome")
+	if _, _, _, err := startBrowser(cfg, browser.BrowserModeNative); err != nil || seen != "/desktop/stage-chrome" {
+		t.Fatalf("the env override must reach preflight and launch: seen=%q err=%v", seen, err)
+	}
+}

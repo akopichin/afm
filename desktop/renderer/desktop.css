@@ -91,3 +91,7 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 .model-tools {display:flex;align-items:center;justify-content:space-between;gap:6px}
 #quick-model-key {flex:none;font:11px var(--font-mono);padding:2px 5px;color:var(--text-muted);border:1px solid var(--separator-subtle);border-radius:4px}
 #native-error {padding:6px 16px;color:var(--attention);background:var(--surface-tool);font-size:12px}
+.bubble.streaming:last-child p::after {content:'▍';color:var(--accent-primary);margin-left:1px}
+.bubble .tool {margin:8px 0 0;padding:6px 8px;border:1px solid var(--separator-subtle);border-radius:6px;background:var(--surface-tool);font-size:12px;overflow-wrap:anywhere}
+.bubble .tool.error {border-color:var(--attention)}.bubble .tool small {color:var(--text-muted)}.tool-error,.bubble-error {color:var(--attention);margin-top:6px}
+.bubble .approval {margin:8px 0 0;padding:8px;border:1px solid var(--attention);border-radius:6px;background:var(--surface-tool)}.approval code {display:block;margin:6px 0;font-size:11px;overflow-wrap:anywhere;color:var(--text-muted)}.approval .actions {display:flex;gap:8px;justify-content:flex-end}

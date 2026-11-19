@@ -8,22 +8,30 @@ let choice=0, matches=[], settingsTab='models', onboarding=false;
 const permissionLabels={ask:'Ask before actions',read:'Read only',edit:'Allow workspace edits',yolo:'YOLO · Full access'};
 function permissionDetail(m){
   const mode=m.permission||'ask';
+  if(!isDemo)return m.modes[mode]||m.problem||(m.found===null?'Checking…':'Not available with this provider.');
   if(m.id==='claude')return {ask:'--permission-mode default',read:'--permission-mode plan',edit:'--permission-mode acceptEdits',yolo:'--dangerously-skip-permissions'}[mode];
   if(m.id==='codex')return {ask:'--sandbox workspace-write · --ask-for-approval on-request',read:'--sandbox read-only',edit:'--sandbox workspace-write · --ask-for-approval never',yolo:'--dangerously-bypass-approvals-and-sandbox'}[mode];
   return 'Desktop tool permissions';
 }
 function reasoningOptions(m){
+  if(!isDemo)return option('default','Provider default',!m.reasoning||m.reasoning==='default')+m.levels.map(v=>option(v,v,v===m.reasoning)).join('');
   const reasoning=m.id==='claude'?['low','medium','high','xhigh','max']:m.id==='codex'?['minimal','low','medium','high','xhigh']:['low','medium','high'];
   return option('default','Provider default',!m.reasoning||m.reasoning==='default')+reasoning.map(v=>option(v,v,v===m.reasoning)).join('');
 }
 function profileFields(m){
   return `<div class="profile-fields"><label>Model<input id="profile-model" value="${esc(m.model==='CLI default'?'':m.model)}" placeholder="CLI default" autocomplete="off"></label>
     <label>Reasoning<select id="profile-effort">${reasoningOptions(m)}</select></label>
-    <label>Permissions<select id="profile-permissions">${Object.entries(permissionLabels).map(([k,v])=>option(k,v,k===(m.permission||'ask'))).join('')}</select></label></div>
+    <label>Permissions<select id="profile-permissions">${Object.entries(permissionLabels).filter(([k])=>isDemo||m.permissions.includes(k)).map(([k,v])=>option(k,v,k===(m.permission||'ask'))).join('')}</select></label></div>
     <p class="hint profile-mode" id="permission-detail">${esc(permissionDetail(m))}</p>`;
 }
 function wireProfileFields(){
   const m=profile();
+  if(!isDemo){
+    $('profile-model').onchange=e=>configureAssistant({model:e.target.value.trim()});
+    $('profile-effort').onchange=e=>configureAssistant({reasoning:e.target.value});
+    $('profile-permissions').onchange=e=>configureAssistant({permission:e.target.value});
+    return;
+  }
   $('profile-model').oninput=e=>{
     m.model=e.target.value.trim()||'CLI default';save();drawChat();
     document.querySelector('#settings-body .workflow.chosen small').textContent=m.model+' · '+m.auth;
@@ -44,7 +52,27 @@ function openLauncher(p,query=''){
   $('launch-hint').textContent='↑ ↓ to choose · ↵ to start';
   choice=0;updateWorkflows();
   $('launch').showModal();$('workflow-search').focus();
+  loadLaunchData();
 }
+// Flows, pipelines, Git state and preferences come from the main process, for the project chosen in the launcher.
+let launchLoad=0;
+async function loadLaunchData(){
+  if(isDemo)return;
+  const token=++launchLoad,p=targetProject();
+  if(!p)return;
+  try{
+    const [details,prefs]=await Promise.all([nativeAFM.projectDetails(p.id,p.path),nativeAFM.prefs()]);
+    if(token!==launchLoad||!$('launch').open)return;
+    const policyMode=policy=>policy?(policy.enabled?'worktree':'current'):undefined;
+    p.git=details.git.git;
+    p.flows=details.flows.map(f=>({name:f.name,kind:'Flow',path:f.file,git:policyMode(f.policy)}));
+    state.gitDefault=prefs.gitMode;
+    state.sources=details.sources.map(nativeSource);
+    updateWorkflows();
+  }catch(error){showNativeError(error)}
+}
+const nativeSource=source=>({id:source.id,name:basename(source.location),location:source.location,error:source.error,
+  items:source.entries.map(entry=>({name:entry.name,kind:'Pipeline',path:entry.id,git:entry.policy?(entry.policy.enabled?'worktree':'current'):undefined}))});
 function targetProject(){return projects.find(item=>item.id===$('launch-project').value)}
 function workspace(){
   const p=targetProject(),item=matches[choice],manual=$('launch-git').value;
@@ -53,10 +81,35 @@ function workspace(){
   const mode=item?.git||state.gitDefault;
   return {mode,name:gitModes[mode],from:item?.git?'Flow setting':'Desktop default'};
 }
+const modeSources={explicit:'This run',flow:'Flow setting',env:'Environment setting',config:'Project setting',preference:'Desktop default',folder:'Not a Git repository'};
+let previewSerial=0,attempt={signature:'',id:''};
+const slugOf=text=>text.toLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,32)||'run';
+// One request id per distinct launch, so repeating the same click never starts a second run.
+function launchRequest(projectId,item){
+  const explicit=$('launch-git').value==='auto'?undefined:$('launch-git').value;
+  const suffix=(attempt.suffix??=uid().slice(0,5)),name='desktop-'+slugOf(item.name)+'-'+suffix;
+  const request={projectId,kind:item.kind,file:item.path,explicit,branch:name,worktree:explicit==='worktree'?name:undefined};
+  const signature=JSON.stringify(request);
+  if(attempt.signature!==signature)attempt={...attempt,signature,id:uid()};
+  return {...request,requestId:attempt.id};
+}
 function updateGit(){
-  $('launch-git').disabled=!targetProject()?.git;
+  const p=targetProject();
+  $('launch-git').disabled=!p?.git;
+  if(!isDemo){showEffectiveMode(p);return}
   const w=workspace();
   $('git-hint').textContent=w.from+' · '+w.name;
+}
+async function showEffectiveMode(p){
+  const item=matches[choice],serial=++previewSerial;
+  if(!p||!item||p.external){$('git-hint').textContent=p?.external?'Folder is added to Home when the run starts':'';return}
+  try{
+    const {effective,git}=await nativeAFM.preview(launchRequest(p.id,item));
+    if(serial!==previewSerial)return;
+    $('launch-submit').disabled=Boolean(effective.blocked);
+    const names={current:'Current checkout'+(effective.branch?' · '+effective.branch:''),branch:'New branch · '+effective.branch,worktree:'New worktree · '+effective.worktree};
+    $('git-hint').textContent=effective.blocked||`${modeSources[effective.source]} · ${names[effective.mode]}${git.dirty&&effective.mode==='branch'?' · uncommitted changes stay':''}`;
+  }catch(error){if(serial===previewSerial){$('launch-submit').disabled=true;$('git-hint').textContent=error.message}}
 }
 function updateWorkflows(){
   const p=targetProject();
@@ -70,14 +123,8 @@ function updateWorkflows(){
 function startRun(){
   const p=targetProject(),item=matches[choice];
   if(!p||!item)return;
+  if(!isDemo){startNative(p,item);return}
   const ws=workspace(),id=uid();
-  if(!isDemo){
-    if(ws.mode==='branch'){showNativeError(Error('Branch-only launch is pending. Choose current checkout or worktree.'));return}
-    $('launch-submit').disabled=true;
-    window.nativeAFM.start({requestId:id,folder:p.path,kind:item.kind,file:item.path,worktree:ws.mode==='worktree'?'desktop-'+id.slice(0,8):null})
-      .then(()=>{$('launch').close();openProject(p);refreshNative()}).catch(showNativeError).finally(()=>{$('launch-submit').disabled=false});
-    return;
-  }
   const branch=(item.name.toLowerCase().replace(/[^a-z0-9-]+/g,'-').slice(0,32)||'run')+'-'+id.slice(0,5);
   const r={id,flow:item.name,kind:item.kind,workflowPath:item.path,library:item.source,source:'Desktop',state:'running',
     live:item.name==='feature-delivery',
@@ -86,8 +133,27 @@ function startRun(){
   r.noticeAt=Date.now();r.liveNotice=r.live;
   p.runs.push(r);save();$('launch').close();openProject(p,r,'run');
 }
+async function startNative(p,item){
+  $('launch-submit').disabled=true;
+  try{
+    const projectId=p.external?(await nativeAFM.addProject(p.path)).id:p.id;
+    const request=launchRequest(projectId,item);
+    let started=await nativeAFM.start(request);
+    if(started?.status==='external_host'){
+      // The host belongs to another tool; restarting it keeps runs alive but needs the user's consent.
+      if(!confirm(started.message+'\n\nRestart that host and start the run?')){showNativeError('Run not started: the AFM host was left as it is.');return}
+      started=await nativeAFM.start({...request,confirmHostRestart:true});
+    }
+    attempt={signature:'',id:''};
+    $('launch').close();
+    await refreshNative();
+    const opened=projects.find(project=>project.id===projectId)||projects.find(project=>project.path===p.path);
+    if(opened)openProject(opened);
+  }catch(error){showNativeError(error)}
+  finally{$('launch-submit').disabled=false;if($('launch').open)updateGit()}
+}
 $('launch-submit').onclick=startRun;
-$('launch-project').onchange=()=>{choice=0;updateWorkflows()};
+$('launch-project').onchange=()=>{choice=0;updateWorkflows();loadLaunchData()};
 $('launch-git').onchange=updateGit;
 $('workflow-search').oninput=()=>{choice=0;updateWorkflows()};
 $('workflow-search').onkeydown=e=>{
@@ -105,7 +171,18 @@ function openSettings(first=false){
   onboarding=first;settingsTab='models';sourceMessage='';drawSettings();
   $('settings').showModal();
   if(first)scanModels();
+  loadSettingsData();
 }
+// Library sources and Git preference are stored by the main process.
+async function loadSettingsData(){
+  if(isDemo)return;
+  try{
+    const [sources,prefs]=await Promise.all([nativeAFM.sources(),nativeAFM.prefs()]);
+    state.sources=sources.map(nativeSource);state.gitDefault=prefs.gitMode;
+    if($('settings').open&&settingsTab!=='models')drawSettings();
+  }catch(error){showNativeError(error)}
+}
+const demoModelForm=`<form id="model-form" hidden><label>Provider or CLI<input name="name" required placeholder="Ollama, Gemini CLI…"></label><label>Model or deployment<input name="model" required placeholder="Model ID"></label><label>Credential source<select name="auth"><option>Existing CLI login</option><option>Environment variable</option><option>Config file</option><option>Local endpoint</option></select></label><label id="reference-label" hidden><span>Source</span><input name="reference"></label><div class="actions"><button class="primary">Add model</button></div></form>`;
 function drawSettings(){
   $('settings-title').textContent=onboarding?'Set up AFM Desktop':'Settings';
   const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs']].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
@@ -113,12 +190,13 @@ function drawSettings(){
   if(settingsTab==='models'){
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
       <div class="choices">${state.models.map(m=>`<button class="workflow ${m.id===state.profile?'chosen':''}" data-profile="${esc(m.id)}" aria-pressed="${m.id===state.profile}"><span class="glyph">${m.id==='claude'?'✳':'›_'}</span><span><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.auth)}</small></span><span class="tick">${m.id===state.profile?'✓':''}</span></button>`).join('')}</div>
-      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button><button id="add-model">＋ Other model</button></div><p class="hint" role="status">${esc(modelScan)}</p>
-      <form id="model-form" hidden><label>Provider or CLI<input name="name" required placeholder="Ollama, Gemini CLI…"></label><label>Model or deployment<input name="model" required placeholder="Model ID"></label><label>Credential source<select name="auth"><option>Existing CLI login</option><option>Environment variable</option><option>Config file</option><option>Local endpoint</option></select></label><label id="reference-label" hidden><span>Source</span><input name="reference"></label><div class="actions"><button class="primary">Add model</button></div></form>
+      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':'<button id="test-model">Test sign-in</button>'+(profile().custom?'<button id="remove-model">Remove</button>':'')}<button id="add-model">＋ Other model</button></div><p class="hint" role="status">${esc(modelScan)}</p>
+      ${isDemo?demoModelForm:providerForm()}
       ${onboarding?'<div class="actions"><button class="primary" id="finish-setup">Continue to projects →</button></div>':''}`;
     wireProfileFields();
     $('scan-models').onclick=scanModels;
     $('add-model').onclick=()=>{const f=$('model-form');f.hidden=!f.hidden;if(!f.hidden)f.elements.name.focus()};
+    if(!isDemo){wireProviderForm();if(onboarding)$('finish-setup').onclick=()=>$('settings').close();return}
     $('model-form').elements.auth.onchange=e=>{
       const val=e.target.value,input=$('model-form').elements.reference;
       $('reference-label').hidden=val==='Existing CLI login';
@@ -136,15 +214,16 @@ function drawSettings(){
     };
     if(onboarding)$('finish-setup').onclick=()=>$('settings').close();
   }else if(settingsTab==='library'){
-    body.innerHTML=tabs+`<p class="muted">Flows and pipelines available in every project.</p><div class="source-list">${state.sources.map(s=>`<div><span><strong>${esc(s.name)}</strong><small>${s.items.length} workflows</small></span>${s.id!=='starter'?`<button class="icon" data-remove="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">×</button>`:''}</div>`).join('')}</div>
+    body.innerHTML=tabs+`<p class="muted">Flows and pipelines available in every project.</p><div class="source-list">${state.sources.map(s=>`<div><span><strong>${esc(s.name)}</strong><small>${s.error?esc(s.error):s.items.length+' workflows'}</small></span>${s.id!=='starter'?`<button class="icon" data-refresh="${esc(s.id)}" aria-label="Refresh ${esc(s.name)}">↻</button><button class="icon" data-remove="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">×</button>`:''}</div>`).join('')}</div>
       <div class="links"><button id="add-folder">＋ Local folder</button><button id="add-repo">＋ GitHub repository</button></div>
       <form id="repo-form" hidden><label>Public GitHub repository<input name="repo" required placeholder="owner/repository"></label><div class="actions"><button class="primary">Connect repository</button></div></form><p class="hint" role="status">${esc(sourceMessage)}</p>`;
-    $('add-folder').onclick=()=>importFolder('source');
+    $('add-folder').onclick=()=>isDemo?importFolder('source'):changeSource(()=>nativeAFM.pickSource());
     $('add-repo').onclick=()=>{$('repo-form').hidden=false;$('repo-form').elements.repo.focus()};
     $('repo-form').onsubmit=async e=>{
       e.preventDefault();if(remoteBusy)return;remoteBusy=true;
       const name=e.target.elements.repo.value;
       sourceMessage='Reading workflow manifests…';drawSettings();
+      if(!isDemo){remoteBusy=false;changeSource(()=>nativeAFM.addSource(/^[\w.-]+\/[\w.-]+$/.test(name.trim())?'https://github.com/'+name.trim():name.trim()));return}
       try{addSource(await gitHubSource(name))}catch(err){sourceMessage=err.message}
       finally{remoteBusy=false;if(settingsTab==='library')drawSettings()}
     };
@@ -157,8 +236,20 @@ function drawSettings(){
     <div class="setting-row"><span>Open / close assistant</span><kbd>Alt A</kbd></div>
     <div class="setting-row"><span>Assistant model</span><kbd>Alt M</kbd></div>
     <div class="setting-row"><span>Quick launch</span><kbd>${modKey} Shift Enter</kbd></div>`;
-    $('default-git').onchange=e=>{state.gitDefault=e.target.value;save()};
+    $('default-git').onchange=e=>{
+      state.gitDefault=e.target.value;save();
+      if(!isDemo)nativeAFM.setPrefs({gitMode:e.target.value}).catch(showNativeError);
+    };
   }
+}
+// Runs one source operation in the main process, then redraws the library from its stored inventory.
+async function changeSource(operation){
+  try{
+    const source=await operation();
+    sourceMessage=source?.error||(source?`${source.entries.length} workflows available in New run.`:'');
+    await loadSettingsData();
+  }catch(error){sourceMessage=error.message}
+  if(settingsTab==='library')drawSettings();
 }
 function addSource(source){
   if(!source.items.length)throw Error('No flows or pipeline manifests found in this source.');
@@ -170,7 +261,8 @@ async function scanModels(){
   const status= document.querySelector('#settings-body [role="status"]');
   modelScan='Scanning command-line agents…';if(status)status.textContent=modelScan;
   let detected=[];
-  if(window.nativeAFM){
+  if(!isDemo){await scanAssistant();return}
+  if(window.nativeAFM?.models){
     detected=await window.nativeAFM.models();
     for(const model of detected)if(!state.models.some(m=>m.id===model.id))state.models.push(model);
     modelScan=detected.length?'Found on this machine: '+detected.map(m=>m.name).join(', ')+'.':'No agent CLI found on PATH.';
@@ -218,13 +310,27 @@ for(const [id,kind] of [['folder','project'],['source-folder','source']]){
     }catch(err){showFolderError(kind,err)}
   };
 }
+// A folder chosen in the real app is registered by the main process; the page then shows it from the next snapshot.
+async function openNativeProject(summary){
+  if(!summary)return;
+  $('open-project').close();
+  await refreshNative();
+  const project=projects.find(item=>item.id===summary.id);
+  if(project)openProject(project);
+}
 $('browse-project').onclick=async()=>{
-  try{const folder=await window.nativeAFM.pickProject();if(folder)addProject(folder.path,folder.git,folder.flows)}
-  catch(error){showFolderError('project',error)}
+  try{
+    const folder=await window.nativeAFM.pickProject();
+    if(!folder)return;
+    if(isDemo)addProject(folder.path,folder.git,folder.flows);else await openNativeProject(folder);
+  }catch(error){showFolderError('project',error)}
 };
-$('path-form').onsubmit=e=>{
+$('path-form').onsubmit=async e=>{
   e.preventDefault();const path=$('project-path').value.trim();
-  if(path){addProject(path,$('path-git').checked);e.target.reset()}
+  if(!path)return;
+  if(isDemo){addProject(path,$('path-git').checked);e.target.reset();return}
+  try{await openNativeProject(await nativeAFM.addProject(path));e.target.reset()}
+  catch(error){showFolderError('project',error)}
 };
 $('settings-toggle').onclick=()=>openSettings();
 $('settings').addEventListener('close',()=>{
@@ -234,13 +340,17 @@ document.addEventListener('click',e=>{
   const el=e.target.closest('button');if(!el)return;
   if(el.hasAttribute('data-close'))el.closest('dialog')?.close();
   if(el.dataset.panel){settingsTab=el.dataset.panel;drawSettings()}
-  if(el.dataset.profile){state.profile=el.dataset.profile;save();drawSettings();drawChat()}
-  if(el.dataset.remove){state.sources=state.sources.filter(s=>s.id!==el.dataset.remove);save();drawSettings()}
+  if(el.dataset.profile&&!isDemo)configureAssistant({provider:el.dataset.profile});
+  else if(el.dataset.profile){state.profile=el.dataset.profile;save();drawSettings();drawChat()}
+  if(el.dataset.remove&&!isDemo)changeSource(async()=>{await nativeAFM.removeSource(el.dataset.remove);return null});
+  else if(el.dataset.remove){state.sources=state.sources.filter(s=>s.id!==el.dataset.remove);save();drawSettings()}
+  if(el.dataset.refresh)changeSource(()=>nativeAFM.refreshSource(el.dataset.refresh));
 });
 document.addEventListener('keydown',e=>{
-  if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key==='Enter'){e.preventDefault();openLauncher(selection().p)}
+  if(primary(e)&&e.shiftKey&&!e.altKey&&!e.isComposing&&!e.repeat&&e.key==='Enter'){e.preventDefault();openLauncher(selection().p)}
 });
 function drawChat(){
+  if(!isDemo)return drawAssistant();
   const {p,r}=selection(),m=profile();
   $('chat-context').textContent=p?`${p.name}${r?' / '+r.flow:''}`:'All projects';
   $('chat-model').textContent=[m.name,m.model,m.reasoning&&m.reasoning!=='default'?m.reasoning:null,permissionLabels[m.permission||'ask'],'Demo chat'].filter(Boolean).join(' · ');
@@ -250,10 +360,11 @@ function drawChat(){
 function toggleChat(open){
   $('assistant').hidden=!open;
   $('assistant-toggle').setAttribute('aria-expanded',String(open));
-  if(open){drawChat();$('chat-input').focus()}else $('assistant-toggle').focus();
+  if(open){drawChat();$('chat-input').focus();if(!isDemo)ensureAssistantScan()}else $('assistant-toggle').focus();
 }
 function sendMessage(text){
   if(!text.trim())return;
+  if(!isDemo)return sendAssistant(text);
   const {p,r}=selection(),context=p?[p.name,r?.flow].filter(Boolean).join(' / '):'All projects';
   state.chat.push({role:'user',text,context});$('chat-input').value='';
   const reply={role:'assistant',text:''};
@@ -285,14 +396,15 @@ function sendMessage(text){
 }
 $('assistant-toggle').onclick=()=>toggleChat($('assistant').hidden);
 $('close-chat').onclick=()=>toggleChat(false);
-$('chat-form').onsubmit=e=>{e.preventDefault();sendMessage($('chat-input').value)};
-$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendMessage(e.target.value)}};
+$('chat-form').onsubmit=e=>{e.preventDefault();if(!isDemo&&assistantChat.busy)stopAssistant();else sendMessage($('chat-input').value)};
+$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!isDemo&&assistantChat.busy)return;sendMessage(e.target.value)}};
 document.querySelector('.suggestions').onclick=e=>{if(e.target.dataset.prompt)sendMessage(e.target.dataset.prompt)};
 document.addEventListener('workspace-change',drawChat);
 $('launch-hint').title=`${modKey} Shift Enter`;
 document.querySelectorAll('[data-start]').forEach(el=>el.title=`New run (${modKey} Shift Enter)`);
 function showQuickModel(){
   if(document.querySelector('dialog[open]'))return;
+  if(!isDemo)ensureAssistantScan();
   $('quick-agent').innerHTML=state.models.map(m=>option(m.id,m.name+(m.model==='CLI default'?'':' · '+m.model),m.id===state.profile)).join('');
   fillQuickModel();$('quick-model').showModal();$('quick-model-id').select();
 }
@@ -304,6 +416,10 @@ function fillQuickModel(){
 $('quick-agent').onchange=fillQuickModel;
 $('quick-model-form').onsubmit=e=>{
   e.preventDefault();
+  if(!isDemo){
+    configureAssistant({provider:$('quick-agent').value,model:$('quick-model-id').value.trim(),reasoning:$('quick-effort').value});
+    $('quick-model').close();return;
+  }
   const m=state.models.find(item=>item.id===$('quick-agent').value);
   m.model=$('quick-model-id').value.trim()||'CLI default';
   m.reasoning=$('quick-effort').value;
