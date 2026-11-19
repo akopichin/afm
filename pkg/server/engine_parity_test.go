@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -450,6 +451,8 @@ func TestEngineParity_OptionQuestionAnswers(t *testing.T) {
 	env := newParityEnv(t, pairStages("ask", func(id string) flow.Stage { return parityAgent(t, id, "dialog_options_agent.sh") })...)
 	env.waitStatus(t, "ask-http", state.StatusAwaitingUserInput)
 	env.waitStatus(t, "ask-engine", state.StatusAwaitingUserInput)
+	env.waitQuestionNotices(t, "ask-http", 1)
+	env.waitQuestionNotices(t, "ask-engine", 1)
 	stages := env.run.Stages()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/stages/ask-http/dialog", nil)
@@ -510,14 +513,15 @@ func TestEngineParity_OptionChoiceVersusTypedText(t *testing.T) {
 			env.waitStatus(t, "pick-engine", state.StatusAwaitingUserInput)
 			stages := env.run.Stages()
 
+			env.waitQuestionNotices(t, "pick-http", 1)
+			env.waitQuestionNotices(t, "pick-engine", 1)
 			env.wantOK(t, "answer q1", fmt.Sprintf(dialogAnswerFmt, "pick-http"), answerBody("q1", c.answer, c.fromOptions))
 			if err := stages.Answer("pick-engine", "planning", "q1", c.answer, c.fromOptions); err != nil {
 				t.Fatalf("engine answer q1: %v", err)
 			}
-			// q2 is still open, so the stage keeps waiting for the user.
-			env.waitStatus(t, "pick-http", state.StatusAwaitingUserInput)
 			env.waitQuestionNotices(t, "pick-http", 2)
 			env.waitQuestionNotices(t, "pick-engine", 2)
+			env.waitStatus(t, "pick-http", state.StatusAwaitingUserInput)
 			env.wantOK(t, "answer q2", fmt.Sprintf(dialogAnswerFmt, "pick-http"), answerBody("q2", "redis", false))
 			if err := stages.Answer("pick-engine", "planning", "q2", "redis", false); err != nil {
 				t.Fatalf("engine answer q2: %v", err)
@@ -545,7 +549,12 @@ func (e *parityEnv) wantAnswersAlike(t *testing.T, runsLog, prefix string, wantF
 			}
 		}
 	}
-	wantSameFootprint(t, "answers", e.footprint(t, runsLog, prefix+"-http"), e.footprint(t, runsLog, prefix+"-engine"))
+	viaHTTP := e.footprint(t, runsLog, prefix+"-http")
+	viaEngine := e.footprint(t, runsLog, prefix+"-engine")
+	// The next question can be announced before the notice for the previous answer is recorded.
+	slices.Sort(viaHTTP.Notices)
+	slices.Sort(viaEngine.Notices)
+	wantSameFootprint(t, "answers", viaHTTP, viaEngine)
 }
 
 // While the flow is paused for review, an answer is refused the same way through both doors and writes
