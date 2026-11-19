@@ -70,6 +70,8 @@ type StartRequest struct {
 	Flow     string
 	Mode     string
 	Worktree string
+	// NoWorktree runs in the project checkout even when the flow or config enables worktrees.
+	NoWorktree bool
 	// MCPAllow limits what the run's own MCP offers: groups, or "read". Empty means every group the host allows;
 	// a host that allows none gives the run "read".
 	MCPAllow []string
@@ -209,6 +211,8 @@ func (l *Launcher) canonical(req StartRequest) (LaunchParams, error) {
 		return LaunchParams{}, invalidRequest("mode must be %q or %q", ModeCore, ModeDashboard)
 	case req.Worktree != "" && !namePattern.MatchString(req.Worktree):
 		return LaunchParams{}, invalidRequest("worktree %q is not a plain name", req.Worktree)
+	case req.NoWorktree && req.Worktree != "":
+		return LaunchParams{}, invalidRequest("give either worktree or no_worktree, not both")
 	case req.Task != "" && (len(req.Task) > maxTaskBytes || !utf8.ValidString(req.Task) || strings.TrimSpace(req.Task) == ""):
 		return LaunchParams{}, invalidRequest("task must be non-blank UTF-8 text of at most %d bytes", maxTaskBytes)
 	case req.Pipeline != "" && req.Flow != "":
@@ -223,7 +227,7 @@ func (l *Launcher) canonical(req StartRequest) (LaunchParams, error) {
 		return LaunchParams{}, invalidRequest("%v", err)
 	}
 	return LaunchParams{
-		Project: req.Project, Pipeline: req.Pipeline, Flow: req.Flow, Mode: req.Mode, Worktree: req.Worktree,
+		Project: req.Project, Pipeline: req.Pipeline, Flow: req.Flow, Mode: req.Mode, Worktree: req.Worktree, NoWorktree: req.NoWorktree,
 		MCPAllow: groups, TaskSHA256: TaskDigest(req.Task),
 	}, nil
 }
@@ -253,6 +257,9 @@ func (l *Launcher) prepare(req StartRequest, params LaunchParams) ([]string, err
 	}
 	if req.Worktree != "" {
 		argv = append(argv, "--worktree", req.Worktree)
+	}
+	if req.NoWorktree {
+		argv = append(argv, "--no-worktree")
 	}
 	if req.Pipeline != "" {
 		pipeline, ok := l.cfg.Config.Pipeline(req.Pipeline)

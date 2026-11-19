@@ -75,6 +75,7 @@ func newRunCmdWith(deps runDeps) *cobra.Command {
 	var worktreeClear bool
 	var worktreeClearForce bool
 	var worktreeName string
+	var noWorktree bool
 	var mcpFlag bool
 	var mcpOff bool
 	var mcpAllow string
@@ -173,6 +174,11 @@ func newRunCmdWith(deps runDeps) *cobra.Command {
 				defer registrar.Close()
 			}
 
+			// Before the pipeline or flow is read: a contradictory request must create nothing.
+			if noWorktree && worktreeName != "" {
+				return fmt.Errorf("--no-worktree and --worktree cannot be used together")
+			}
+
 			var f *flow.Flow
 			var flowPath string
 			var plan *pipelinePlan
@@ -190,6 +196,10 @@ func newRunCmdWith(deps runDeps) *cobra.Command {
 				if f, err = flow.ParseFile(flowPath); err != nil {
 					return fmt.Errorf("parse flow: %w", err)
 				}
+			}
+
+			if noWorktree {
+				disableWorktrees(f)
 			}
 
 			if err := config.ValidateVerifySpecs(f, cfg); err != nil {
@@ -291,6 +301,7 @@ func newRunCmdWith(deps runDeps) *cobra.Command {
 				cliMaxParallel:  maxParallel != 0,
 				launch:          launch,
 				worktreeName:    worktreeName,
+				noWorktree:      noWorktree,
 				worktreeDir:     wtDir,
 				requireApproval: requireApproval,
 				exitOnFail:      resolvedExitOnFail,
@@ -334,6 +345,7 @@ func newRunCmdWith(deps runDeps) *cobra.Command {
 	cmd.Flags().StringVar(&pf.options, "pipeline-options", "", "options file (docker.agents and collaboration.profiles) layered over the pipeline package; requires --pipeline")
 	cmd.Flags().StringVar(&pf.launch, "pipeline-launch", "", "internal: launch record handed to the container")
 	_ = cmd.Flags().MarkHidden("pipeline-launch")
+	cmd.Flags().BoolVar(&noWorktree, "no-worktree", false, "run in the checkout itself even if the flow or config enables worktrees; cannot be combined with --worktree")
 	cmd.Flags().StringVar(&worktreeName, "worktree", "", "worktree/branch name (default: flow name); implies worktrees are enabled and isolates this run under .afm/runs/<name>-…")
 	return cmd
 }

@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Add `afm run --no-worktree` and `no_worktree` in `afm_run_start`: run in the project checkout even when the flow or config enables worktrees. `afm_runs_list` rows now carry the run's `pid`.
 - AFM Desktop (first macOS prototype, `desktop/`): projects and runs through `afm serve`, an app-wide assistant over Claude Code/Codex and an embedded stage browser. Not part of the CLI release.
 - Add `AFM_CHROME_EXECUTABLE`, an opt-in override of the managed browser's Chrome executable, so a host application such as AFM Desktop can provide the stage browser. Without it nothing changes. See `docs/browser.md`.
 - Add the helper trigger `pre_completion`: helpers review the stage agent's result before verify. The stage waits in the new status `awaiting_pre_completion`; a required helper that asks for changes sends the work back to the agent, limited by the new stage field `pre_completion.max_failures` (default 1). Update afm-engine to v1.2.3 and contracts to v0.4.0. See `docs/collaboration.md`.

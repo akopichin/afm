@@ -58,34 +58,31 @@ async function readYAML(file) {
   catch { return null; }
 }
 
-// Chooses the launch mode and explains it. An explicit choice beats the flow's policy, which beats
-// the Desktop preference. A flow that declares worktrees cannot be launched in the current checkout:
-// the AFM CLI has no switch that turns the declared policy off, so those choices are refused here.
+// Chooses the launch mode and explains it. An explicit choice beats the flow's policy, which beats the Desktop
+// preference. Running in place against an enabled policy is sent to AFM as `no_worktree` (`noWorktree` below).
 export function resolveMode({ gitInfo, policy, preference = 'current', explicit, flowName, branchName, worktreeName }) {
   if (!gitInfo.git) {
     if (explicit && explicit !== 'current') return blocked('This folder is not a Git repository.');
-    return { mode: 'current', source: 'folder', blocked: null, branch: null, worktree: null };
+    return { mode: 'current', source: 'folder', blocked: null, branch: null, worktree: null, noWorktree: false };
   }
   const mode = explicit || (policy?.enabled ? 'worktree' : policy ? 'current' : preference);
   const source = explicit ? 'explicit' : policy ? policy.source : 'preference';
-  if (policy?.enabled && mode !== 'worktree') {
-    return blocked('This flow declares worktrees: true, so it always runs in its own worktree.');
-  }
+  const noWorktree = Boolean(policy?.enabled) && mode !== 'worktree';
   if (mode !== 'current' && !gitInfo.head) return blocked('The repository has no commits yet, so it cannot branch.');
   if (mode === 'worktree') {
     const name = worktreeName || flowName;
     if (!validWorktreeName(name)) return blocked('Choose a worktree name using letters, digits, dots, dashes or underscores.');
-    return { mode, source, blocked: null, branch: name, worktree: name };
+    return { mode, source, blocked: null, branch: name, worktree: name, noWorktree: false };
   }
   if (mode === 'branch') {
     if (!validWorktreeName(branchName)) return blocked('Choose a branch name using letters, digits, dots, dashes or underscores.');
-    return { mode, source, blocked: null, branch: branchName, worktree: null };
+    return { mode, source, blocked: null, branch: branchName, worktree: null, noWorktree };
   }
   if (mode !== 'current') return blocked('Unknown Git mode.');
-  return { mode, source, blocked: null, branch: gitInfo.branch, worktree: null };
+  return { mode, source, blocked: null, branch: gitInfo.branch, worktree: null, noWorktree };
 }
 
-function blocked(reason) { return { mode: null, source: null, blocked: reason, branch: null, worktree: null }; }
+function blocked(reason) { return { mode: null, source: null, blocked: reason, branch: null, worktree: null, noWorktree: false }; }
 
 // Creates the branch in place. `switch -c` carries uncommitted changes along and refuses an existing
 // branch, so nothing the user has can be discarded. Returns a function that undoes the switch.

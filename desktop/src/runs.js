@@ -23,7 +23,7 @@ export function runView(row, ledger = {}) {
   const dashboard = alive && row.mode === 'dashboard' && ['attached', 'managed'].includes(row.ownership) && state !== 'mismatch';
   return {
     key: `${row.instance_id}:${row.run_id}`, runId: row.run_id, instanceId: row.instance_id, name: row.run_name,
-    projectRoot: row.project_root, mode: row.mode, apiUrl: row.api_url, ownership: row.ownership,
+    projectRoot: row.project_root, pid: row.pid ?? null, mode: row.mode, apiUrl: row.api_url, ownership: row.ownership,
     origin: ledger[row.launch?.launch_id] ? 'desktop' : 'external', launchState: row.launch?.state ?? null,
     status: row.run_status ?? null, attention: Boolean(row.attention_required), state,
     can: { open: dashboard, cancel: actions.includes('cancel'), release: actions.includes('release'),
@@ -152,6 +152,7 @@ export class Runs {
       request_id: requestId, project: plan.project.id, mode: 'dashboard',
       ...(kind === 'Pipeline' ? { pipeline: plan.entry.id } : { flow: plan.entry.id }),
       ...(plan.effective.mode === 'worktree' ? { worktree: plan.effective.worktree } : {}),
+      ...(plan.effective.noWorktree ? { no_worktree: true } : {}),
       ...(task ? { task } : {}),
     };
     await this.#updateLedger(all => ({ ...all, [requestId]: { ...all[requestId], fingerprint, at: all[requestId]?.at ?? new Date().toISOString(),

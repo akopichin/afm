@@ -17,8 +17,13 @@ test('mode selection: explicit beats flow policy beats preference', () => {
   assert.equal(pick({ policy: { enabled: false, source: 'flow' }, preference: 'worktree' }).mode, 'current');
   assert.equal(pick({ policy: { enabled: false, source: 'flow' }, explicit: 'worktree' }).source, 'explicit');
   assert.equal(pick({ explicit: 'current', preference: 'worktree' }).mode, 'current');
-  const forced = pick({ policy: { enabled: true, source: 'flow' }, explicit: 'current' });
-  assert.match(forced.blocked, /always runs in its own worktree/);
+  const policy = { enabled: true, source: 'flow' };
+  for (const explicit of ['current', 'branch']) {
+    const choice = pick({ policy, explicit });
+    assert.deepEqual([choice.blocked, choice.mode, choice.noWorktree], [null, explicit, true], 'an explicit choice outranks worktrees: true and asks AFM to switch it off');
+  }
+  assert.equal(pick({ policy, explicit: 'worktree' }).noWorktree, false);
+  assert.equal(pick({ policy: { enabled: false, source: 'flow' }, explicit: 'current' }).noWorktree, false, 'nothing to switch off');
 });
 
 test('mode selection handles non-git folders, bad names and empty repositories', () => {

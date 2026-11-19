@@ -377,7 +377,9 @@ Set `worktrees: true` at the top of a flow to run its stages in a dedicated git
 worktree. This is off by default. A flow setting overrides `AFM_WORKTREES` and
 `config.yaml`'s `worktrees.enabled` in either direction. Pass
 `afm run --worktree <name>` to use a named worktree for this invocation; the flag
-enables worktrees even if the flow or config disables them.
+enables worktrees even if the flow or config disables them. Pass `afm run --no-worktree`
+for the opposite: the run uses the checkout itself even if the flow declares
+`worktrees: true`; it cannot be combined with `--worktree`.
 
 ```yaml
 name: my-feature

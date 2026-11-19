@@ -43,6 +43,7 @@ type cycleLoop struct {
 	cliMaxParallel  bool          // --max-parallel задан и сильнее max_parallel флоу
 	launch          launchMode
 	worktreeName    string
+	noWorktree      bool
 	worktreeDir     string
 	requireApproval bool
 	exitOnFail      bool
@@ -222,10 +223,18 @@ func (l cycleLoop) reload(prev *flow.Flow, prevHooks []lifecyclehooks.Registered
 }
 
 func (l cycleLoop) readFlow() (*flow.Flow, error) {
+	var f *flow.Flow
+	var err error
 	if l.loadFlow != nil {
-		return l.loadFlow()
+		f, err = l.loadFlow()
+	} else {
+		f, err = flow.ParseFile(l.flowPath)
 	}
-	return flow.ParseFile(l.flowPath)
+	// A reloaded flow keeps the launch's --no-worktree, or every reload would look like a worktree change.
+	if err == nil && f != nil && l.noWorktree {
+		disableWorktrees(f)
+	}
+	return f, err
 }
 
 // checkReloadCompatible отклоняет правки, меняющие worktree или Docker-монтирование: их создаёт

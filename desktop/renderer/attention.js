@@ -73,9 +73,15 @@ function navigateApp(command){
   }
   if(command==='model'){showQuickModel();return}
   if(command==='live'){
-    // The native Live view is outside the page's tab order; this hands it the keyboard.
-    const tab=$('native-live-tab');
-    if(tab&&window.nativeAFM?.focusLive)nativeAFM.focusLive(tab.dataset.stageBrowser||null).catch(()=>{});
+    // The native Live view is outside the page's tab order; this opens the run's Live tab if needed and hands it the keyboard.
+    closeFocus();
+    const focusLive=()=>{
+      const tab=$('native-live-tab');
+      if(tab&&window.nativeAFM?.focusLive)nativeAFM.focusLive(tab.dataset.stageBrowser||null).catch(()=>{});
+    };
+    const active=document.querySelector('.tab.active[data-run]');
+    const opener=active&&!$('native-live-tab')?document.querySelector(`.tab[data-view="live"][data-run="${active.dataset.run}"]`):null;
+    if(opener){opener.click();setTimeout(focusLive,60)}else focusLive();
     return;
   }
   if(command==='home'){
@@ -131,7 +137,7 @@ window.addEventListener('message',e=>{
     document.body.classList.toggle('desktop-focus',Boolean(focusedFrame));
     if(focusedFrame)frame.focus();
   }
-  if(['home','next','previous','model','assistant'].includes(msg?.navigate))navigateApp(msg.navigate);
+  if(['home','next','previous','model','assistant','live'].includes(msg?.navigate))navigateApp(msg.navigate);
   if(msg==='stage-ready')deliverStage();
   if(msg==='stage-opened')pendingStage=null;
 });

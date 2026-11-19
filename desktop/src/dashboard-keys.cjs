@@ -26,7 +26,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown',e=>{
     if(e.isComposing||e.repeat||parent===window||document.querySelector('dialog[open]'))return;
     if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
-      const navigate={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant'}[e.code];
+      const navigate={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant',KeyL:'live'}[e.code];
       if(navigate){e.preventDefault();parent.postMessage({navigate},'*')}
       return;
     }

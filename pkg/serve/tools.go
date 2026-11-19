@@ -31,14 +31,15 @@ const (
 type emptyInput struct{}
 
 type startInput struct {
-	RequestID string   `json:"request_id" jsonschema:"your idempotency key: repeating it with the same parameters returns the same launch, with other parameters it is refused"`
-	Project   string   `json:"project" jsonschema:"project id from serve.yaml"`
-	Pipeline  string   `json:"pipeline,omitempty" jsonschema:"pipeline id from serve.yaml; give this or flow"`
-	Flow      string   `json:"flow,omitempty" jsonschema:"flow file name inside the project's .afm/flows; give this or pipeline"`
-	Mode      string   `json:"mode" jsonschema:"core (HTTP API only) or dashboard (API and Web UI)"`
-	Worktree  string   `json:"worktree,omitempty" jsonschema:"worktree name; a second run of the same flow in the same project needs its own"`
-	MCPAllow  []string `json:"mcp_allow,omitempty" jsonschema:"permissions of the run's own MCP: reply, stages, approve, budget, or read; default is what the host allows"`
-	Task      string   `json:"task,omitempty" jsonschema:"starting prompt text, appended to the flow's prompt"`
+	RequestID  string   `json:"request_id" jsonschema:"your idempotency key: repeating it with the same parameters returns the same launch, with other parameters it is refused"`
+	Project    string   `json:"project" jsonschema:"project id from serve.yaml"`
+	Pipeline   string   `json:"pipeline,omitempty" jsonschema:"pipeline id from serve.yaml; give this or flow"`
+	Flow       string   `json:"flow,omitempty" jsonschema:"flow file name inside the project's .afm/flows; give this or pipeline"`
+	Mode       string   `json:"mode" jsonschema:"core (HTTP API only) or dashboard (API and Web UI)"`
+	Worktree   string   `json:"worktree,omitempty" jsonschema:"worktree name; a second run of the same flow in the same project needs its own"`
+	NoWorktree bool     `json:"no_worktree,omitempty" jsonschema:"run in the project checkout even if the flow or config enables worktrees; not with worktree"`
+	MCPAllow   []string `json:"mcp_allow,omitempty" jsonschema:"permissions of the run's own MCP: reply, stages, approve, budget, or read; default is what the host allows"`
+	Task       string   `json:"task,omitempty" jsonschema:"starting prompt text, appended to the flow's prompt"`
 }
 
 type attachInput struct {
@@ -79,6 +80,7 @@ type runEntry struct {
 	RunName           string       `json:"run_name,omitempty"`
 	APIURL            string       `json:"api_url,omitempty"`
 	Docker            bool         `json:"docker,omitempty"`
+	PID               int          `json:"pid,omitempty"`
 	Launch            *launchEntry `json:"launch,omitempty"`
 	RunStatus         string       `json:"run_status,omitempty"`
 	AttentionRequired *bool        `json:"attention_required,omitempty"`
@@ -177,7 +179,7 @@ func (g *Gateway) control(ctx context.Context, tool, runID string, act func(cont
 func (g *Gateway) entry(ctx context.Context, v RunView) runEntry {
 	e := runEntry{
 		RunID: v.RunID, InstanceID: v.InstanceID, Ownership: v.Ownership, Liveness: v.Liveness, Mode: v.Mode,
-		ProjectRoot: v.Project.Root, RunName: v.Project.RunName, APIURL: v.Endpoint, Docker: v.Docker, Actions: []string{},
+		ProjectRoot: v.Project.Root, RunName: v.Project.RunName, APIURL: v.Endpoint, Docker: v.Docker, PID: v.PID, Actions: []string{},
 	}
 	if v.Launch != nil {
 		launch := launchOf(*v.Launch)

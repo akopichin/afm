@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, writeFile, access } from 'node:fs/promises';
+import { readFile, writeFile, access, mkdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -137,7 +137,8 @@ test('Git launch modes never discard project changes', fast, async t => {
 
   const preview = await desktop.runs.preview({ ...base, file: 'wt.yaml' });
   assert.deepEqual([preview.effective.mode, preview.effective.source, preview.effective.worktree], ['worktree', 'flow', 'wtflow']);
-  assert.match((await desktop.runs.preview({ ...base, file: 'wt.yaml', explicit: 'current' })).effective.blocked, /worktree/);
+  const override = (await desktop.runs.preview({ ...base, file: 'wt.yaml', explicit: 'current' })).effective;
+  assert.deepEqual([override.blocked, override.mode, override.noWorktree], [null, 'current', true], 'an explicit choice outranks the flow policy');
   assert.equal((await desktop.runs.preview({ ...base, file: 'plain.yaml' })).effective.mode, 'current');
 
   // Branch mode keeps the dirty file and stays on the new branch.
@@ -240,4 +241,27 @@ test('the workspace snapshot follows a real run, verifies its stage list and for
   origins.add(new URL(snapshot.apiUrl).origin, snapshot.key);
   origins.retain(new Set());
   assert.equal(origins.size, 0);
+});
+
+test('an explicit current or branch launch of a worktrees: true flow really runs in the checkout', fast, async t => {
+  const ctx = await tempHome(t);
+  const probe = name => `name: ${name}\nworktrees: true\nstages:\n  - id: probe\n    script: |\n      pwd > "$AFM_PROBE_DIR/${name}.cwd"\n      git branch --show-current > "$AFM_PROBE_DIR/${name}.branch"\n      sleep 20\n`;
+  const dir = await makeProject(ctx.home, 'repo', { git: true, flows: { 'cur.yaml': probe('cur'), 'br.yaml': probe('br') } });
+  const out = path.join(ctx.home, 'probe');
+  await mkdir(out);
+  ctx.env.AFM_PROBE_DIR = out;
+  const desktop = await open(t, ctx);
+  const project = await desktop.projects.add(dir);
+  const base = { projectId: project.id, kind: 'Flow' };
+  const root = await realpath(dir);
+  await desktop.runs.start({ ...base, file: 'cur.yaml', requestId: 'probe-cur', explicit: 'current' });
+  const cwd = async name => (await eventually(() => readFile(path.join(out, name), 'utf8').catch(() => null), { what: name })).trim();
+  assert.equal(await realpath(await cwd('cur.cwd')), root, 'the script ran in the project checkout, not .worktrees/');
+  assert.equal(await cwd('cur.branch'), 'main');
+  await desktop.runs.start({ ...base, file: 'br.yaml', requestId: 'probe-br', explicit: 'branch', branch: 'feat-probe' });
+  assert.equal(await realpath(await cwd('br.cwd')), root);
+  assert.equal(await cwd('br.branch'), 'feat-probe');
+  await assert.rejects(access(path.join(dir, '.worktrees')), { code: 'ENOENT' }, 'no worktree was created');
+  const running = await active(desktop);
+  assert.ok(running.length === 2 && running.every(run => Number.isSafeInteger(run.pid) && run.pid > 1), 'the host reports each run\'s process id');
 });

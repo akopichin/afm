@@ -495,3 +495,16 @@ func TestResolveWorktree_ClearHoldsLockForSubsequentRun(t *testing.T) {
 		t.Errorf("resolveWorktree(ClearWorktree) #2: worktree %s was affected: %v", clearedPath, statErr)
 	}
 }
+
+func TestDisableWorktreesOutranksFlowAndConfig(t *testing.T) {
+	on := true
+	f := &flow.Flow{Worktrees: &on}
+	cfg := config.Config{}
+	if !worktreesEnabled("", cfg, f) {
+		t.Fatal("the flow's worktrees: true must enable worktrees before the override")
+	}
+	disableWorktrees(f)
+	if worktreesEnabled("", cfg, f) {
+		t.Fatal("--no-worktree must turn the flow's worktrees off")
+	}
+}

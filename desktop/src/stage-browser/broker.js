@@ -9,7 +9,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { desktopDir, writeJSON } from '../files.js';
 import { PROTOCOL } from './companion.js';
 import { StageRouter, stageURL } from './cdp-router.js';
-import { writeWrapper } from './install.js';
+import { writeWrapper, writeMcpWrapper } from './install.js';
 import { lineFramer, MAX_MESSAGE } from './wire.js';
 
 // AFM names a stage browser's profile directory <epoch>__<stage>; the epoch is random per run process.
@@ -41,12 +41,18 @@ export class StageBrowsers extends EventEmitter {
     this.server = net.createServer(socket => this.#accept(socket));
     await new Promise((resolve, reject) => { this.server.once('error', reject); this.server.listen(this.socketPath, resolve); });
     this.wrapper = await writeWrapper(this.home, this.launcher, brokerFile(this.home));
+    if (this.launcher.mcp) this.mcpWrapper = await writeMcpWrapper(this.home, this.launcher.mcp);
     await writeJSON(brokerFile(this.home), { protocol: PROTOCOL, socket: this.socketPath, token: this.token, pid: process.pid });
     return this.wrapper;
   }
 
   // The environment that makes runs of the host Desktop starts use this broker for their browser stages.
-  async hostEnv() { return { AFM_CHROME_EXECUTABLE: await this.start() }; }
+  async hostEnv() {
+    const chrome = await this.start();
+    // The shipped chrome-devtools-mcp goes first on PATH so AFM finds it without any external install.
+    const searchPath = this.mcpWrapper ? { PATH: [path.dirname(this.mcpWrapper), process.env.PATH].filter(Boolean).join(path.delimiter) } : {};
+    return { AFM_CHROME_EXECUTABLE: chrome, ...searchPath };
+  }
 
   #accept(socket) {
     const frames = lineFramer(), decoder = new StringDecoder('utf8');

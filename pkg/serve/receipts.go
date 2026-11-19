@@ -38,6 +38,7 @@ type LaunchParams struct {
 	Flow       string   `json:"flow,omitempty"`
 	Mode       string   `json:"mode"`
 	Worktree   string   `json:"worktree,omitempty"`
+	NoWorktree bool     `json:"no_worktree,omitempty"`
 	MCPAllow   []string `json:"mcp_allow,omitempty"`
 	TaskSHA256 string   `json:"task_sha256,omitempty"`
 }

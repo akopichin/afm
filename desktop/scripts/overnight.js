@@ -64,7 +64,10 @@ async function main() {
     throw Error('Desktop delivery is incomplete. Inspect run ' + created[0]);
   run('npm', ['ci', '--no-audit', '--no-fund'], desktop);
   // The sidecar is rebuilt natively from the final worktree, so the app never carries a stale or foreign AFM.
-  for (const command of ['sidecar', 'check', 'test', 'perf', 'build', 'check:package', 'smoke:mac']) run('npm', ['run', command], desktop);
+  run('npm', ['run', 'sidecar'], desktop);
+  // One verified AFM for the tests, the package build and the package check; the hash is compared at the end.
+  process.env.AFM_DESKTOP_BINARY = path.join(desktop, 'dist', 'sidecars', 'darwin-' + process.arch, 'afm');
+  for (const command of ['check', 'test', 'perf', 'build', 'check:package', 'smoke:mac']) run('npm', ['run', command], desktop);
   console.log('Ready: ' + path.join(desktop, 'dist', 'AFM Desktop-darwin-' + process.arch, 'AFM Desktop.app'));
 }
 

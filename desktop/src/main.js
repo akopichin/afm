@@ -17,11 +17,17 @@ import { electronBackend } from './stage-browser/electron-page.js';
 
 const home = os.homedir();
 const root = app.getAppPath();
+// Files excluded from the asar archive live next to it.
+const unpacked = file => file.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 let window;
 // Stage browsers: runs started by the host Desktop starts open their browser stage inside the app.
 const stageBrowsers = new StageBrowsers({
   home, inspect: createInspector(), product: 'Chrome/' + process.versions.chrome,
-  launcher: { node: process.execPath, script: path.join(root, 'src/stage-browser/companion-main.js'), env: { ELECTRON_RUN_AS_NODE: '1' } },
+  launcher: {
+    node: process.execPath, script: path.join(root, 'src/stage-browser/companion-main.js'), env: { ELECTRON_RUN_AS_NODE: '1' },
+    // Loose files, not the asar archive: the pinned chrome-devtools-mcp is started like any Node program.
+    mcp: { node: process.execPath, script: unpacked(path.join(root, 'node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js')), env: { ELECTRON_RUN_AS_NODE: '1', CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1', CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1' } },
+  },
   createBackend: () => electronBackend({ electron: { WebContentsView, session }, window: () => window, shortcut: action => window?.webContents.send('live:shortcut', action), blocked: afmOrigins }),
 });
 // Origins of AFM's own servers: the host endpoint and every run's API and dashboard.

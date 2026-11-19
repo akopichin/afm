@@ -75,7 +75,7 @@ cycle, restart) it fails with `run_changed` and changes nothing.
 
 `afm_run_start` takes `request_id` (your idempotency key), `project`, `mode` (`core` or
 `dashboard`) and either `flow` (a file in the project's `.afm/flows`) or `pipeline`. Optional:
-`worktree`, `mcp_allow` (permissions of the run's own MCP, default what the host allows) and
+`worktree`, `no_worktree` (run in the project checkout even if the flow or config enables worktrees; not with `worktree`), `mcp_allow` (permissions of the run's own MCP, default what the host allows) and
 `task` (see [`--task`](core-mode.md#initial-task)).
 
 - Repeating a `request_id` with the same parameters returns the same launch and never starts a

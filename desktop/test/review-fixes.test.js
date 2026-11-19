@@ -336,3 +336,86 @@ test('closing the assistant waits until a provider that ignores SIGTERM is kille
   assert.ok(Date.now() - started < 5000);
   assert.equal(assistant.active.size, 0);
 });
+
+// ---- verify round: explicit Git mode, process identity, Alt+L from the dashboard, one AFM, bundled MCP ----
+
+test('an explicit current or branch launch of a worktrees: true flow tells AFM to run in the checkout', fast, async t => {
+  const ctx = await tempHome(t);
+  const folder = await makeProject(ctx.home, 'repo', { git: true, flows: { 'w.yaml': 'name: w\nworktrees: true\nstages:\n  - id: s\n    script: sleep 30\n' } });
+  const desktop = await open(t, ctx);
+  const project = await desktop.projects.add(folder);
+  const sent = [];
+  desktop.runs.host = { tool: async (name, args) => { sent.push(args); return { launch_id: 'L' + sent.length, instance_id: 'i' }; }, restart: async () => {} };
+  const base = { projectId: project.id, kind: 'Flow', file: 'w.yaml' };
+  await desktop.runs.start({ ...base, requestId: 'cur', explicit: 'current' });
+  await desktop.runs.start({ ...base, requestId: 'br', explicit: 'branch', branch: 'feature-x' });
+  await desktop.runs.start({ ...base, requestId: 'wt' });
+  assert.equal(sent[0].no_worktree, true);
+  assert.equal(sent[1].no_worktree, true);
+  assert.equal(sent[2].no_worktree, undefined, 'the flow policy alone needs no override');
+  assert.equal(sent[2].worktree, 'w');
+});
+
+test('a stage browser is tied only to the run whose process owns it', async () => {
+  const run = (id, pid, extra = {}) => ({ key: `i${id}:r${id}`, runId: `r${id}`, instanceId: `i${id}`, apiUrl: `http://127.0.0.1:400${id}`, projectRoot: '/work/shared', state: 'running', pid, ...extra });
+  const request = async url => {
+    const id = url.includes(':4001') ? 1 : 2;
+    const stages = id === 1 ? [{ id: 'live', status: 'pending' }] : [{ id: 'live', status: 'running' }];
+    return { ok: true, json: async () => url.endsWith('/api/runtime') ? { run_id: `r${id}`, instance_id: `i${id}` } : { run_id: `r${id}`, stages } };
+  };
+  const inspect = createInspector({ request });
+  const entry = { stagePart: 'live', cwd: '/work/shared', runKey: null, pid: 111 };
+  assert.equal(await inspect(entry, [run(1, 111), run(2, 222)]), null, 'the owner has not started the stage, and the other run answering proves nothing');
+  assert.equal(await inspect(entry, [run(2, 222)]), null, 'a run of another process is never the owner');
+  assert.equal(await inspect(entry, [run(2, null)]), null, 'a host that reports no process id ties nothing');
+  assert.equal((await inspect({ ...entry, pid: 222 }, [run(1, 111), run(2, 222)])).runKey, 'i2:r2');
+});
+
+test('Alt+L from the dashboard reaches the shell, which opens the Live tab and focuses it', async t => {
+  const dom = new JSDOM('<body><div id="root"></div></body>', { runScripts: 'outside-only', pretendToBeVisual: true });
+  const messages = [];
+  Object.defineProperty(dom.window, 'parent', { value: { postMessage: m => messages.push(m) } });
+  dom.window.eval(await readFile(new URL('../src/dashboard-keys.cjs', import.meta.url), 'utf8'));
+  dom.window.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { code: 'KeyL', altKey: true, bubbles: true }));
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ navigate: 'live' }]);
+
+  const focused = [];
+  const ra = runRow('ra');
+  const live = { runKey: ra.key, stageId: 'live-run', handle: 'handle-ra', url: 'http://127.0.0.1:18080/', title: 'Checkout', pages: 1 };
+  const native = Object.assign(fakeNative(snapshotOf([projectRow('a', [ra])], [], { stageBrowsers: [live] })), { focusLive: async stage => { focused.push(stage); } });
+  const { w, d, get } = await loadShell(t, { demo: false, native });
+  get('finish-setup')?.click();
+  await tick();
+  w.shell.openProject(w.shell.projects[0], w.shell.projects[0].runs[0], 'run');
+  await tick(30);
+  assert.equal(d.getElementById('native-live-tab'), null, 'the run tab, not Live, is open');
+  const frame = d.querySelector('#dashboard-host iframe:not([hidden])');
+  w.dispatchEvent(new w.MessageEvent('message', { source: frame.contentWindow, data: { navigate: 'live' } }));
+  await tick(150);
+  assert.ok(d.getElementById('native-live-tab'), 'the Live tab was opened');
+  assert.equal(focused.at(-1), 'handle-ra', 'and its native view got the keyboard');
+});
+
+test('tests and the package resolve the same AFM, and the shipped chrome-devtools-mcp starts from the package alone', async t => {
+  const { afmCandidates, stagedSidecar } = await import('../src/binary.js');
+  const saved = process.env.AFM_DESKTOP_BINARY;
+  try {
+    delete process.env.AFM_DESKTOP_BINARY;
+    assert.equal(afmCandidates()[0], stagedSidecar, 'the branch sidecar comes before PATH');
+    process.env.AFM_DESKTOP_BINARY = '/x/afm';
+    assert.deepEqual(afmCandidates(), ['/x/afm'], 'an override is the only candidate');
+    assert.deepEqual(afmCandidates('/res'), ['/res/afm'], 'a package uses its own copy');
+  } finally { if (saved === undefined) delete process.env.AFM_DESKTOP_BINARY; else process.env.AFM_DESKTOP_BINARY = saved; }
+
+  const { home } = await tempHome(t);
+  const script = new URL('../node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js', import.meta.url).pathname;
+  const browsers = new StageBrowsers({ home, createBackend: () => new FakeBackend(), inspect: async () => null,
+    launcher: { node: process.execPath, script: '/unused', mcp: { node: process.execPath, script } } });
+  t.after(() => browsers.close());
+  const env = await browsers.hostEnv();
+  assert.match(env.PATH.split(path.delimiter)[0], /\.afm\/desktop\/bin$/, 'the wrapper directory leads PATH');
+  const { execFileSync } = await import('node:child_process');
+  const version = execFileSync('chrome-devtools-mcp', ['--version'], { encoding: 'utf8', env: { HOME: home, PATH: env.PATH.split(path.delimiter)[0] + ':/usr/bin:/bin' } }).trim();
+  assert.equal(version, '1.12.0', 'the pinned version, found with no external copy on PATH');
+});

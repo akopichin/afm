@@ -39,6 +39,13 @@ func worktreesEnabled(worktreeName string, cfg config.Config, f *flow.Flow) bool
 	return cfg.Worktrees.IsEnabled()
 }
 
+// disableWorktrees turns worktrees off for this run only, outranking the flow's own `worktrees: true`; the flow file
+// is not touched.
+func disableWorktrees(f *flow.Flow) {
+	off := false
+	f.Worktrees = &off
+}
+
 // runNameFor resolves the run directory prefix / flow-lock key: an explicit --worktree name when given,
 // otherwise the flow's own name. f.Name itself is never changed by --worktree — the flow still shows up
 // under its real name in lifecycle payloads, the dashboard, and memory config; this only decides the
