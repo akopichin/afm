@@ -99,6 +99,27 @@ func (e *parityEnv) waitStatus(t *testing.T, stageID string, want state.StageSta
 	t.Fatalf("stage %s did not reach %v, last status %v", stageID, want, got)
 }
 
+// waitQuestionNotices waits until the stage has published n dialog_question notices. The status stays
+// awaiting_user_input between two questions, so it cannot tell that the next question was already announced.
+func (e *parityEnv) waitQuestionNotices(t *testing.T, stageID string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(parityDeadline)
+	got := 0
+	for time.Now().Before(deadline) {
+		got = 0
+		for _, notice := range e.footprint(t, "", stageID).Notices {
+			if notice == "dialog_question" {
+				got++
+			}
+		}
+		if got >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("stage %s published %d dialog_question notices, want %d", stageID, got, n)
+}
+
 func (e *parityEnv) post(path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -457,6 +478,8 @@ func TestEngineParity_OptionQuestionAnswers(t *testing.T) {
 	if err := stages.Answer("ask-engine", "planning", "q1", "oracle", false); err != nil {
 		t.Fatalf("engine free text q1: %v", err)
 	}
+	env.waitQuestionNotices(t, "ask-http", 2)
+	env.waitQuestionNotices(t, "ask-engine", 2)
 	env.wantOK(t, "answer q2", fmt.Sprintf(dialogAnswerFmt, "ask-http"), answerBody("q2", "redis", false))
 	if err := stages.Answer("ask-engine", "planning", "q2", "redis", false); err != nil {
 		t.Fatalf("engine answer q2: %v", err)
@@ -493,6 +516,8 @@ func TestEngineParity_OptionChoiceVersusTypedText(t *testing.T) {
 			}
 			// q2 is still open, so the stage keeps waiting for the user.
 			env.waitStatus(t, "pick-http", state.StatusAwaitingUserInput)
+			env.waitQuestionNotices(t, "pick-http", 2)
+			env.waitQuestionNotices(t, "pick-engine", 2)
 			env.wantOK(t, "answer q2", fmt.Sprintf(dialogAnswerFmt, "pick-http"), answerBody("q2", "redis", false))
 			if err := stages.Answer("pick-engine", "planning", "q2", "redis", false); err != nil {
 				t.Fatalf("engine answer q2: %v", err)
