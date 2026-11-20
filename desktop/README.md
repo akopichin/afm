@@ -22,7 +22,10 @@ Press **Command+,** on macOS or **Ctrl+,** on Linux to open Settings. Choose
 **Pipeline options** next to a package in **Library**, or select a pipeline in
 **New run** and open the same editor there. Desktop opens the editor automatically
 when preflight finds a missing requirement. The editor shows effective roles and
-credential references, plus the options YAML. **Validate and save** checks the
+credential references, plus the options YAML. When there are no saved options,
+Desktop pre-fills the editor from the package snapshot’s `options.example.yaml`
+if the package includes it as a resource. Review the example before saving.
+**Validate and save** checks the
 document with AFM and registers `~/.afm/pipelines/<name>/options.yaml` for future
 runs. Close the editor and choose **Start run** to retry. Package defaults apply
 when the options file is empty of overrides. Store secrets in the AFM environment

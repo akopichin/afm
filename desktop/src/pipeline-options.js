@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
@@ -9,6 +9,20 @@ import { Mutex, readText, writeAtomic } from './files.js';
 const exec = promisify(execFile);
 const emptyOptions = 'docker:\n  agents: {}\ncollaboration:\n  profiles: {}\n';
 const revisionOf = content => createHash('sha256').update(content).digest('hex');
+
+async function readExample(snapshot) {
+  if (!snapshot) return null;
+  const file = path.join(snapshot, 'options.example.yaml');
+  try {
+    const info = await lstat(file);
+    if (!info.isFile() || info.size > 256 * 1024) return null;
+    const text = await readText(file);
+    return text?.trim() ? text : null;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
 
 export class PipelineOptions {
   constructor({home, binary, projects, sources, serveConfig, environment}) {
@@ -29,7 +43,7 @@ export class PipelineOptions {
       entries.some(item => item.name.toLowerCase() === entry.name.toLowerCase() && item.source !== entry.source)};
   }
 
-  async #inspect(entry, project, options) {
+  async #inspect(entry, project, options, includeExample = false) {
     try {
       const args = ['--dir', project, 'pipelines', 'inspect', entry.source, '--json'];
       if (options) args.push('--pipeline-options', options);
@@ -37,7 +51,8 @@ export class PipelineOptions {
         cwd: project, env: await this.environment(), timeout: 45000, maxBuffer: 4 << 20,
       });
       const result = JSON.parse(stdout);
-      return {roles: (result.roles || []).map(({id, command, client, model, reasoning, profile, auth_from, command_layer}) =>
+      return {example: includeExample ? await readExample(result.snapshot?.dir) : null,
+        roles: (result.roles || []).map(({id, command, client, model, reasoning, profile, auth_from, command_layer}) =>
         ({id, command, client, model, reasoning, profile, auth_from, command_layer})),
       issues: (result.requirements || []).filter(check => check.status === 'missing').map(check => check.detail)};
     } catch (error) {
@@ -51,14 +66,16 @@ export class PipelineOptions {
     const owner = await readText(spec.ownerFile);
     const conflict = spec.collision || Boolean(owner && owner.trim() !== spec.entry.source);
     const stored = !conflict || spec.previous !== spec.file ? await readText(spec.previous) : null;
-    const result = await this.#inspect(spec.entry, spec.project, stored === null ? null : spec.previous);
+    const result = await this.#inspect(spec.entry, spec.project, stored === null ? null : spec.previous, stored === null && !conflict);
     if (conflict && spec.previous === spec.file) result.issues.push('Another pipeline source shares this options path.');
     if (forLaunch && stored !== null && spec.previous === spec.file && !result.error && !result.issues.length) {
       await this.serveConfig.setPipelineOptions(id, spec.entry.source, spec.file);
     }
-    const text = stored ?? emptyOptions;
-    return {id, name: spec.entry.name, file: spec.file, previous: spec.previous, text, revision: revisionOf(text),
-      conflict, ...result};
+    const {example, ...inspection} = result;
+    const baseline = stored ?? emptyOptions;
+    return {id, name: spec.entry.name, file: spec.file, previous: spec.previous,
+      text: example ?? baseline, template: example ? 'options.example.yaml' : null,
+      revision: revisionOf(baseline), conflict, ...inspection};
   }
 
   save({id, projectId, text, revision}) {
@@ -77,7 +94,7 @@ export class PipelineOptions {
         await writeAtomic(spec.ownerFile, spec.entry.source + '\n');
         await writeAtomic(spec.file, text);
         await this.serveConfig.setPipelineOptions(id, spec.entry.source, spec.file);
-        return {id, name: spec.entry.name, file: spec.file, previous: spec.file, text, revision: revisionOf(text), ...result};
+        return {id, name: spec.entry.name, file: spec.file, previous: spec.file, text, revision: revisionOf(text), roles: result.roles, issues: result.issues};
       } finally {
         await rm(temporary, {recursive: true, force: true}).catch(() => {});
       }

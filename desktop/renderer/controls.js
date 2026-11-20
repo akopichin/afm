@@ -198,7 +198,7 @@ function showPipelineOptions(options, projectId){
   const sourcePath=options.previous && options.previous!==options.file ? 'Currently reading '+options.previous+'. Save to '+options.file : options.file;
   $('pipeline-options-path').textContent=sourcePath;
   $('pipeline-options-status').textContent=options.conflict?'Another source shares this name. Existing options are protected.':
-    [options.error,...options.issues].filter(Boolean).join('\n');
+    [options.template ? 'Loaded '+options.template+' from the package. Edit it before saving.' : null, options.error, ...options.issues].filter(Boolean).join('\n');
   $('pipeline-options-roles').replaceChildren(...options.roles.map(role=>{
     const row=document.createElement('li');
     row.textContent=[role.id, role.command, role.profile, role.client, role.model, role.reasoning, role.auth_from, role.command_layer].filter(Boolean).join(' · ');
