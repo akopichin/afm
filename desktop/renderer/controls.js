@@ -328,13 +328,14 @@ async function loadSettingsData(){
     const [sources,prefs]=await Promise.all([nativeAFM.sources(),nativeAFM.prefs()]);
     state.sources=sources.map(nativeSource);state.gitDefault=prefs.gitMode;
     if(prefs.environment)savedEnvironment=prefs.environment;
+    if(prefs.notifications)savedNotifications=prefs.notifications;
     if($('settings').open&&settingsTab!=='models')drawSettings();
   }catch(error){showNativeError(error)}
 }
 const demoModelForm=`<form id="model-form" hidden><label>Provider or CLI<input name="name" required placeholder="Ollama, Gemini CLI…"></label><label>Model or deployment<input name="model" required placeholder="Model ID"></label><label>Credential source<select name="auth"><option>Existing CLI login</option><option>Environment variable</option><option>Config file</option><option>Local endpoint</option></select></label><label id="reference-label" hidden><span>Source</span><input name="reference"></label><div class="actions"><button class="primary">Add model</button></div></form>`;
 function drawSettings(){
   $('settings-title').textContent=onboarding?'Set up AFM Desktop':'Settings';
-  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],['appearance','Appearance'],...(!isDemo?[['environment','Environment']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
+  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],['appearance','Appearance'],...(!isDemo?[['environment','Environment'],['notifications','Notifications']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
   const body=$('settings-body');
   if(settingsTab==='models'){
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
@@ -385,6 +386,8 @@ function drawSettings(){
     $('desktop-theme').onchange=event=>{state.theme=event.target.value;document.documentElement.dataset.theme=state.theme;save()};
   }else if(settingsTab==='environment'){
     drawEnvironment(body,tabs);
+  }else if(settingsTab==='notifications'){
+    drawNotifications(body,tabs);
   }else{
     body.innerHTML=tabs+`<label>Default workspace for Git projects<select id="default-git">${gitOptions(state.gitDefault)}</select></label>
     <p class="muted">A flow’s workspace preference takes precedence. You can change it for an individual run in the launcher.</p>
@@ -402,6 +405,24 @@ function drawSettings(){
   }
 }
 let savedEnvironment={shell:'none',file:'',names:[]}, environmentStatus='';
+const notificationKinds=[['question','Questions'],['approval','Plan approvals'],['decision','Decisions'],['failed','Failed stages']];
+let savedNotifications={enabled:true,kinds:{question:true,approval:true,decision:true,failed:false}};
+// System banners are optional; the in-app notification queue always lists everything that needs you.
+function drawNotifications(body,tabs){
+  const {enabled,kinds}=savedNotifications;
+  body.innerHTML=tabs+`<label class="setting-row"><span>System notifications</span><input type="checkbox" id="notify-enabled"${enabled?' checked':''}></label>
+    ${notificationKinds.map(([kind,label])=>`<label class="setting-row"><span>${label}</span><input type="checkbox" data-notify-kind="${kind}"${kinds[kind]?' checked':''}${enabled?'':' disabled'}></label>`).join('')}
+    <p class="muted">A banner appears once for each request while AFM Desktop is running, unless you are already looking at that run. It names the project, flow and stage, never the question. Allow AFM in macOS System Settings → Notifications; Focus modes silence banners, and the in-app queue still lists them.</p>
+    <p class="hint" role="status">${esc(notificationStatus)}</p>`;
+  const save=async next=>{
+    try{savedNotifications=(await nativeAFM.setPrefs({notifications:next})).notifications;notificationStatus=''}
+    catch(error){notificationStatus=error.message}
+    if($('settings').open&&settingsTab==='notifications')drawSettings();
+  };
+  $('notify-enabled').onchange=event=>save({enabled:event.target.checked,kinds});
+  for(const box of body.querySelectorAll('[data-notify-kind]'))box.onchange=()=>save({enabled,kinds:{...kinds,[box.dataset.notifyKind]:box.checked}});
+}
+let notificationStatus='';
 function drawEnvironment(body,tabs){
   const {shell,file,names}=savedEnvironment;
   body.innerHTML=tabs+`<form id="env-source">

@@ -3,8 +3,14 @@ import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
 import { validVariable } from './environment.js';
 import { MODES } from './git-mode.js';
 
-const DEFAULTS = { gitMode: 'current', stageBrowser: true, environment: {shell: 'none', file: '', variables: {}} };
-const VALIDATORS = { gitMode: value => MODES.includes(value), stageBrowser: value => typeof value === 'boolean' };
+const NOTIFICATION_KINDS = ['question', 'approval', 'decision', 'failed'];
+const DEFAULTS = { gitMode: 'current', stageBrowser: true, environment: {shell: 'none', file: '', variables: {}},
+  notifications: {enabled: true, kinds: {question: true, approval: true, decision: true, failed: false}} };
+const isBoolean = value => typeof value === 'boolean';
+const VALIDATORS = { gitMode: value => MODES.includes(value), stageBrowser: isBoolean,
+  notifications: value => isBoolean(value?.enabled) && NOTIFICATION_KINDS.every(kind => isBoolean(value.kinds?.[kind])) };
+// Only the known switches are stored, whatever else the caller sent.
+const NORMALIZERS = { notifications: value => ({enabled: value.enabled, kinds: Object.fromEntries(NOTIFICATION_KINDS.map(kind => [kind, value.kinds[kind]]))}) };
 
 // Desktop preferences. Only known keys with valid values are stored.
 export class Prefs {
@@ -45,7 +51,7 @@ export class Prefs {
       const next = await this.get();
       for (const [key, value] of Object.entries(changes)) {
         if (!VALIDATORS[key]?.(value)) throw Error(`Invalid preference ${key}.`);
-        next[key] = value;
+        next[key] = NORMALIZERS[key]?.(value) ?? value;
       }
       await writeJSON(this.file, next);
       return next;

@@ -55,6 +55,23 @@ function jumpTo(item){
   setTimeout(deliverStage,0);
   paintQueue();
 }
+// A clicked system banner opens its exact stage; a request that is already resolved opens the run only.
+// A queued click needs a current inventory to distinguish a missing run from a lost connection.
+let pendingNotice=null;
+function openNoticeTarget(target){pendingNotice=target;openPendingNotice()}
+function openPendingNotice(){
+  if(!pendingNotice||!inventoryAvailable)return;
+  const {runKey,stageId}=pendingNotice;
+  const target=projects.flatMap(p=>p.runs.map(r=>({p,r}))).find(({r})=>r.key===runKey);
+  pendingNotice=null;
+  if(!target)return;
+  // The user chose this request explicitly, so it takes priority over an open dialog.
+  for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
+  const item=notices().find(n=>n.r.key===runKey&&n.stage===stageId);
+  if(item){jumpTo(item);return}
+  closeQueue();closeFocus();openProject(target.p,target.r,'run');
+}
+if(!isDemo)nativeAFM.onNoticeOpen(openNoticeTarget);
 function stepNotice(direction){
   const items=notices();
   if(!items.length)return;

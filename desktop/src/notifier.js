@@ -1,0 +1,67 @@
+import path from 'node:path';
+import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
+
+// Bound on resolved history; requests still pending are always kept, so the set can exceed it.
+const SEEN_LIMIT = 500;
+// More new requests than this in one snapshot become a single summary banner.
+const BANNER_LIMIT = 5;
+
+// Fixed text per kind: banners never carry question text, artifacts or secrets.
+const TEXT = {
+  question: { title: 'AFM needs your answer', waiting: 'an answer' },
+  approval: { title: 'AFM needs your approval', waiting: 'your approval' },
+  decision: { title: 'AFM needs a decision', waiting: 'your decision' },
+  failed: { title: 'An AFM stage failed', waiting: 'your attention' },
+};
+
+// Turns new attention items into one banner each. Pure main-process logic: Electron is injected as `show`.
+export class Notifier {
+  // `visible(item)` tells whether the user already looks at that stage; `settings` is the notifications preference.
+  constructor({ home, show, visible = () => false, settings }) {
+    this.file = path.join(desktopDir(home), 'notified.json');
+    Object.assign(this, { show, visible, settings });
+    this.lock = new Mutex();
+    this.seen = null;
+  }
+
+  get enabled() { return this.settings.enabled; }
+
+  // Items of one kind and request are announced once, also across reconnects and restarts.
+  #key(item) { return [item.runKey, item.stageId, item.kind, item.requestAt].join('|'); }
+
+  onSnapshot(snapshot) {
+    // Without the host there is no real attention list, so nothing is new and nothing is seeded.
+    if (snapshot.host.error || snapshot.host.state !== 'connected') return Promise.resolve();
+    return this.lock.run(async () => {
+      const first = !this.seen;
+      this.seen ??= new Map(Object.entries(await readJSON(this.file, {})));
+      const identified = snapshot.attention.filter(item => item.requestAt);
+      const fresh = identified.filter(item => !this.seen.has(this.#key(item)));
+      if (!fresh.length && !first) return;
+      for (const item of fresh) this.seen.set(this.#key(item), 1);
+      // Only resolved history is evicted: a request still pending must not return as new after a reconnect.
+      const pending = new Set(identified.map(found => this.#key(found)));
+      for (const key of this.seen.keys()) {
+        if (this.seen.size <= SEEN_LIMIT) break;
+        if (!pending.has(key)) this.seen.delete(key);
+      }
+      await writeJSON(this.file, Object.fromEntries(this.seen));
+      // Questions already pending when Desktop starts are in the queue, not a burst of banners.
+      if (first) return;
+      const banners = fresh.filter(item => this.#wanted(item));
+      for (const item of banners.slice(0, BANNER_LIMIT)) this.#announce(item, snapshot);
+      if (banners.length > BANNER_LIMIT) this.show({ title: 'AFM needs you', body: `${banners.length - BANNER_LIMIT} more requests are waiting.` });
+    });
+  }
+
+  #wanted(item) { return this.settings.enabled && this.settings.kinds[item.kind] && !this.visible(item); }
+
+  #announce(item, snapshot) {
+    const runs = snapshot.projects.flatMap(project => project.runs.map(run => ({ project, run })));
+    const target = [...runs, ...snapshot.unassigned.map(run => ({ project: { name: path.basename(run.projectRoot ?? '') }, run }))]
+      .find(({ run }) => run.key === item.runKey);
+    const text = TEXT[item.kind];
+    const where = target ? `${target.project.name} / ${target.run.name || target.run.runId}\n` : '';
+    this.show({ title: text.title, body: `${where}Stage ${item.stageName} is waiting for ${text.waiting}.`, runKey: item.runKey, stageId: item.stageId });
+  }
+}

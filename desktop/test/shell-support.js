@@ -22,7 +22,7 @@ export async function loadShell(t, { demo = true, platform = 'MacIntel', native 
   const w = dom.window;
   Object.defineProperty(w.navigator, 'platform', { value: platform, configurable: true });
   w.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-  w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), liveLayout: async () => {}, onLiveShortcut: () => {}, ...native };
+  w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), liveLayout: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, reportSelection: async () => {}, ...native };
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
   const scripts = demo ? ['store', 'desktop', 'library', 'controls', 'attention'] : ['store', 'desktop', 'library', 'assistant', 'controls', 'attention', 'inventory', 'native'];
@@ -54,7 +54,8 @@ export const snapshotOf = (projects, attention = [], extra = {}) => ({ host: { s
 
 // A nativeAFM stub that follows snapshots the test publishes and counts every request.
 export function fakeNative(initial) {
-  const native = { snapshot: initial, listeners: new Set(), calls: { dashboard: 0, settled: 0, cancel: [] }, opened: [] };
+  const native = { snapshot: initial, listeners: new Set(), calls: { dashboard: 0, settled: 0, cancel: [] }, opened: [], selections: [], prefChanges: [],
+    notifications: { enabled: true, kinds: { question: true, approval: true, decision: true, failed: false } } };
   Object.assign(native, {
     workspace: async () => native.snapshot,
     refreshWorkspace: async () => native.snapshot,
@@ -67,6 +68,10 @@ export function fakeNative(initial) {
       native.dashboardMessages.get(key).push(message);
     },
     onDashboardEvent: listener => { native.emitDashboard = listener; },
+    onNoticeOpen: listener => { native.openNotice = listener; },
+    reportSelection: async runKey => { native.selections.push(runKey); },
+    prefs: async () => ({ gitMode: 'current', notifications: native.notifications }),
+    setPrefs: async changes => { Object.assign(native, changes); native.prefChanges.push(changes); return { gitMode: 'current', notifications: native.notifications }; },
     dashboard: async (id, instance, external) => {
       native.calls.dashboard++;
       try { if (external) native.opened.push([id, instance]); return `http://127.0.0.1:${4000 + (Number(String(id).replace(/\D/g, '')) || 0)}`; }

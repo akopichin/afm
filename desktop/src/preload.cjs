@@ -36,6 +36,8 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   pickSource:()=>ipcRenderer.invoke('sources:pick'),
   removeSource:id=>ipcRenderer.invoke('sources:remove',id),
   refreshSource:id=>ipcRenderer.invoke('sources:refresh',id),
+  onNoticeOpen:callback=>ipcRenderer.on('notice:open',(_event,target)=>callback(target)),
+  reportSelection:runKey=>ipcRenderer.invoke('notify:selection',runKey),
   prefs:()=>ipcRenderer.invoke('prefs:get'),
   updateEnvironment:changes=>ipcRenderer.invoke('prefs:environment', changes),
   setPrefs:changes=>ipcRenderer.invoke('prefs:set',changes),

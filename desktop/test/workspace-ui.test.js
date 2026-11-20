@@ -273,3 +273,104 @@ test('Start run shows progress immediately and stays busy across a preview refre
   assert.equal(button.disabled,false);
   assert.match(get('launch-status').textContent,/could not start/);
 });
+
+test('a clicked system banner opens its exact stage, or only the run once the request is resolved', async t => {
+  const { w, get, native } = await openShell(t, twoProjects(queue));
+  native.openNotice({ runKey: rb.key, stageId: 's1' });
+  await tick();
+  const frame = () => w.document.querySelector('#dashboard-host [data-run-key]:not([hidden])');
+  native.emitDashboard(frame().dataset.runKey, 'stage-ready');
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash), '#b/i-rb:rb/run');
+  assert.equal(native.dashboardMessages.get(rb.key).filter(m => m.type === 'open-stage').at(-1).stage, 's1');
+  native.publish(twoProjects([]));
+  native.openNotice({ runKey: ra.key, stageId: 's1' });
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash), '#a/i-ra:ra/run');
+  assert.equal(native.dashboardMessages.get(ra.key)?.some(m => m.type === 'open-stage') ?? false, false, 'a resolved request names no stage');
+  assert.equal(get('attention').hidden, true);
+});
+
+test('the shell tells the main process which run page is open, only when it changes', async t => {
+  const { w, native } = await openShell(t, twoProjects([]));
+  assert.deepEqual(native.selections, [null]);
+  w.shell.openProject(w.shell.projects[0], w.shell.projects[0].runs[0]);
+  await tick();
+  assert.deepEqual(native.selections, [null, ra.key]);
+  native.publish(twoProjects([]));
+  await tick();
+  assert.deepEqual(native.selections, [null, ra.key], 'an unchanged page is not reported again');
+  w.shell.projects[0].runs[0].live = true;
+  w.shell.openProject(w.shell.projects[0], w.shell.projects[0].runs[0], 'live');
+  await tick();
+  assert.deepEqual(native.selections.at(-1), null, 'the Live tab covers the dashboard');
+});
+
+test('notification settings are saved per category and leave the in-app queue alone', async t => {
+  const { d, get, native } = await openShell(t, twoProjects(queue));
+  get('settings-toggle').click();
+  d.querySelector('[data-panel="notifications"]').click();
+  await tick();
+  const kinds = { question: true, approval: true, decision: true, failed: false };
+  d.querySelector('[data-notify-kind="failed"]').click();
+  await tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(native.prefChanges.at(-1))), { notifications: { enabled: true, kinds: { ...kinds, failed: true } } });
+  get('notify-enabled').click();
+  await tick();
+  assert.equal(native.prefChanges.at(-1).notifications.enabled, false);
+  assert.ok(d.querySelector('[data-notify-kind="question"]').disabled);
+  assert.equal(get('notice-count').textContent, '3', 'turning banners off does not shrink the queue');
+});
+
+test('a banner click that arrives before the first inventory waits for it', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const native = fakeNative(twoProjects(queue));
+  native.workspace = async () => { await gate; return native.snapshot; };
+  const { w } = await loadShell(t, { demo: false, native });
+  native.openNotice({ runKey: rb.key, stageId: 's1' });
+  assert.equal(w.location.hash, '');
+  release();
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash), '#b/i-rb:rb/run');
+});
+
+test('a clicked banner keeps its exact stage during an outage after successful discovery', async t => {
+  const { w, d, native } = await openShell(t, twoProjects(queue));
+  native.publish({...snapshotOf([]),host:{state:'offline',error:{message:'down'}}});
+  native.openNotice({runKey:rb.key,stageId:'s1'});
+  assert.equal(w.location.hash,'');
+  native.publish(twoProjects(queue));
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash),'#b/i-rb:rb/run');
+  const frame = d.querySelector('#dashboard-host [data-run-key]:not([hidden])');
+  native.emitDashboard(frame.dataset.runKey,'stage-ready');
+  await tick();
+  assert.equal(native.dashboardMessages.get(rb.key).filter(event=>event.type==='open-stage').at(-1).stage,'s1');
+});
+
+test('a banner click closes an open dialog instead of navigating behind it', async t => {
+  const { w, d, get, native } = await openShell(t, twoProjects(queue));
+  get('settings-toggle').click();
+  assert.equal(get('settings').open, true);
+  native.openNotice({ runKey: ra.key, stageId: 's1' });
+  await tick();
+  assert.equal(d.querySelector('dialog[open]'), null);
+  assert.equal(decodeURIComponent(w.location.hash), '#a/i-ra:ra/run');
+});
+
+test('a banner click made while the host is unreachable survives until the inventory is real', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const native = fakeNative(twoProjects(queue));
+  native.workspace = async () => { await gate; return native.snapshot; };
+  const { w } = await loadShell(t, { demo: false, native });
+  native.openNotice({ runKey: rb.key, stageId: 's1' });
+  native.snapshot = snapshotOf([], [], { host: { state: 'offline', error: { code: 'host_unreachable', message: 'down' } } });
+  release();
+  await tick();
+  assert.equal(w.location.hash, '', 'an offline inventory says nothing about the run');
+  native.publish(twoProjects(queue));
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash), '#b/i-rb:rb/run');
+});

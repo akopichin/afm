@@ -7,19 +7,22 @@ function showNativeError(error) {
 // One snapshot from the main process carries projects, runs and notices; nothing here polls the host.
 // A snapshot that changes nothing the page shows touches nothing.
 let attentionSignature='[]';
+let inventoryAvailable=false;
 function applyWorkspace(snapshot){
   const {changed,reordered}=reconcileInventory(projects,snapshot);
   const attention=JSON.stringify(snapshot.attention),noticesChanged=attention!==attentionSignature;
   attentionSignature=attention;attentionItems=snapshot.attention;
   const problem=snapshot.host.error?.message||(snapshot.host.state==='incompatible'?snapshot.host.reason:null);
+  inventoryAvailable=snapshot.host.state==='connected'&&!snapshot.host.error;
   if(problem)showNativeError(problem);else if(!$('native-error').hidden)$('native-error').hidden=true;
   dashboards.retain(new Set(projects.flatMap(p=>p.runs.map(r=>r.id))));
-  if(pendingStage&&!notices().some(item=>item.id===pendingStage.id))pendingStage=null;
+  if(inventoryAvailable&&pendingStage&&!notices().some(item=>item.id===pendingStage.id))pendingStage=null;
   const {p}=selection();
   // Home lists every project; a project page only depends on its own runs.
   const stale=p?changed.has(p.id):changed.size>0||reordered;
   if(stale){const saved=rememberFocus();render();restoreFocus(saved)}
   else if(noticesChanged)paintQueue();
+  openPendingNotice();
 }
 // A re-render replaces the screen's elements; a keyboard user keeps their place on the same control.
 function rememberFocus(){
@@ -57,6 +60,18 @@ if(!isDemo){
   }).catch(showNativeError);
   nativeAFM.workspace().then(applyWorkspace).catch(showNativeError);
   startAssistant();
+  // Main skips a banner for the run page already on screen; it only needs the run's key, and only when it changes.
+  let reportedRun;
+  const reportSelection=()=>{
+    const {r,tab}=selection();
+    const runKey=r&&tab!=='live'?r.key:null;
+    if(runKey===reportedRun)return;
+    reportedRun=runKey;
+    nativeAFM.reportSelection(runKey).catch(showNativeError);
+  };
+  addEventListener('hashchange',reportSelection);
+  document.addEventListener('workspace-change',reportSelection);
+  reportSelection();
   addEventListener('focus',refreshNative);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshNative()});
 }

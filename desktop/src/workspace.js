@@ -14,32 +14,50 @@ function stageNotice(stage) {
 // Reads the run's own status, but only after the endpoint proves it is still the run we mean.
 export async function readRunStatus(run, request = fetch) {
   const origin = localURL(run.apiUrl).origin;
-  const get = async path => {
-    const res = await request(origin + path, { redirect: 'error', signal: AbortSignal.timeout(3000) });
-    if (!res.ok) throw Error('Run unavailable.');
-    return res.json();
-  };
-  const runtime = await get('/api/runtime');
+  const runtime = await getJSON(origin, '/api/runtime', request);
   if (runtime.run_id !== run.runId || runtime.instance_id !== run.instanceId) throw Error('Run changed.');
-  const status = await get('/api/status');
+  const status = await getJSON(origin, '/api/status', request);
   if (status.run_id && status.run_id !== run.runId) throw Error('Run changed.');
   return status;
 }
 
-export async function fetchAttention(run, request = fetch) {
+async function getJSON(origin, route, request) {
+  const res = await request(origin + route, {redirect:'error', signal:AbortSignal.timeout(3000)});
+  if (!res.ok) throw Error('Run unavailable.');
+  return res.json();
+}
+
+export async function fetchAttention(run, request = fetch, previous = []) {
   const status = await readRunStatus(run, request);
-  return (status.stages ?? []).flatMap(stage => {
+  const origin = localURL(run.apiUrl).origin;
+  const notices = [];
+  for (const stage of status.stages ?? []) {
     const notice = stageNotice(stage);
-    return notice ? [{ id: `${run.key}:${stage.id}`, runKey: run.key, stageId: stage.id, stageName: stage.name || stage.id, ...notice }] : [];
-  });
+    if (!notice) continue;
+    const observedAt = stage.updated_at || '';
+    let requestAt = stage.pre_completion?.round_id && notice.kind === 'decision' ? stage.pre_completion.round_id : observedAt;
+    if (notice.kind === 'question') {
+      const old = previous.find(item => item.stageId === stage.id && item.kind === 'question' && item.observedAt === observedAt);
+      requestAt = old?.requestAt;
+      if (!requestAt) {
+        try {
+          const dialog = await getJSON(origin, '/api/stages/' + encodeURIComponent(stage.id) + '/dialog', request);
+          const question = dialog?.findLast(item => item.id && item.phase && item.answer == null);
+          if (question) requestAt = JSON.stringify([question.phase, question.id, question.ts ?? '']);
+        } catch { /* Retry while the question remains actionable. */ }
+      }
+    }
+    notices.push({id:`${run.key}:${stage.id}`, runKey:run.key, stageId:stage.id, stageName:stage.name || stage.id, requestAt, observedAt, ...notice});
+  }
+  return notices;
 }
 
 // The one background loop of the app. It builds a single snapshot of projects, runs and notices,
 // sleeps while the window is hidden, never overlaps itself, and reports only real changes.
 export class Workspace {
   // A hidden window still watches open stage browsers, more slowly, so a finished stage frees its page.
-  constructor({ desktop, interval = 3000, hiddenInterval = interval * 5, request = fetch, stageBrowsers = null }) {
-    Object.assign(this, { desktop, interval, hiddenInterval, request, stageBrowsers });
+  constructor({ desktop, interval = 3000, hiddenInterval = interval * 5, request = fetch, stageBrowsers = null, watchHidden = () => false }) {
+    Object.assign(this, { desktop, interval, hiddenInterval, request, stageBrowsers, watchHidden });
     this.listeners = new Set();
     this.snapshot = null;
     this.signature = '';
@@ -56,7 +74,7 @@ export class Workspace {
 
   get() { return this.snapshot ?? this.refresh(); }
 
-  // Hidden windows do no discovery; showing one refreshes at once.
+  // Hidden windows do no discovery unless `watchHidden` asks for it (system notifications); showing one refreshes at once.
   setVisible(visible) {
     this.visible = visible;
     clearTimeout(this.timer);
@@ -67,7 +85,7 @@ export class Workspace {
 
   #scheduleNext() {
     if (this.closed || this.timer) return;
-    const delay = this.visible ? this.interval : this.stageBrowsers?.entries.size ? this.hiddenInterval : null;
+    const delay = this.visible ? this.interval : this.stageBrowsers?.entries.size || this.watchHidden() ? this.hiddenInterval : null;
     if (delay !== null) this.timer = setTimeout(() => { this.timer = null; this.refresh().catch(() => {}); }, delay);
   }
 
@@ -105,7 +123,7 @@ export class Workspace {
     const found = new Map();
     for (let i = 0; i < flagged.length; i += FETCH_LIMIT) {
       await Promise.all(flagged.slice(i, i + FETCH_LIMIT).map(async run => {
-        try { found.set(run.key, await fetchAttention(run, this.request)); }
+        try { found.set(run.key, await fetchAttention(run, this.request, this.lastItems.get(run.key))); }
         catch { found.set(run.key, this.lastItems.get(run.key) ?? []); }
       }));
     }

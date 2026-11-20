@@ -9,12 +9,16 @@ import { runView } from '../src/runs.js';
 
 // A run's own HTTP API: its identity and the stage list its dashboard shows.
 async function fakeRun(t, { runId = 'r1', instanceId = 'i1', stages = [] } = {}) {
-  const state = { runId, instanceId, stages, hits: 0 };
+  const state = { runId, instanceId, stages, hits: 0, dialogs: {}, dialogHits: 0 };
   const server = http.createServer((req, res) => {
     state.hits++;
     res.setHeader('Content-Type', 'application/json');
     if (req.url === '/api/runtime') res.end(JSON.stringify({ run_id: state.runId, instance_id: state.instanceId, mode: 'dashboard', ready: true }));
     else if (req.url === '/api/status') res.end(JSON.stringify({ run_id: state.runId, stages: state.stages }));
+    else if (req.url.endsWith('/dialog')) {
+      state.dialogHits++;
+      res.end(JSON.stringify(state.dialogs[req.url.split('/')[3]] ?? []));
+    }
     else { res.statusCode = 404; res.end('{}'); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -39,6 +43,26 @@ test('notices name the exact stage, and only for the run that proves its identit
   assert.deepEqual(items.map(i => [i.stageId, i.kind, i.runKey]), [['review', 'approval', 'i1:r1'], ['ask', 'question', 'i1:r1']]);
   fake.runId = 'other';
   await assert.rejects(fetchAttention(view), /Run changed/);
+});
+
+test('the same pending question keeps its identity across pause and a different question gets a new one', async t => {
+  const fake = await fakeRun(t, { stages: [{id:'ask',status:'awaiting_user_input',updated_at:'t1'}] });
+  const first = {id:'q1',phase:'autonomous_execution',ts:'asked-1',question:'Private prompt'};
+  fake.dialogs.ask = [first];
+  const workspace = new Workspace({desktop:desktopWith(() => overviewOf([row(fake)]))});
+  t.after(() => workspace.close());
+  const [question] = (await workspace.refresh()).attention;
+  assert.ok(question.requestAt);
+  assert.equal(JSON.stringify(question).includes('Private prompt'),false);
+  await workspace.refresh();
+  assert.equal(fake.dialogHits,1);
+  fake.stages[0].status = 'paused';
+  assert.deepEqual((await workspace.refresh()).attention,[]);
+  fake.stages[0] = {id:'ask',status:'awaiting_user_input',updated_at:'t2'};
+  assert.equal((await workspace.refresh()).attention[0].requestAt,question.requestAt);
+  fake.dialogs.ask = [{...first,answer:'yes'},{id:'q2',phase:'autonomous_execution',ts:'asked-2'}];
+  fake.stages[0].updated_at = 't3';
+  assert.notEqual((await workspace.refresh()).attention[0].requestAt,question.requestAt);
 });
 
 test('the queue keeps a stable order, emits only real changes and never duplicates a notice', async t => {
@@ -136,4 +160,22 @@ test('native view shortcuts follow the platform and never fire during compositio
   assert.equal(key({ alt: true, code: 'KeyJ', isAutoRepeat: true }), null);
   assert.equal(key({ alt: true, code: 'KeyJ', isComposing: true }), null);
   assert.equal(key({ type: 'keyUp', alt: true, code: 'KeyJ' }), null);
+});
+
+test('a hidden window polls only when asked to watch for notifications', async t => {
+  const fake = await fakeRun(t, { stages: [{ id: 'a', status: 'awaiting_user_input', updated_at: 't1' }] });
+  const desktop = desktopWith(() => overviewOf([row(fake)]));
+  let watch = false;
+  const workspace = new Workspace({ desktop, interval: 5, hiddenInterval: 10, watchHidden: () => watch });
+  t.after(() => workspace.close());
+  workspace.setVisible(false);
+  await delay(60);
+  assert.equal(desktop.calls.overview, 0, 'a hidden window without notifications does no discovery');
+  watch = true;
+  workspace.setVisible(false);
+  await workspace.refresh();
+  const before = desktop.calls.overview;
+  await delay(80);
+  assert.ok(desktop.calls.overview > before, 'a hidden window with notifications keeps discovering');
+  assert.equal((await workspace.get()).attention[0].observedAt, 't1', 'the item carries its observed transition timestamp');
 });

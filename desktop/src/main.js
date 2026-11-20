@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, session, WebContentsView } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Notification, shell, session, WebContentsView } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { realpath } from 'node:fs/promises';
@@ -10,6 +10,7 @@ import { LiveView } from './live-view.js';
 import { afmBinary } from './binary.js';
 import { DashboardViews } from './dashboard-views.js';
 import { Workspace } from './workspace.js';
+import { Notifier } from './notifier.js';
 import { DashboardOrigins, allowRequest } from './protocol.js';
 import { Assistant } from './assistant/assistant.js';
 import { loginShellPath } from './assistant/detect.js';
@@ -51,7 +52,14 @@ const pipelineOptions = new PipelineOptions({home, environment, projects: deskto
 const entry = pathToFileURL(path.join(root, 'renderer/index.html')).href;
 const demo = process.argv.includes('--demo');
 const origins = new DashboardOrigins();
-const workspace = new Workspace({ desktop, stageBrowsers });
+// The run page the renderer shows right now (null on Live or Home); a banner for it would only repeat what is on screen.
+let shownRun = null;
+// A banner that is not referenced can be garbage-collected before the user sees or clicks it.
+const banners = new Set();
+const notifier = new Notifier({ home, show: showBanner, settings: {enabled: false, kinds: {}},
+  visible: item => Boolean(window?.isFocused() && shownRun === item.runKey) });
+const workspace = new Workspace({ desktop, stageBrowsers, watchHidden: () => notifier.enabled });
+const loadNotificationSettings = () => desktop.prefs.get().then(prefs => { notifier.settings = prefs.notifications; });
 // A stage browser appearing or going away changes the Live tabs at once, not at the next poll.
 stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
 // A Finder-launched app lacks the login shell's PATH; it is read once, when the assistant first needs it.
@@ -111,7 +119,8 @@ handle('prefs:environment', async changes => {
   assistant.detections.clear();
   return prefs;
 });
-handle('prefs:set', async changes => { await desktop.prefs.set(changes); return desktop.prefs.view(); });
+handle('prefs:set', async changes => { await desktop.prefs.set(changes); await loadNotificationSettings(); return desktop.prefs.view(); });
+handle('notify:selection', runKey => { shownRun = typeof runKey === 'string' ? runKey : null; });
 handle('host:status', () => desktop.host.state);
 handle('host:restart', confirm => desktop.host.restart({confirmExternal: confirm === true}));
 handle('runs:list', async () => desktop.host.runs());
@@ -193,6 +202,33 @@ function pushWorkspace(snapshot){
   window?.webContents.send('workspace:update',snapshot);
 }
 workspace.onChange(pushWorkspace);
+workspace.onChange(snapshot => notifier.onSnapshot(snapshot).catch(error => console.error('Notifications:', error)));
+// The renderer registers its banner listener while loading, so every opener waits for the same load.
+let windowLoaded = Promise.resolve();
+// Only the newest banner click navigates when several arrive while the window is still loading.
+let latestTarget = null;
+async function showWindow() {
+  if (!window) { windowLoaded = openWindow(); await windowLoaded; stageBrowsers.reattach(); return; }
+  await windowLoaded;
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+function showBanner({ title, body, runKey, stageId }) {
+  if (!Notification.isSupported()) return;
+  const banner = new Notification({ title, body, icon: path.join(root, 'assets/afm-desktop.png'), silent: false });
+  banners.add(banner);
+  banner.on('close', () => banners.delete(banner));
+  banner.on('failed', (_event, error) => { banners.delete(banner); console.error('Notification failed:', error); });
+  banner.on('click', () => {
+    const target = runKey ? { runKey, stageId } : null;
+    latestTarget = target;
+    // The summary banner has no run; it only brings Desktop forward.
+    showWindow().then(() => { if (target && latestTarget === target) window?.webContents.send('notice:open', target); }).catch(console.error);
+  });
+  banner.show();
+}
 function openWindow(){
   window=new BrowserWindow({width:1350,height:870,minWidth:480,minHeight:420,backgroundColor:'#0b111b',icon:path.join(root,'assets/afm-desktop.png'),
     webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,preload:path.join(root,'src/preload.cjs')}});
@@ -218,7 +254,9 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, reply) => reply(false));
   session.defaultSession.webRequest.onBeforeRequest((details, reply) =>
     reply({ cancel: !allowRequest(details.url, { appRoot: path.resolve(root), origins, allowGitHub: demo }) }));
-  await openWindow();
+  loadNotificationSettings().catch(error => console.error('Notification settings:', error));
+  windowLoaded = openWindow();
+  await windowLoaded;
   startStageBrowsers();
   if (process.argv.includes('--desktop-launch-check')) {
     const ready = await window.webContents.executeJavaScript(`(async () => {
@@ -255,7 +293,7 @@ app.whenReady().then(async () => {
   console.error(error);
   app.exit(1);
 });
-app.on('activate',()=>{if(app.isReady()&&!window)openWindow().then(()=>stageBrowsers.reattach())});
+app.on('activate',()=>{if(app.isReady()&&!window)showWindow().catch(console.error)});
 // Quit waits for assistant providers to stop (SIGTERM, then SIGKILL after the grace period), at most a few seconds.
 let quitting=false;
 app.on('before-quit',event=>{
