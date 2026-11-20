@@ -201,6 +201,13 @@ export class Runs {
   // The host reads serve.yaml once at startup, so a project or pipeline registered since then is unknown
   // to it. Restart the host only when it says so, then repeat the same request.
   async #startOnHost(args, confirmHostRestart) {
+    if (args.pipeline) {
+      const config = await this.serveConfig.read();
+      if (config.pipelines.some(item => item.id === args.pipeline && item.options)) {
+        await this.host.connect();
+        if (this.host.configStale(this.serveConfig.file)) await this.host.restart({confirmExternal: confirmHostRestart});
+      }
+    }
     try { return await this.host.tool('afm_run_start', args); }
     catch (error) {
       if (error.code !== 'invalid' || !/not in serve\.yaml/.test(error.message)) throw error;

@@ -10,5 +10,6 @@ export function shortcutAction(input, platform = process.platform) {
   if (!primary || input.alt) return null;
   const key = String(input.key).toLowerCase();
   if (input.shift) return key === 'enter' ? 'launch' : null;
+  if (key === ',') return 'settings';
   return key === 'k' ? 'picker' : null;
 }

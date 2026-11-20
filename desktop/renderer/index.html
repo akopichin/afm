@@ -43,7 +43,17 @@
   <label>Project<select id="launch-project"></select></label>
   <label class="sr-only" for="workflow-search">Find a flow or pipeline</label><input id="workflow-search" type="search" placeholder="Find a flow or pipeline…" autocomplete="off">
   <div id="workflows" class="choices"></div>
-  <div class="git-row"><label for="launch-git">Workspace</label><select id="launch-git"></select></div><p class="hint" id="git-hint"></p><p id="launch-status" class="hint" role="status" hidden></p><button id="launch-log" hidden>Open launch log</button><div class="actions"><kbd id="launch-hint"></kbd><button class="primary" id="launch-submit">Start run</button></div>
+  <div class="git-row"><label for="launch-git">Workspace</label><select id="launch-git"></select></div><p class="hint" id="git-hint"></p><p id="launch-status" class="hint" role="status" hidden></p><button id="launch-log" hidden>Open launch log</button><div class="actions"><button id="launch-options" hidden>Pipeline options</button><kbd id="launch-hint"></kbd><button class="primary" id="launch-submit">Start run</button></div>
+</dialog>
+<dialog id="pipeline-options" aria-labelledby="pipeline-options-title">
+  <form id="pipeline-options-form">
+    <div class="pane-head"><h2 id="pipeline-options-title">Pipeline options</h2><button type="button" class="icon" data-close aria-label="Close options">×</button></div>
+    <p id="pipeline-options-path" class="hint"></p>
+    <p id="pipeline-options-status" class="hint" role="status"></p>
+    <details id="pipeline-options-details"><summary>Effective roles</summary><ul id="pipeline-options-roles"></ul></details>
+    <label>Options YAML<textarea id="pipeline-options-yaml" rows="12" spellcheck="false" required></textarea></label>
+    <div class="actions"><button class="primary" id="pipeline-options-save">Validate and save</button></div>
+  </form>
 </dialog>
 <dialog id="quick-model" aria-labelledby="quick-model-title"><form id="quick-model-form">
   <div class="pane-head"><h2 id="quick-model-title">Assistant model</h2><button type="button" class="icon" data-close aria-label="Close model picker">×</button></div>

@@ -4,6 +4,7 @@ import os from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { desktopEnvironment } from './environment.js';
+import { PipelineOptions } from './pipeline-options.js';
 import { Desktop } from './desktop.js';
 import { LiveView } from './live-view.js';
 import { afmBinary } from './binary.js';
@@ -41,6 +42,8 @@ function afmOrigins() {
 const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined),
   hostEnv: async () => ({...await environment(), ...((await desktop.prefs.get()).stageBrowser ? await stageBrowsers.hostEnv() : {})})});
 const environment = () => desktopEnvironment(desktop.prefs, home);
+const pipelineOptions = new PipelineOptions({home, environment, projects: desktop.projects, sources: desktop.sources,
+  serveConfig: desktop.serveConfig, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined)});
 const entry = pathToFileURL(path.join(root, 'renderer/index.html')).href;
 const demo = process.argv.includes('--demo');
 const origins = new DashboardOrigins();
@@ -124,6 +127,8 @@ handle('dashboard:layout', (key, bounds) => {
 });
 handle('dashboard:command', (key, message) => dashboardViews.command(key, message));
 handle('dashboard:drop', key => dashboardViews.drop(key));
+handle('pipeline-options:get', (id, projectId) => pipelineOptions.get(id, projectId));
+handle('pipeline-options:save', input => pipelineOptions.save(input));
 handle('launch:preview', request => desktop.runs.preview(request));
 handle('runs:start', async request => {
   // The first renderer sent a folder and a worktree name; accept it by registering the folder as a project.
@@ -131,6 +136,10 @@ handle('runs:start', async request => {
   const explicit = request.explicit ?? (request.worktree ? 'worktree' : undefined);
   const worktree = request.worktree ?? undefined;
   try {
+    if (request.kind === 'Pipeline' && !request.confirmHostRestart) {
+      const options = await pipelineOptions.get(request.file, projectId);
+      if (options.error || options.issues.length) return {status: 'pipeline_options', options};
+    }
     const launch = await desktop.runs.start({...request, projectId, explicit, worktree});
     return await desktop.runs.waitForLaunch(launch);
   }

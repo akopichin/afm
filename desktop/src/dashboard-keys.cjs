@@ -39,6 +39,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const primary=/Mac/i.test(navigator.platform)?e.metaKey&&!e.ctrlKey:e.ctrlKey&&!e.metaKey;
     if(!primary||e.altKey)return;
     const key=e.key.toLowerCase();
+    if(!e.shiftKey&&key===','){e.preventDefault();send({navigate:'settings'});return}
     if(e.shiftKey?key==='enter':key==='k'){e.preventDefault();send(key==='k'?'switch-project':'new-run')}
   });
 });

@@ -49,10 +49,20 @@ export class ServeConfig {
       const entries = (doc.get('pipelines')?.toJSON()) || [];
       const existing = entries.find(entry => entry.id === id);
       const entry = { id, source, ...(options ? { options } : {}) };
-      if (existing && existing.source === source && existing.options === options) return { changed: false, value: id };
+      if (existing && existing.source === source && (options === undefined || existing.options === options)) return { changed: false, value: id };
       if (existing) throw Error(`Pipeline id ${id} is already used by another source.`);
       appendEntry(doc, 'pipelines', entry);
       return { changed: true, value: id };
+    });
+  }
+
+  setPipelineOptions(id, source, options) {
+    return this.#edit(doc => {
+      const node = doc.get('pipelines')?.items.find(item => item.get('id') === id && item.get('source') === source);
+      if (!node) throw Error('Pipeline is no longer registered in AFM.');
+      if (node.get('options') === options) return {changed: false};
+      node.set('options', options);
+      return {changed: true};
     });
   }
 

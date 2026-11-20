@@ -11,6 +11,8 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   runs:()=>ipcRenderer.invoke('runs:list'),
   dashboard:(id,instance,external=false)=>ipcRenderer.invoke('runs:open',id,instance,external),
   openLaunchLog:id=>ipcRenderer.invoke('runs:launch-log',id),
+  pipelineOptions:(id,projectId)=>ipcRenderer.invoke('pipeline-options:get',id,projectId),
+  savePipelineOptions:input=>ipcRenderer.invoke('pipeline-options:save',input),
   start:args=>ipcRenderer.invoke('runs:start',args),
   cancel:(id,instance)=>ipcRenderer.invoke('runs:cancel',id,instance),
   release:(id,instance)=>ipcRenderer.invoke('runs:release',id,instance),

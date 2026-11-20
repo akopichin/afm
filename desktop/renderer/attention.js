@@ -71,6 +71,7 @@ function navigateApp(command){
     const open=$('assistant').hidden||Boolean(focusedFrame);
     closeQueue();closeFocus();toggleChat(open);return;
   }
+  if(command==='settings'){closeQueue();closeFocus();openSettings();return}
   if(command==='model'){showQuickModel();return}
   if(command==='live'){
     // The native Live view is outside the page's tab order; this opens the run's Live tab if needed and hands it the keyboard.

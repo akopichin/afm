@@ -113,6 +113,7 @@ function launchRequest(projectId,item){
 }
 function updateGit(){
   const p=targetProject();
+  $('launch-options').hidden=isDemo||matches[choice]?.kind!=='Pipeline';
   $('launch-git').disabled=!p?.git;
   if(!isDemo){showEffectiveMode(p);return}
   const w=workspace();
@@ -172,6 +173,11 @@ async function startNative(p,item){
       if(!confirm(started.message+'\n\nRestart that host and start the run?')){launchStatus('Run not started.');return}
       started=await nativeAFM.start({...request,confirmHostRestart:true});
     }
+    if(started?.status==='pipeline_options'){
+      launchStatus('Review pipeline options before starting.');
+      showPipelineOptions(started.options, projectId);
+      return;
+    }
     if(started?.state!=='pending')attempt={signature:'',id:''};
     if(started?.message){
       launchStatus(started.message, started.logPath ? started.launch_id : null);
@@ -185,6 +191,47 @@ async function startNative(p,item){
   }catch(error){showNativeError(error);launchStatus(error.message)}
   finally{launching=false;$('launch-submit').disabled=false;if($('launch').open)updateGit()}
 }
+let editingPipeline=null;
+function showPipelineOptions(options, projectId){
+  editingPipeline={options,projectId};
+  $('pipeline-options-title').textContent=options.name+' · Pipeline options';
+  const sourcePath=options.previous && options.previous!==options.file ? 'Currently reading '+options.previous+'. Save to '+options.file : options.file;
+  $('pipeline-options-path').textContent=sourcePath;
+  $('pipeline-options-status').textContent=options.conflict?'Another source shares this name. Existing options are protected.':
+    [options.error,...options.issues].filter(Boolean).join('\n');
+  $('pipeline-options-roles').replaceChildren(...options.roles.map(role=>{
+    const row=document.createElement('li');
+    row.textContent=[role.id, role.command, role.profile, role.client, role.model, role.reasoning, role.auth_from, role.command_layer].filter(Boolean).join(' · ');
+    return row;
+  }));
+  $('pipeline-options-details').hidden=!options.roles.length;
+  $('pipeline-options-yaml').value=options.text;
+  $('pipeline-options-save').disabled=Boolean(options.conflict);
+  if(!$('pipeline-options').open)$('pipeline-options').showModal();
+}
+async function openPipelineOptions(id, projectId){
+  if(!id)return;
+  try{showPipelineOptions(await nativeAFM.pipelineOptions(id,projectId),projectId)}
+  catch(error){if($('launch').open)launchStatus(error.message);else{sourceMessage=error.message;drawSettings()}}
+}
+$('launch-options').onclick=()=>openPipelineOptions(matches[choice]?.path,targetProject()?.external?undefined:targetProject()?.id);
+$('pipeline-options-form').onsubmit=async event=>{
+  event.preventDefault();
+  const editing=editingPipeline;
+  const save=$('pipeline-options-save');
+  if(!editing||save.disabled)return;
+  save.disabled=true;
+  $('pipeline-options-status').textContent='Checking options…';
+  try{
+    const {options,projectId}=editing;
+    const updated=await nativeAFM.savePipelineOptions({id:options.id,projectId,text:$('pipeline-options-yaml').value,revision:options.revision});
+    if(editingPipeline!==editing||!$('pipeline-options').open)return;
+    showPipelineOptions(updated,projectId);
+    $('pipeline-options-status').textContent=['Saved.',...updated.issues].join('\n');
+    launchStatus('');
+  }catch(error){if(editingPipeline===editing)$('pipeline-options-status').textContent=error.message}
+  finally{if(editingPipeline===editing)save.disabled=false}
+};
 $('launch-submit').onclick=startRun;
 $('launch-project').onchange=()=>{choice=0;updateWorkflows();loadLaunchData()};
 $('launch-git').onchange=updateGit;
@@ -249,8 +296,12 @@ function drawSettings(){
     if(onboarding)$('finish-setup').onclick=()=>$('settings').close();
   }else if(settingsTab==='library'){
     body.innerHTML=tabs+`<p class="muted">Flows and pipelines available in every project.</p><div class="source-list">${state.sources.map(s=>`<div><span><strong>${esc(s.name)}</strong><small>${s.error?esc(s.error):s.items.length+' workflows'}</small></span>${s.id!=='starter'?`<button class="icon" data-refresh="${esc(s.id)}" aria-label="Refresh ${esc(s.name)}">↻</button><button class="icon" data-remove="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">×</button>`:''}</div>`).join('')}</div>
+      ${!isDemo?`<div class="source-list">${state.sources.flatMap(source=>source.items).map(item=>`<div><span>${esc(item.name)}</span><button data-pipeline-options="${esc(item.path)}">Pipeline options</button></div>`).join('')}</div>`:''}
       <div class="links"><button id="add-folder">＋ Local folder</button><button id="add-repo">＋ GitHub repository</button></div>
       <form id="repo-form" hidden><label>Public GitHub repository<input name="repo" required placeholder="owner/repository"></label><div class="actions"><button class="primary">Connect repository</button></div></form><p class="hint" role="status">${esc(sourceMessage)}</p>`;
+    for(const button of body.querySelectorAll('[data-pipeline-options]')){
+      button.onclick=()=>openPipelineOptions(button.dataset.pipelineOptions,selection().p?.external?undefined:selection().p?.id);
+    }
     $('add-folder').onclick=()=>isDemo?importFolder('source'):changeSource(()=>nativeAFM.pickSource());
     $('add-repo').onclick=()=>{$('repo-form').hidden=false;$('repo-form').elements.repo.focus()};
     $('repo-form').onsubmit=async e=>{
@@ -266,6 +317,7 @@ function drawSettings(){
   }else{
     body.innerHTML=tabs+`<label>Default workspace for Git projects<select id="default-git">${gitOptions(state.gitDefault)}</select></label>
     <p class="muted">A flow’s workspace preference takes precedence. You can change it for an individual run in the launcher.</p>
+    <div class="setting-row"><span>Settings</span><kbd>${modKey} ,</kbd></div>
     <div class="setting-row"><span>All projects</span><kbd>Alt H</kbd></div>
     <div class="setting-row"><span>Next / previous notification</span><kbd>Alt J / K</kbd></div>
     <div class="setting-row"><span>Stage focus</span><kbd>F · Esc</kbd></div>
@@ -413,6 +465,13 @@ $('path-form').onsubmit=async e=>{
   catch(error){showFolderError('project',error)}
 };
 $('settings-toggle').onclick=()=>openSettings();
+document.addEventListener('keydown',event=>{
+  if(event.repeat||event.isComposing||!primary(event)||event.altKey||event.shiftKey||event.key!==',')return;
+  if(document.querySelector('dialog[open]')&&!$('settings').open)return;
+  event.preventDefault();
+  if($('settings').open){if(!$('pipeline-options').open)$('settings').close()}
+  else navigateApp('settings');
+});
 $('settings').addEventListener('close',()=>{
   if(onboarding){state.setup=true;save();onboarding=false}
 });

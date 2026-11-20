@@ -100,3 +100,7 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 .project-tile .forget-project {position:absolute;right:8px;top:8px;background:var(--surface-raised);opacity:0}.project-tile:hover .forget-project,.project-tile:focus-within .forget-project {opacity:1}
 @media(hover:none){.project-tile .forget-project{opacity:1}}
 .source-list>div>span {min-width:0;flex:1;overflow-wrap:anywhere}
+
+#pipeline-options {width:min(720px, calc(100vw - 36px))}
+#pipeline-options textarea {width:100%;font-family:var(--font-mono);resize:vertical}
+#pipeline-options-path,#pipeline-options-status {overflow-wrap:anywhere;white-space:pre-line}

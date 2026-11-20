@@ -16,6 +16,18 @@ provider and use its login or a credential reference. Open a project folder to
 start a run. See the [Desktop release guide](../docs/releases.md#afm-desktop-releases)
 for archives, checksums and upgrades.
 
+## Configure pipeline options
+
+Press **Command+,** on macOS or **Ctrl+,** on Linux to open Settings. Choose
+**Pipeline options** next to a package in **Library**, or select a pipeline in
+**New run** and open the same editor there. Desktop opens the editor automatically
+when preflight finds a missing requirement. The editor shows effective roles and
+credential references, plus the options YAML. **Validate and save** checks the
+document with AFM and registers `~/.afm/pipelines/<name>/options.yaml` for future
+runs. Close the editor and choose **Start run** to retry. Package defaults apply
+when the options file is empty of overrides. Store secrets in the AFM environment
+settings or `secrets.env` and use references in pipeline options.
+
 ## Environment and failed launches
 
 Use **Settings → Environment** to import exported variables from `.zshrc` or
