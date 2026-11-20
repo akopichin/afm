@@ -30,6 +30,27 @@ test('a project can be removed from Home without opening it', async t => {
   assert.equal(w.location.hash,'');
 });
 
+test('Continue run waits and selects the replacement instance of the same run', async t => {
+  const stopped = runRow('resume', {state:'finished', can:{resume:true, open:false}});
+  const restarted = runRow('resume', {key:'new:resume', instanceId:'new'});
+  let finish;
+  const response = new Promise(resolve => {finish = resolve});
+  const {w,d,native} = await openShell(t, snapshotOf([projectRow('a',[stopped])]), {resume:async (...args)=>{
+    assert.deepEqual(args, ['resume','i-resume']);
+    return response;
+  }});
+  d.querySelector('[data-project="a"]').click();
+  await tick();
+  d.querySelector('[data-resume]').click();
+  assert.equal(d.querySelector('[data-resume]').disabled,true);
+  assert.equal(d.querySelector('[data-resume]').textContent,'Resuming…');
+  native.snapshot = snapshotOf([projectRow('a',[restarted])]);
+  finish({run_id:'resume',instance_id:'new',state:'ready'});
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash),'#a/new:resume/run');
+  assert.equal(d.querySelector('[data-resume]'),null);
+});
+
 test('notices lead to the exact project, run and stage, in a stable queue, whichever project is open', async t => {
   const { w, d, get, key, native } = await openShell(t, twoProjects(queue));
   assert.equal(get('notice-count').textContent, '3');

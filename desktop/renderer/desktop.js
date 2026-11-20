@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const label = r => ({running:'Running',review:'Needs approval',question:'Needs reply',stopped:'Stopped'})[r.state];
-const unavailable = r => ({finished:'This run has finished.',offline:'This run is offline. Desktop reconnects when it answers again.',
+const unavailable = r => ({finished:({interrupted:'This run was interrupted.',failed:'This run failed.'})[r.status]||'This run has finished.',offline:'This run is offline. Desktop reconnects when it answers again.',
   mismatch:'This address now belongs to a different run. Refresh the project.','api-only':'Core run · API only'})[r.hostState]||'This run is not available.';
 const active = r => ['running','review','question'].includes(r.state);
 const activeRuns = () => projects.flatMap(p=>p.runs.filter(active).map(r=>({p,r})));
@@ -66,6 +66,7 @@ function selection(){
   return {p,r,tab:tab||'run'};
 }
 let focusDashboard=false;
+const resumingRuns=new Set();
 function openProject(p,r,tab){
   focusDashboard=true;
   const last=remembered.get(p.id);
@@ -111,7 +112,10 @@ function render(){
   const liveTab=r?.live&&tab==='live';
   if(r)remembered.set(p.id,{id:r.id,tab:liveTab?'live':'run'});
   const tabs=p.runs.map(run=>`<button class="tab ${r===run&&!liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}">${esc(run.flow)}</button>${run.live?`<button class="tab ${r===run&&liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}" data-view="live">◉ Live · ${esc(run.liveStage?.stageId||'live-run')}</button>`:''}`).join('');
-  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${r?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
+  const continuing=resumingRuns.has(r?.key);
+  const resumeButton=r?.can?.resume||continuing
+    ?`<button class="action" data-resume ${continuing?'disabled aria-busy="true"':''}>${continuing?'Resuming…':'Continue run'}</button>`:'';
+  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${resumeButton}${r?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
   const area=$('content');
   if(!r){area.innerHTML=`<div class="project-idle"><h1>${esc(p.name)}</h1><p class="path">${esc(p.path)}</p><h2>No runs yet</h2><p class="muted">Choose a flow or pipeline to start in this folder.</p><button class="action primary" data-start>＋ New run</button></div>`;return}
   if(liveTab){
@@ -182,6 +186,28 @@ onDashboardMessage((frame,message)=>{
   if(message==='new-run')openLauncher(p);
 
 });
+async function continueRun(project, run) {
+  if (resumingRuns.has(run.key)) return;
+  const originalTab = location.hash;
+  resumingRuns.add(run.key);
+  render();
+  try {
+    let result = await nativeAFM.resume(run.rawId, run.instance);
+    if (result.status === 'external_host') {
+      if (!confirm(result.message+'\n\nRestart that host and continue the run?')) return;
+      result = await nativeAFM.resume(run.rawId, run.instance, true);
+    }
+    await refreshNative();
+    if (result.message) { showNativeError(result.message); return; }
+    const current = projects.find(p => p.id === project.id);
+    const resumed = current?.runs.find(r => r.rawId === result.run_id && r.instance === result.instance_id);
+    if (location.hash === originalTab && resumed) openProject(current, resumed);
+  } catch (error) { showNativeError(error); }
+  finally {
+    resumingRuns.delete(run.key);
+    if (selection().r?.key === run.key) render();
+  }
+}
 document.addEventListener('click',e=>{
   const el=e.target.closest('button');if(!el)return;
   const {p,r}=selection();
@@ -199,6 +225,7 @@ document.addEventListener('click',e=>{
   }
   if(el.hasAttribute('data-folder'))$('open-project').showModal();
   if(el.hasAttribute('data-start'))openLauncher(p);
+  if(el.hasAttribute('data-resume')&&r?.can?.resume){continueRun(p,r);return}
   if(el.hasAttribute('data-stop')&&!isDemo){window.nativeAFM.cancel(r.rawId,r.instance).then(refreshNative).catch(showNativeError);return}
   if(el.hasAttribute('data-stop')&&r.source==='Desktop'){r.state='stopped';r.live=false;save();openProject(p,r,'run');render()}
   if(el.dataset.delivery){r.delivery=el.dataset.delivery;save();render()}

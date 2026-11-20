@@ -1,16 +1,22 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { open } from 'node:fs/promises';
+import { open, readdir, stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
 import { HostError, dashboardURL } from './host.js';
 import { belongsTo } from './projects.js';
-import { configFilesFor, effectivePolicy, inspectGit, prepareBranch, resolveMode } from './git-mode.js';
+import { configFilesFor, effectivePolicy, inspectGit, prepareBranch, resolveMode, validWorktreeName } from './git-mode.js';
 import { projectFlows } from './sources.js';
 
 const MAX_LEDGER = 200;
 const FINISHED = ['finished', 'failed', 'interrupted'];
 const REFUSALS = new Set(['external_host', 'invalid', 'conflict', 'limit_running', 'limit_starting', 'request_conflict']);
+
+function resumable(row, launch) {
+  return row.ownership === 'managed' && row.launch?.state === 'exited'
+    && ['exited', undefined, ''].includes(row.liveness)
+    && ['interrupted', 'failed'].includes(row.run_status) && validWorktreeName(launch?.hostArgs?.worktree);
+}
 
 // A run as the UI shows it: identity, an honest state, and only the operations the host allows now.
 export function runView(row, ledger = {}) {
@@ -29,7 +35,7 @@ export function runView(row, ledger = {}) {
     origin: ledger[row.launch?.launch_id] ? 'desktop' : 'external', launchState: row.launch?.state ?? null,
     status: row.run_status ?? null, attention: Boolean(row.attention_required), state,
     can: { open: dashboard, cancel: actions.includes('cancel'), release: actions.includes('release'),
-      attach: actions.includes('attach'), report: actions.includes('report') },
+      attach: actions.includes('attach'), report: actions.includes('report'), resume: resumable(row, ledger[row.launch?.launch_id]) },
   };
 }
 
@@ -43,6 +49,7 @@ export class Runs {
     this.ledgerFile = path.join(desktopDir(home), 'launches.json');
     this.ledgerLock = new Mutex();
     this.inflight = new Map();
+    this.resuming = new Map();
   }
 
   async #ledger() { return (await readJSON(this.ledgerFile, { launches: {} })).launches; }
@@ -62,8 +69,20 @@ export class Runs {
   }
 
   async list() {
-    const issued = await this.#issued();
-    return (await this.host.runs()).map(row => runView(row, issued));
+    const [issued, rows] = await Promise.all([this.#issued(), this.host.runs()]);
+    const replaced = new Set(rows.flatMap(row => {
+      const launch = issued[row.launch?.launch_id];
+      return launch?.resumeRunId === row.run_id && launch.resumedFrom ? [launch.resumedFrom] : [];
+    }));
+    const visible = rows.filter(row => !replaced.has(row.launch?.launch_id));
+    const missingProject = visible.some(row => !row.project_root && issued[row.launch?.launch_id]);
+    const config = missingProject ? await this.serveConfig.read() : null;
+    return visible.map(row => {
+      const launch = issued[row.launch?.launch_id];
+      if (!launch || row.project_root) return runView(row, issued);
+      const root = launch.projectRoot ?? config?.projects.find(project => project.id === launch.projectId)?.path;
+      return runView({...row, project_root: root, run_name: row.run_name || launch.hostArgs?.worktree}, issued);
+    });
   }
 
   // Runs of one project plus the runs nobody on Home owns, newest information first.
@@ -85,6 +104,60 @@ export class Runs {
     const row = await this.#find(runId, instanceId);
     if (!row.actions?.includes('cancel')) throw new HostError('not_supported', 'This run cannot be cancelled from Desktop.');
     return this.host.tool('afm_run_cancel', { run_id: row.run_id });
+  }
+
+  resume(runId, instanceId, confirmHostRestart = false) {
+    const key = JSON.stringify([runId, instanceId]);
+    if (this.resuming.has(key)) return this.resuming.get(key);
+    const work = this.#resume(runId, instanceId, confirmHostRestart).finally(() => this.resuming.delete(key));
+    this.resuming.set(key, work);
+    return work;
+  }
+
+  async #resume(runId, instanceId, confirmHostRestart) {
+    const row = await this.#find(runId, instanceId);
+    const oldId = row.launch?.launch_id;
+    const previous = (await this.#issued())[oldId];
+    if (!resumable(row, previous) || !/^[a-f0-9]{64}$/.test(oldId)) {
+      throw new HostError('not_supported', 'Only a stopped Desktop run with a saved worktree can be continued.');
+    }
+    const receipt = await readJSON(path.join(this.home, '.afm', 'serve', 'launches', oldId + '.json'), null);
+    const worktree = previous.hostArgs.worktree;
+    if (!receipt?.process_gone || receipt.run_id !== runId || receipt.instance_id !== instanceId
+        || receipt.params?.worktree !== worktree || !path.isAbsolute(receipt.runs_dir ?? '')) {
+      throw new HostError('run_changed', 'The previous AFM process has not finished stopping. Refresh and try again.');
+    }
+    const checkout = receipt.identity?.checkout;
+    if (!checkout || !(await stat(path.join(checkout, '.git')).catch(() => null))) {
+      throw new HostError('worktree_missing', 'The run’s worktree is missing. Restore it before continuing.');
+    }
+    // Match AFM's timestamp suffix, so similarly prefixed worktrees never count as this one.
+    const prefix = worktree + '-';
+    const entries = await readdir(receipt.runs_dir, {withFileTypes:true});
+    const latest = entries.filter(entry => entry.isDirectory() && entry.name.startsWith(prefix)
+      && /^[0-9]{8}-[0-9]{6}(?:-[0-9a-f]+)?$/.test(entry.name.slice(prefix.length))).map(entry => entry.name).sort().at(-1);
+    if (latest !== runId) throw new HostError('run_changed', 'Only the latest saved run in this worktree can be continued.');
+
+    const requestId = randomUUID();
+    const { project, pipeline, flow, mode } = previous.hostArgs;
+    if (pipeline) {
+      const binding = await readJSON(path.join(path.dirname(receipt.runs_dir), 'pipelines', 'runs', runId + '.json'), null);
+      const source = (await this.serveConfig.read()).pipelines.find(entry => entry.id === pipeline)?.source;
+      if (binding?.run_id !== runId || binding.worktree !== worktree || !source
+          || (binding.source?.kind === 'local' && binding.source.location !== source)) {
+        throw new HostError('run_changed', 'Restore the original pipeline source before continuing this run.');
+      }
+    }
+    const hostArgs = { request_id: requestId, project, mode, worktree, ...(pipeline ? {pipeline} : {flow}) };
+    const effective = previous.effective;
+    await this.#updateLedger(all => ({ ...all, [requestId]: {at:new Date().toISOString(), projectId:project,
+      projectRoot:row.project_root || previous.projectRoot, hostArgs, effective, resumedFrom:oldId, resumeRunId:runId} }));
+    const launch = await this.#send(requestId, hostArgs, effective, null, confirmHostRestart);
+    const result = await this.waitForLaunch(launch);
+    if (result.run_id && result.run_id !== runId) {
+      return {...result, message:'AFM selected a different run. Open the project to inspect it.'};
+    }
+    return result;
   }
 
   async release(runId, instanceId) {
@@ -158,7 +231,7 @@ export class Runs {
       ...(task ? { task } : {}),
     };
     await this.#updateLedger(all => ({ ...all, [requestId]: { ...all[requestId], fingerprint, at: all[requestId]?.at ?? new Date().toISOString(),
-      projectId, hostArgs, effective: plan.effective } }));
+      projectId, projectRoot: plan.project.path, hostArgs, effective: plan.effective } }));
     return this.#send(requestId, hostArgs, plan.effective, undo, confirmHostRestart);
   }
 
