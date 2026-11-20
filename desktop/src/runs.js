@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { open, readdir, stat } from 'node:fs/promises';
+import { open, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
 import { HostError, dashboardURL } from './host.js';
 import { belongsTo } from './projects.js';
@@ -11,17 +13,31 @@ import { projectFlows } from './sources.js';
 const MAX_LEDGER = 200;
 const FINISHED = ['finished', 'failed', 'interrupted'];
 const REFUSALS = new Set(['external_host', 'invalid', 'conflict', 'limit_running', 'limit_starting', 'request_conflict']);
+const exec = promisify(execFile);
+const LIVE = ['active', 'active_orphaned'];
+
+function stoppedDesktop(row, launch) {
+  return row.ownership === 'managed' && ['exited', 'failed'].includes(row.launch?.state)
+    && ['exited', undefined, ''].includes(row.liveness) && Boolean(launch?.hostArgs && row.run_id);
+}
 
 function resumable(row, launch) {
-  return row.ownership === 'managed' && ['exited', 'failed'].includes(row.launch?.state)
-    && ['exited', undefined, ''].includes(row.liveness)
-    && ['interrupted', 'failed'].includes(row.run_status) && validWorktreeName(launch?.hostArgs?.worktree);
+  return stoppedDesktop(row, launch) && ['interrupted', 'failed'].includes(row.run_status)
+    && validWorktreeName(launch.hostArgs.worktree);
+}
+
+async function worktreeRuns(directory, name) {
+  const prefix = name + '-';
+  const entries = await readdir(directory, {withFileTypes:true});
+  return entries.filter(entry => entry.isDirectory() && entry.name.startsWith(prefix)
+    && /^[0-9]{8}-[0-9]{6}(?:-[0-9a-f]+)?$/.test(entry.name.slice(prefix.length))).map(entry => entry.name).sort();
 }
 
 // A run as the UI shows it: identity, an honest state, and only the operations the host allows now.
 export function runView(row, ledger = {}) {
-  const alive = ['active', 'active_orphaned'].includes(row.liveness);
+  const alive = LIVE.includes(row.liveness);
   const actions = row.actions ?? [];
+  const launch = ledger[row.launch?.launch_id];
   let state = 'running';
   if (row.liveness === 'identity_mismatch') state = 'mismatch';
   else if (['unreachable', 'stale'].includes(row.liveness)) state = 'offline';
@@ -32,10 +48,10 @@ export function runView(row, ledger = {}) {
   return {
     key: `${row.instance_id}:${row.run_id}`, runId: row.run_id, instanceId: row.instance_id, name: row.run_name,
     projectRoot: row.project_root, pid: row.pid ?? null, mode: row.mode, apiUrl: row.api_url, ownership: row.ownership,
-    origin: ledger[row.launch?.launch_id] ? 'desktop' : 'external', launchState: row.launch?.state ?? null,
+    origin: launch ? 'desktop' : 'external', launchState: row.launch?.state ?? null,
     status: row.run_status ?? null, attention: Boolean(row.attention_required), state,
     can: { open: dashboard, cancel: actions.includes('cancel'), release: actions.includes('release'),
-      attach: actions.includes('attach'), report: actions.includes('report'), resume: resumable(row, ledger[row.launch?.launch_id]) },
+      attach: actions.includes('attach'), report: actions.includes('report'), resume: resumable(row, launch), delete: stoppedDesktop(row, launch) },
   };
 }
 
@@ -47,9 +63,11 @@ export class Runs {
   constructor({ home, host, projects, sources, prefs, serveConfig }) {
     Object.assign(this, { home, host, projects, sources, prefs, serveConfig });
     this.ledgerFile = path.join(desktopDir(home), 'launches.json');
+    this.deletedFile = path.join(desktopDir(home), 'deleted-runs.json');
     this.ledgerLock = new Mutex();
     this.inflight = new Map();
     this.resuming = new Map();
+    this.deleting = new Set();
   }
 
   async #ledger() { return (await readJSON(this.ledgerFile, { launches: {} })).launches; }
@@ -69,12 +87,15 @@ export class Runs {
   }
 
   async list() {
-    const [issued, rows] = await Promise.all([this.#issued(), this.host.runs()]);
+    const [issued, rows, deleted] = await Promise.all([this.#issued(), this.host.runs(), readJSON(this.deletedFile,{})]);
     const replaced = new Set(rows.flatMap(row => {
       const launch = issued[row.launch?.launch_id];
       return launch?.resumedFrom && launch.resumeRunId === row.run_id ? [launch.resumedFrom] : [];
     }));
-    const visible = rows.filter(row => !replaced.has(row.launch?.launch_id));
+    const visible = rows.filter(row => {
+      const id = row.launch?.launch_id;
+      return !replaced.has(id) && (LIVE.includes(row.liveness) || !deleted[JSON.stringify([issued[id]?.projectId,row.run_id])]);
+    });
     const missingProject = visible.some(row => !row.project_root && issued[row.launch?.launch_id]);
     const config = missingProject ? await this.serveConfig.read() : null;
     return visible.map(row => {
@@ -108,6 +129,7 @@ export class Runs {
 
   resume(runId, instanceId, confirmHostRestart = false) {
     const key = JSON.stringify([runId, instanceId]);
+    if (this.deleting.has(runId)) throw new HostError('busy','This run is being deleted.');
     if (this.resuming.has(key)) return this.resuming.get(key);
     const work = this.#resume(runId, instanceId, confirmHostRestart).finally(() => this.resuming.delete(key));
     this.resuming.set(key, work);
@@ -131,11 +153,7 @@ export class Runs {
     if (!checkout || !(await stat(path.join(checkout, '.git')).catch(() => null))) {
       throw new HostError('worktree_missing', 'The run’s worktree is missing. Restore it before continuing.');
     }
-    // Match AFM's timestamp suffix, so similarly prefixed worktrees never count as this one.
-    const prefix = worktree + '-';
-    const entries = await readdir(receipt.runs_dir, {withFileTypes:true});
-    const latest = entries.filter(entry => entry.isDirectory() && entry.name.startsWith(prefix)
-      && /^[0-9]{8}-[0-9]{6}(?:-[0-9a-f]+)?$/.test(entry.name.slice(prefix.length))).map(entry => entry.name).sort().at(-1);
+    const latest = (await worktreeRuns(receipt.runs_dir, worktree)).at(-1);
     if (latest !== runId) throw new HostError('run_changed', 'Only the latest saved run in this worktree can be continued.');
 
     const requestId = randomUUID();
@@ -158,6 +176,80 @@ export class Runs {
       return {...result, message:'AFM selected a different run. Open the project to inspect it.'};
     }
     return result;
+  }
+
+  async #deletion(runId, instanceId) {
+    const rows = await this.host.runs();
+    const row = rows.find(item => item.run_id === runId && item.instance_id === instanceId);
+    const id = row?.launch?.launch_id;
+    const launch = (await this.#issued())[id];
+    if (!row || !stoppedDesktop(row, launch) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(runId) || !/^[a-f0-9]{64}$/.test(id)) {
+      throw new HostError('not_supported','Only a stopped run started from Desktop can be deleted.');
+    }
+    const receipt = await readJSON(path.join(this.home,'.afm','serve','launches',id+'.json'),null);
+    if (!receipt?.process_gone || receipt.run_id !== runId || receipt.instance_id !== instanceId
+        || rows.some(item => item.run_id === runId && LIVE.includes(item.liveness))) {
+      throw new HostError('run_changed','Stop every instance of the run before deleting it.');
+    }
+    const { projectId } = launch;
+    const configured = await this.serveConfig.read();
+    const projectRoot = launch.projectRoot ?? row.project_root ?? configured.projects.find(project => project.id === projectId)?.path;
+    if (!projectRoot || !path.isAbsolute(projectRoot)) throw new HostError('run_changed','The original project folder is unavailable.');
+    const project = await realpath(projectRoot);
+    const afm = path.join(project,'.afm');
+    const runs = path.join(afm,'runs');
+    if (!path.isAbsolute(receipt.runs_dir ?? '') || await realpath(receipt.runs_dir) !== runs) {
+      throw new HostError('run_changed','The saved run directory no longer matches its project.');
+    }
+    const optional = [path.join(afm,'pipelines','runs'),path.join(afm,'side-agent')];
+    for (const directory of optional) {
+      const resolved = await realpath(directory).catch(error => {
+        if (error.code === 'ENOENT') return directory;
+        throw error;
+      });
+      if (resolved !== directory) throw new HostError('run_changed','A run data directory points outside its saved path.');
+    }
+    const name = receipt.params?.worktree;
+    const checkout = receipt.identity?.checkout;
+    let worktree = null;
+    let shared = false;
+    if (validWorktreeName(name) && checkout && checkout !== project && path.basename(checkout) === name
+        && path.basename(path.dirname(checkout)) === '.worktrees') {
+      shared = (await worktreeRuns(runs,name)).some(other => other !== runId);
+      const details = await stat(checkout).catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (!shared && details?.isDirectory()) worktree = checkout;
+    }
+    return {projectId, project, afm, runs, worktree, shared};
+  }
+
+  async delete(runId, instanceId, confirm) {
+    const key = JSON.stringify([runId,instanceId]);
+    if (this.deleting.has(runId) || this.resuming.has(key)) throw new HostError('busy','This run already has an operation in progress.');
+    this.deleting.add(runId);
+    try {
+      const preview = await this.#deletion(runId,instanceId);
+      if (!await confirm(preview)) return {deleted:false};
+      const current = await this.#deletion(runId,instanceId);
+      if (current.project !== preview.project || current.worktree !== preview.worktree) {
+        throw new HostError('run_changed','The worktree changed while the dialog was open. Try again.');
+      }
+      if (current.worktree) {
+        try { await exec('git',['-C',current.project,'worktree','remove','--',current.worktree]); }
+        catch { throw new HostError('worktree_busy','Git could not remove the worktree. Check for uncommitted changes or a worktree lock. No run data was deleted.'); }
+        await exec('git',['-C',current.project,'branch','-d','--',path.basename(current.worktree)]).catch(() => {});
+      }
+      await rm(path.join(current.runs,runId),{recursive:true,force:true});
+      await rm(path.join(current.afm,'pipelines','runs',runId+'.json'),{force:true});
+      await rm(path.join(current.afm,'side-agent',runId),{recursive:true,force:true});
+      await this.ledgerLock.run(async () => {
+        const deleted = await readJSON(this.deletedFile,{});
+        await writeJSON(this.deletedFile,{...deleted,[JSON.stringify([current.projectId,runId])]:true});
+      });
+      return {deleted:true};
+    } finally { this.deleting.delete(runId); }
   }
 
   async release(runId, instanceId) {

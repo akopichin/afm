@@ -34,7 +34,10 @@ export class Notifier {
     if (snapshot.host.error || snapshot.host.state !== 'connected') return Promise.resolve();
     return this.lock.run(async () => {
       const first = !this.seen;
-      this.seen ??= new Map(Object.entries(await readJSON(this.file, {})));
+      if (first) {
+        const stored = await readJSON(this.file,{});
+        this.seen = new Map(stored && typeof stored === 'object' && !Array.isArray(stored) ? Object.entries(stored) : []);
+      }
       const identified = snapshot.attention.filter(item => item.requestAt);
       const fresh = identified.filter(item => !this.seen.has(this.#key(item)));
       if (!fresh.length && !first) return;

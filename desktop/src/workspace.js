@@ -119,7 +119,7 @@ export class Workspace {
   // Precise notices for runs the host says need a person. A failed read keeps what was known, so one
   // dropped request neither removes nor re-adds a notice.
   async #attention(runs) {
-    const flagged = runs.filter(run => run.attention && run.state === 'running');
+    const flagged = runs.filter(run => run.attention && (run.state === 'running' || run.can?.open));
     const found = new Map();
     for (let i = 0; i < flagged.length; i += FETCH_LIMIT) {
       await Promise.all(flagged.slice(i, i + FETCH_LIMIT).map(async run => {

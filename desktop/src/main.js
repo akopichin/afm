@@ -173,6 +173,16 @@ handle('runs:resume', async (id, instanceId, confirmHostRestart) => {
   try { return await desktop.runs.resume(id, instanceId, confirmHostRestart === true); }
   catch (error) { if (error.code === 'external_host') return {status:'external_host', message:error.message}; throw error; }
 });
+handle('runs:delete', (id, instanceId) => desktop.runs.delete(id, instanceId, async ({worktree, shared}) => {
+  const workspace = worktree ? '\n\nGit will remove this worktree if it is clean and remove its branch if merged:\n'+worktree
+    : shared ? '\n\nThe worktree is shared with another run and will be kept.' : '';
+  const result = await dialog.showMessageBox(window, {
+    type:'warning', message:'Delete this run?',
+    detail:'This permanently removes the saved run log, state, and artifacts.'+workspace,
+    buttons:['Cancel','Delete run'], defaultId:0, cancelId:0, noLink:true,
+  });
+  return result.response === 1;
+}));
 handle('runs:release', (id, instanceId) => desktop.runs.release(id, instanceId));
 handle('runs:attach', endpoint => desktop.runs.attach(endpoint));
 registerAssistantIpc(handle, assistant, event => window?.webContents.send('assistant:event', event));

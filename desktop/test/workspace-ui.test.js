@@ -51,6 +51,28 @@ test('Continue run waits and selects the replacement instance of the same run', 
   assert.equal(d.querySelector('[data-resume]'),null);
 });
 
+test('Delete run stays on a cancelled confirmation and moves to the remaining tab after deletion', async t => {
+  const stopped = runRow('stopped',{state:'finished',can:{delete:true,open:false}});
+  let cancelled = true;
+  const snapshot = snapshotOf([projectRow('a',[ra,stopped])]);
+  const {w,d,native} = await openShell(t,snapshot,{deleteRun:async (...args)=>{
+    assert.deepEqual(args,['stopped','i-stopped']);
+    if (cancelled) return {deleted:false};
+    native.snapshot = snapshotOf([projectRow('a',[ra])]);
+    return {deleted:true};
+  }});
+  d.querySelector('[data-project="a"]').click();
+  await tick();
+  d.querySelector('[data-delete-run]').click();
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash),'#a/i-stopped:stopped/run');
+  cancelled = false;
+  d.querySelector('[data-delete-run]').click();
+  await tick();
+  assert.equal(decodeURIComponent(w.location.hash),'#a/i-ra:ra/run');
+  assert.equal(d.querySelector('[data-delete-run]'),null);
+});
+
 test('notices lead to the exact project, run and stage, in a stable queue, whichever project is open', async t => {
   const { w, d, get, key, native } = await openShell(t, twoProjects(queue));
   assert.equal(get('notice-count').textContent, '3');

@@ -67,6 +67,7 @@ function selection(){
 }
 let focusDashboard=false;
 const resumingRuns=new Set();
+const deletingRuns=new Set();
 function openProject(p,r,tab){
   focusDashboard=true;
   const last=remembered.get(p.id);
@@ -113,9 +114,12 @@ function render(){
   if(r)remembered.set(p.id,{id:r.id,tab:liveTab?'live':'run'});
   const tabs=p.runs.map(run=>`<button class="tab ${r===run&&!liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}">${esc(run.flow)}</button>${run.live?`<button class="tab ${r===run&&liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}" data-view="live">◉ Live · ${esc(run.liveStage?.stageId||'live-run')}</button>`:''}`).join('');
   const continuing=resumingRuns.has(r?.key);
+  const deleting=deletingRuns.has(r?.key);
+  const deleteButton=r?.can?.delete
+    ?`<button class="action" data-delete-run ${deleting||continuing?'disabled':''}>${deleting?'Deleting…':'Delete run…'}</button>`:'';
   const resumeButton=r?.can?.resume||continuing
-    ?`<button class="action" data-resume ${continuing?'disabled aria-busy="true"':''}>${continuing?'Resuming…':'Continue run'}</button>`:'';
-  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${resumeButton}${r?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
+    ?`<button class="action" data-resume ${continuing?'disabled aria-busy="true"':deleting?'disabled':''}>${continuing?'Resuming…':'Continue run'}</button>`:'';
+  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${resumeButton}${deleteButton}${r?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
   const area=$('content');
   if(!r){area.innerHTML=`<div class="project-idle"><h1>${esc(p.name)}</h1><p class="path">${esc(p.path)}</p><h2>No runs yet</h2><p class="muted">Choose a flow or pipeline to start in this folder.</p><button class="action primary" data-start>＋ New run</button></div>`;return}
   if(liveTab){
@@ -208,6 +212,27 @@ async function continueRun(project, run) {
     if (selection().r?.key === run.key) render();
   }
 }
+async function deleteRun(project, run) {
+  if (deletingRuns.has(run.key)) return;
+  const originalTab = location.hash;
+  deletingRuns.add(run.key);
+  render();
+  try {
+    const result = await nativeAFM.deleteRun(run.rawId, run.instance);
+    if (!result.deleted) return;
+    if (remembered.get(project.id)?.id === run.id) remembered.delete(project.id);
+    await refreshNative();
+    if (location.hash === originalTab) {
+      const current = projects.find(p => p.id === project.id);
+      if (current) openProject(current);
+      else location.hash = '';
+    }
+  } catch (error) { showNativeError(error); }
+  finally {
+    deletingRuns.delete(run.key);
+    if (location.hash === originalTab && selection().r?.key === run.key) render();
+  }
+}
 document.addEventListener('click',e=>{
   const el=e.target.closest('button');if(!el)return;
   const {p,r}=selection();
@@ -226,6 +251,7 @@ document.addEventListener('click',e=>{
   if(el.hasAttribute('data-folder'))$('open-project').showModal();
   if(el.hasAttribute('data-start'))openLauncher(p);
   if(el.hasAttribute('data-resume')&&r?.can?.resume){continueRun(p,r);return}
+  if(el.hasAttribute('data-delete-run')&&r?.can?.delete){deleteRun(p,r);return}
   if(el.hasAttribute('data-stop')&&!isDemo){window.nativeAFM.cancel(r.rawId,r.instance).then(refreshNative).catch(showNativeError);return}
   if(el.hasAttribute('data-stop')&&r.source==='Desktop'){r.state='stopped';r.live=false;save();openProject(p,r,'run');render()}
   if(el.dataset.delivery){r.delivery=el.dataset.delivery;save();render()}

@@ -2,6 +2,8 @@
 
 A local Electron app for AFM projects. Releases are available for macOS and Linux on arm64 and x64. Design, acceptance criteria, reference screenshots and the overnight task live in [the Desktop spec](../specs/desktop/spec.md) and [implementation plan](../specs/desktop/plan.md).
 
+See the [Desktop changelog](CHANGELOG.md) for recent changes.
+
 ## Install and open Desktop
 
 On macOS, install via Homebrew and open **AFM Desktop** from Applications:
@@ -55,6 +57,29 @@ open the run's tab and choose **Continue run**. Desktop reuses the saved launch
 source and worktree. A pipeline continues from its recorded snapshot, and the
 tab follows the new process instance of the same run. **New run** opens the
 launcher for a separate launch.
+
+Use **Delete run…** on a stopped Desktop run to remove its saved state, logs,
+and artifacts from the project. The confirmation shows any dedicated worktree
+that Git will remove. Git preserves unmerged branch commits and refuses dirty
+or locked worktrees. Desktop keeps shared worktrees and removes only the selected run's
+data. The AFM host's internal launch record remains for idempotency.
+
+## System notifications
+
+Open **Settings → Notifications** to choose questions, approvals, blocked
+decisions, and stage failures. Questions, approvals, and decisions are enabled
+by default. Desktop uses the operating system's notification settings and
+does not include question text. A run already shown in the focused window
+keeps its attention in the in-app queue.
+
+Clicking a banner opens the run and its waiting stage. If the host disconnects,
+Desktop waits for it to reconnect. If the request has already been resolved,
+the banner opens the run. A clicked banner closes an open app dialog so it can
+show the run. A burst summary banner brings the app to the front.
+
+Notifications work while Desktop is running, including with a minimized or
+closed window on macOS. The existing background loop checks at its slower
+hidden interval. Already pending requests stay in the queue on startup.
 
 ## Run the overnight development flow
 

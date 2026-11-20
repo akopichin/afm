@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, writeFile, access, mkdir, realpath, rmdir } from 'node:fs/promises';
+import { readFile, writeFile, access, mkdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -96,6 +96,46 @@ test('Continue run reuses a saved worktree and pipeline snapshot after Desktop r
   assert.equal(git(path.join(root, '.worktrees', worktree), 'branch', '--show-current'), worktree);
   await reopened.runs.cancel(first.runId, continued.instance_id);
   await eventually(async () => (await reopened.runs.forProject(project.id)).some(run=>run.can.resume), {what:'resumed process exit'});
+});
+
+test('Delete run removes a stopped run and its clean dedicated worktree after confirmation', fast, async t => {
+  const ctx = await tempHome(t);
+  const root = await makeProject(ctx.home,'repo',{git:true,flows:{'delete.yaml':sleepFlow('delete',60)}});
+  const desktop = await open(t,ctx);
+  const project = await desktop.projects.add(root);
+  const worktree = 'desktop-delete-test';
+  const started = await desktop.runs.start({requestId:'delete',projectId:project.id,kind:'Flow',file:'delete.yaml',explicit:'worktree',worktree});
+  const live = await desktop.runs.waitForLaunch(started);
+  const remove = confirm => desktop.runs.delete(live.run_id,live.instance_id,confirm);
+  await assert.rejects(remove(()=>true),{code:'not_supported'});
+  await desktop.runs.cancel(live.run_id,live.instance_id);
+  await eventually(async () => (await desktop.runs.forProject(project.id)).find(run=>run.can.delete), {what:'deletable run'});
+  const checkout = path.join(root,'.worktrees',worktree);
+  const runDir = path.join(root,'.afm','runs',live.run_id);
+  const other = path.join(path.dirname(runDir),worktree+'-29991231-235959-abcd');
+  await mkdir(other);
+  assert.deepEqual(await remove(preview => {
+    assert.equal(preview.shared,true);
+    assert.equal(preview.worktree,null);
+    return false;
+  }),{deleted:false});
+  await rmdir(other);
+  const dirty = path.join(checkout,'keep.txt');
+  await writeFile(dirty,'local changes');
+  await assert.rejects(remove(()=>true),{code:'worktree_busy'});
+  assert.equal(await readFile(dirty,'utf8'),'local changes');
+  await access(runDir);
+  await unlink(dirty);
+  assert.deepEqual(await remove(preview => {
+    assert.equal(preview.worktree,checkout);
+    return true;
+  }),{deleted:true});
+  await assert.rejects(access(checkout),{code:'ENOENT'});
+  assert.equal(git(root,'branch','--list',worktree),'');
+  await assert.rejects(access(runDir),{code:'ENOENT'});
+  await desktop.close();
+  const reopened = await open(t,ctx);
+  assert.deepEqual(await reopened.runs.forProject(project.id),[]);
 });
 
 test('a project registered after the host started restarts the host and keeps running runs', fast, async t => {
