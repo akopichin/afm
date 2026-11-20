@@ -149,6 +149,9 @@ test('cancel stops the provider process, keeps the partial text and leaves the c
   events.length = 0;
   await assistant.configure({ provider: 'codex' });
   await assistant.send({ text: 'again' });
+  await until(events, 'delta');
+  assistant.cancel();
+  await until(events, 'cancelled');
 });
 
 test('one reply per conversation and a bounded number overall', async t => {

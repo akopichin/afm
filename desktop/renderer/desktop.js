@@ -92,7 +92,7 @@ function stageLabel(r){
 function renderHome(){
   const runs=activeRuns();
   $('screen').innerHTML=`<div class="home"><div class="heading"><div><h1>Projects</h1><p class="summary">${projects.length} recent projects · ${runs.length} active runs</p></div><div class="heading-actions"><button class="action" data-folder>Open folder…</button><button class="action primary" data-start>＋ New run</button></div></div>
-  <section><div class="section-title"><h2>Recent projects</h2></div><div class="tiles">${projects.map((p,i)=>`<button class="tile" data-project="${p.id}" style="--tone:${p.tone}">${artwork(i)}<div class="tile-body"><h3>${esc(p.name)}</h3><p class="path">${esc(p.path)}</p></div><div class="cardfooter"><i class="dot"></i>${p.runs.some(active)?p.runs.filter(active).length+' active run'+(p.runs.filter(active).length===1?'':'s'):'No active runs'}</div></button>`).join('')}</div></section>
+  <section><div class="section-title"><h2>Recent projects</h2></div><div class="tiles">${projects.map((p,i)=>`<div class="project-tile"><button class="tile" data-project="${p.id}" style="--tone:${p.tone}">${artwork(i)}<div class="tile-body"><h3>${esc(p.name)}</h3><p class="path">${esc(p.path)}</p></div><div class="cardfooter"><i class="dot"></i>${p.runs.some(active)?p.runs.filter(active).length+' active run'+(p.runs.filter(active).length===1?'':'s'):'No active runs'}</div></button><button class="forget-project icon" data-forget="${esc(p.id)}" aria-label="Remove ${esc(p.name)} from recent projects" title="Remove from recent projects">×</button></div>`).join('')}</div></section>
   <section><div class="section-title"><h2>Active runs</h2><span class="total">${runs.length}</span></div><div class="active-list">${runs.map(({p,r})=>`<button class="row" data-project="${p.id}" data-run="${r.id}" style="--tone:${p.tone}"><span class="r-icon">${r.source==='Terminal'?'›_':'▷'}</span><span class="r-name"><strong>${esc(r.flow)}</strong><small>${esc(p.name)}${stageLabel(r)}</small></span><span class="origin">${r.source}</span><span class="mini-state"><i class="dot"></i>${label(r)}</span><span class="chev">→</span></button>`).join('')||'<p class="empty">No active runs</p>'}</div></section></div>`;
 }
 function runURL(p,r){
@@ -185,6 +185,12 @@ onDashboardMessage((frame,message)=>{
 document.addEventListener('click',e=>{
   const el=e.target.closest('button');if(!el)return;
   const {p,r}=selection();
+  if(el.dataset.forget){
+    const id=el.dataset.forget;
+    if(isDemo){const i=projects.findIndex(item=>item.id===id);if(i>=0)projects.splice(i,1);save();render()}
+    else nativeAFM.removeProject(id).then(refreshNative).catch(showNativeError);
+    return;
+  }
   if(el.hasAttribute('data-switch'))showPicker();
   if(el.dataset.project){
     if($('picker').open)$('picker').close();

@@ -150,11 +150,31 @@ test('the quick chooser (Alt M) applies provider, model and reasoning through th
   await tick();
   get('quick-agent').value = 'codex';
   get('quick-agent').dispatchEvent(new w.Event('change'));
+  get('quick-model-list').value = '__custom';
+  get('quick-model-list').dispatchEvent(new w.Event('change'));
+  assert.equal(get('quick-model-id').hidden, false);
   get('quick-model-id').value = 'gpt-test';
   get('quick-effort').value = 'high';
   get('quick-model-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
   await tick();
   assert.deepEqual(assistant.calls.configure.at(-1), { provider: 'codex', model: 'gpt-test', reasoning: 'high' });
+});
+
+test('settings and the quick chooser offer the detected models, a default and custom input', async t => {
+  const assistant=fakeAssistant();
+  assistant.info.providers[0].models=[{id:'sonnet',label:'Sonnet',default:true}];
+  const { w,get,key }=await openShell(t,{assistant});
+  get('settings-toggle').click();
+  await tick();
+  const picker=get('profile-model-list');
+  assert.deepEqual([...picker.options].map(o=>o.value),['','sonnet','__custom']);
+  picker.value='sonnet';
+  picker.dispatchEvent(new w.Event('change'));
+  await tick();
+  assert.equal(assistant.calls.configure.at(-1).model,'sonnet');
+  get('settings').close();
+  key('KeyM','m',{altKey:true});
+  assert.equal(get('quick-model-list').value,'sonnet');
 });
 
 test('a provider is added as a reference to its credential and can be tested and removed', async t => {

@@ -37,7 +37,7 @@ export class Sources {
       if (kind === 'folder' && !(await stat(resolved)).isDirectory()) throw Error('Source must be a folder.');
       const sources = await this.#load();
       const existing = sources.find(source => source.location === resolved);
-      if (existing) return existing;
+      if (existing) return existing.error ? this.#refresh(existing) : existing;
       const source = { id: createHash('sha256').update(resolved).digest('hex').slice(0, 8), kind, location: resolved, entries: [], refreshedAt: null, error: null };
       await writeJSON(this.file, { sources: [...sources, source] });
       return this.#refresh(source);
@@ -49,7 +49,8 @@ export class Sources {
       const sources = await this.#load();
       const source = sources.find(item => item.id === id);
       if (!source) return false;
-      for (const entry of source.entries) await this.serveConfig.removePipeline(entry.id);
+      const retained = new Set(sources.filter(item => item.id !== id).flatMap(item => item.entries.map(entry => entry.id)));
+      for (const entry of source.entries) if (!retained.has(entry.id)) await this.serveConfig.removePipeline(entry.id);
       await writeJSON(this.file, { sources: sources.filter(item => item.id !== id) });
       return true;
     });
@@ -69,9 +70,12 @@ export class Sources {
     let entries = source.entries;
     let error = null;
     try {
-      entries = source.kind === 'git' ? await this.#inspectGit(source) : await this.#scanFolder(source);
-      for (const entry of entries) await this.serveConfig.addPipeline({ id: entry.id, source: entry.source });
-      for (const old of source.entries) if (!entries.some(entry => entry.id === old.id)) await this.serveConfig.removePipeline(old.id);
+      const next = source.kind === 'git' ? await this.#inspectGit(source) : await this.#scanFolder(source);
+      for (const entry of next) await this.serveConfig.addPipeline({ id: entry.id, source: entry.source });
+      const others = (await this.#load()).filter(item => item.id !== source.id);
+      const retained = new Set([...next, ...others.flatMap(item => item.entries)].map(entry => entry.id));
+      for (const old of source.entries) if (!retained.has(old.id)) await this.serveConfig.removePipeline(old.id);
+      entries = next;
     } catch (failure) { error = failure.message; }
     const updated = { ...source, entries, error, refreshedAt: new Date().toISOString() };
     const sources = (await this.#load()).map(item => item.id === source.id ? updated : item);
@@ -95,13 +99,28 @@ export class Sources {
   }
 
   async #inspectGit(source) {
-    const { stdout } = await run(await this.binary(), ['pipelines', 'inspect', source.location, '--json'],
-      { timeout: 120000, env: { ...process.env, HOME: this.home }, maxBuffer: 4 << 20 });
-    const info = JSON.parse(stdout);
-    const policy = await declaredWorktrees(path.join(info.snapshot.dir, info.package.entrypoint));
-    const flowName = await declaredName(path.join(info.snapshot.dir, info.package.entrypoint));
-    return [{ id: pipelineId(info.package.name, source.location), name: info.package.name, version: info.package.version,
-      source: source.location, flowName, policy, commit: info.source.commit ?? null }];
+    const binary = await this.binary();
+    const options = { timeout: 120000, env: { ...process.env, HOME: this.home }, maxBuffer: 4 << 20 };
+    async function json(args) {
+      try {
+        const { stdout } = await run(binary, ['pipelines', ...args], options);
+        return JSON.parse(stdout);
+      } catch (error) {
+        const detail = error.stderr?.split(/\r?\n/).find(line => line.startsWith('Error:'));
+        throw Error(detail?.slice(6).trim() || 'Could not read the pipeline repository.');
+      }
+    }
+    const { source: git, commit, directories } = await json(['catalog', source.location]);
+    const entries = [];
+    for (const dir of directories) {
+      const base = git.location + (dir ? '//' + dir : '');
+      const location = dir === (git.subdir || '') ? source.location : base + (git.ref ? '@' + git.ref : '');
+      const info = await json(['inspect', base + '@' + commit, '--json']);
+      const flow = path.join(info.snapshot.dir, info.package.entrypoint);
+      entries.push({ id: pipelineId(info.package.name, location), name: info.package.name, version: info.package.version,
+        source: location, flowName: await declaredName(flow), policy: await declaredWorktrees(flow), commit });
+    }
+    return entries;
   }
 }
 

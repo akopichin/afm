@@ -52,6 +52,11 @@ all four builds pass it publishes a GitHub Release named **AFM Desktop** with th
 version from the tag. Download the `afm-desktop-<version>-darwin-<arch>.zip` for
 Mac or `afm-desktop-<version>-linux-<arch>.tar.gz` for Linux and verify it with
 the accompanying `SHA256SUMS`. Extract the archive and open **AFM Desktop**.
+On Home, hover or focus a project tile and choose **×** to remove it from recent
+projects. Its files and running processes stay on disk and on the host. In
+Settings → Models or the quick model picker (Option+M on macOS, Alt+M on Linux),
+choose a provider default, a listed model, or **Custom model…** to enter an ID.
+Codex suggestions come from the installed client's account-specific model list.
 The macOS app uses an ad-hoc signature and may require manual approval.
 The repository’s Latest release continues to track the CLI. Desktop builds use
 the existing `ENGINE_READ_TOKEN` secret and publish with the workflow token.

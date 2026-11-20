@@ -18,8 +18,36 @@ func newPipelinesCmd() *cobra.Command {
 		Use:   "pipelines",
 		Short: "Work with pipeline packages",
 	}
-	cmd.AddCommand(newPipelinesInspectCmd())
+	cmd.AddCommand(newPipelinesInspectCmd(), newPipelinesCatalogCmd())
 	return cmd
+}
+
+func newPipelinesCatalogCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "catalog <git-source>",
+		Short:        "List pipeline package directories at one Git revision as JSON",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			src, err := pipeline.ParseSource(args[0], cwd)
+			if err != nil {
+				return err
+			}
+			root, err := pipelinesCacheRoot()
+			if err != nil {
+				return err
+			}
+			result, err := pipeline.DiscoverGit(commandContext(cmd), src, root)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+		},
+	}
 }
 
 // inspectReport is the stable JSON shape of `afm pipelines inspect --json`.

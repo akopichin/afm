@@ -14,7 +14,7 @@ function providerModel(p,settings){
   const selected=p.id===settings.provider;
   const unsupported=selected&&!p.permissions.includes(settings.permission);
   return {id:p.id,name:p.name,custom:!p.builtIn,kind:p.kind,found:p.found,auth:authLabel(p),authDetail:p.auth.detail,authState:p.auth.state,
-    model:selected&&settings.model?settings.model:'CLI default',reasoning:selected?settings.reasoning:'default',
+    catalog:p.models||[],model:selected&&settings.model?settings.model:'CLI default',reasoning:selected?settings.reasoning:'default',
     permission:selected?settings.permission:'ask',levels:p.reasoning,permissions:p.permissions,modes:p.modes,
     problem:unsupported?'This provider cannot enforce the chosen permission mode. Pick another.':p.found===false||p.auth.state==='missing'?p.auth.detail:''};
 }
@@ -38,7 +38,7 @@ function scanAssistant(){
     modelScan=ready.length?'Ready to use: '+ready.join(', ')+'.':'No signed-in provider found. Sign in to Claude Code or Codex, or add a provider.';
   }).catch(error=>{modelScan=error.message}).finally(()=>{assistantChat.scanning=null;
     if($('settings').open&&settingsTab==='models')drawSettings();
-    if($('quick-model').open)refreshQuickModel()});
+    if($('quick-model').open&&!$('quick-model-form').dataset.edited)refreshQuickModel()});
   const status=document.querySelector('#settings-body [role="status"]');if(status)status.textContent=modelScan;
   return assistantChat.scanning;
 }
@@ -113,11 +113,18 @@ const effectiveLine=()=>{
   if(!m||!s)return '';
   return [m.name,s.model||'CLI default',s.reasoning!=='default'?s.reasoning:null,permissionLabels[s.permission],m.problem?'Needs setup':null].filter(Boolean).join(' · ');
 };
+function providerError(raw){
+  try {
+    const detail=JSON.parse(raw)?.error;
+    if(detail?.code==='model_not_found')return (detail.message||'Model unavailable.')+' Choose another model in the model picker.';
+    return typeof detail?.message==='string' ? detail.message : raw;
+  } catch {return raw}
+}
 function messageHTML(msg){
   if(msg.role==='user')return `<div class="bubble mine"><small>${esc(msg.context||'')}</small><p>${esc(msg.text)}</p></div>`;
   const tools=(msg.tools||[]).map(tool=>`<div class="tool ${tool.status}"><code>${esc(tool.name)}</code> <small>${esc(tool.input||'')}</small>${tool.status==='error'?`<p class="tool-error">${esc(tool.text||'Failed')}</p>`:''}</div>`).join('');
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
-  const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(msg.error||'The reply failed.')}</p>`:msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
+  const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
   return `<div class="bubble ${msg.status}"><small>${esc(msg.context||'')}${msg.effective?' · '+esc(msg.effective.label):''}</small>${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${msg.text?`<p>${esc(msg.text)}</p>`:''}${tools}${approvals}${end}</div>`;
 }
 function drawAssistant(){

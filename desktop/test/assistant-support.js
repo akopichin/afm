@@ -19,9 +19,13 @@ export async function providerHome(t, vars = {}) {
   }
   const record = path.join(home, 'record.jsonl');
   const env = { PATH: bin, HOME: home, FAKE_RECORD: record, ...vars };
-  t.after(() => rm(home, { recursive: true, force: true }));
+  const clients = [];
+  t.after(async () => {
+    await Promise.all(clients.map(client => client.close()));
+    await rm(home, { recursive: true, force: true });
+  });
   const invocations = async () => (await readFile(record, 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line));
-  return { home, bin, env, record, invocations };
+  return { home, bin, env, record, invocations, clients };
 }
 
 export const stubContext = (extra = {}) => ({
@@ -31,7 +35,8 @@ export function makeAssistant(t, ctx, options = {}) {
   const assistant = new Assistant({ home: ctx.home, env: ctx.env, context: stubContext(), bridge: { command: process.execPath, script: bridgeScript, env: {} }, grace: 300, systemDirs: [], ...options });
   const events = [];
   assistant.onEvent(event => events.push({ ...event, at: Date.now() }));
-  t.after(() => assistant.close());
+  if (ctx.clients) ctx.clients.push(assistant);
+  else t.after(() => assistant.close());
   return { assistant, events };
 }
 

@@ -18,14 +18,32 @@ function reasoningOptions(m){
   const reasoning=m.id==='claude'?['low','medium','high','xhigh','max']:m.id==='codex'?['minimal','low','medium','high','xhigh']:['low','medium','high'];
   return option('default','Provider default',!m.reasoning||m.reasoning==='default')+reasoning.map(v=>option(v,v,v===m.reasoning)).join('');
 }
+function modelOptions(m){
+  const selected=m.model==='CLI default'?'':m.model;
+  const models=m.catalog||[];
+  const pick=models.some(v=>v.id===selected)?selected:selected?'__custom':'';
+  const suggested=models.find(v=>v.default);
+  return option('',suggested?'Provider default · '+suggested.label:'Provider default',!pick)
+    +models.map(v=>option(v.id,v.label||v.id,pick===v.id)).join('')+option('__custom','Custom model…',pick==='__custom');
+}
+function bindModelPicker(select,input,change){
+  input.hidden=select.value!=='__custom';
+  select.onchange=()=>{
+    input.hidden=select.value!=='__custom';
+    if(!input.hidden){input.focus();input.select();return}
+    input.value=select.value;
+    change?.(input.value);
+  };
+}
 function profileFields(m){
-  return `<div class="profile-fields"><label>Model<input id="profile-model" value="${esc(m.model==='CLI default'?'':m.model)}" placeholder="CLI default" autocomplete="off"></label>
+  return `<div class="profile-fields"><label>Model<select id="profile-model-list">${modelOptions(m)}</select><input id="profile-model" value="${esc(m.model==='CLI default'?'':m.model)}" placeholder="CLI default" autocomplete="off"></label>
     <label>Reasoning<select id="profile-effort">${reasoningOptions(m)}</select></label>
     <label>Permissions<select id="profile-permissions">${Object.entries(permissionLabels).filter(([k])=>isDemo||m.permissions.includes(k)).map(([k,v])=>option(k,v,k===(m.permission||'ask'))).join('')}</select></label></div>
     <p class="hint profile-mode" id="permission-detail">${esc(permissionDetail(m))}</p>`;
 }
 function wireProfileFields(){
   const m=profile();
+  bindModelPicker($('profile-model-list'),$('profile-model'),model=>{if(isDemo){m.model=model||'CLI default';save();drawChat()}else configureAssistant({model})});
   if(!isDemo){
     $('profile-model').onchange=e=>configureAssistant({model:e.target.value.trim()});
     $('profile-effort').onchange=e=>configureAssistant({reasoning:e.target.value});
@@ -409,16 +427,20 @@ $('launch-hint').title=`${modKey} Shift Enter`;
 document.querySelectorAll('[data-start]').forEach(el=>el.title=`New run (${modKey} Shift Enter)`);
 function showQuickModel(){
   if(document.querySelector('dialog[open]'))return;
+  delete $('quick-model-form').dataset.edited;
   if(!isDemo)ensureAssistantScan();
   $('quick-agent').innerHTML=state.models.map(m=>option(m.id,m.name+(m.model==='CLI default'?'':' · '+m.model),m.id===state.profile)).join('');
-  fillQuickModel();$('quick-model').showModal();$('quick-model-id').select();
+  fillQuickModel();$('quick-model').showModal();$('quick-model-list').focus();
 }
 function fillQuickModel(){
   const m=state.models.find(item=>item.id===$('quick-agent').value);
+  $('quick-model-list').innerHTML=modelOptions(m);
+  bindModelPicker($('quick-model-list'),$('quick-model-id'));
   $('quick-model-id').value=m.model==='CLI default'?'':m.model;
   $('quick-effort').innerHTML=reasoningOptions(m);
 }
 $('quick-agent').onchange=fillQuickModel;
+$('quick-model-form').addEventListener('input',()=>{$('quick-model-form').dataset.edited='true'});
 $('quick-model-form').onsubmit=e=>{
   e.preventDefault();
   if(!isDemo){

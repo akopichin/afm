@@ -6,6 +6,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 const [kind, ...args] = process.argv.slice(2);
 const env = process.env;
 const out = value => process.stdout.write(JSON.stringify(value) + '\n');
+if (args[0] === 'app-server') {
+  const { createInterface } = await import('node:readline');
+  for await (const line of createInterface({input: process.stdin})) {
+    const msg = JSON.parse(line);
+    if (msg.method === 'initialize') out({id:msg.id, result:{}});
+    if (msg.method === 'model/list') out({id:msg.id, result:{ data:[{model:'gpt-test', displayName:'Test model', isDefault:true}], nextCursor:null }});
+  }
+  process.exit(0);
+}
 const old = env.FAKE_CAPS === 'old';
 
 const CLAUDE_HELP = `Usage: claude [options] [command] [prompt]

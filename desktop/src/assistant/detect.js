@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { spawn, execFile } from 'node:child_process';
 import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
@@ -94,6 +95,49 @@ async function referencedAuth(reference, env) {
   return found ? ready('file', reference.ref) : missing(`Key file ${reference.ref} is missing.`);
 }
 
+// Ask the installed client for the current account's picker; no conversation or model call is started.
+export function codexModels(executable, env) {
+  return new Promise(resolve => {
+    const child = spawn(executable, ['app-server', '--listen', 'stdio://'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
+    const lines = createInterface({ input: child.stdout });
+    const models = new Map();
+    let request = 1, ended = false;
+    const finish = () => {
+      if (ended) return;
+      ended = true;
+      clearTimeout(timer);
+      lines.close();
+      child.stdin.destroy();
+      child.kill('SIGKILL');
+      resolve([...models.values()]);
+    };
+    const timer = setTimeout(finish, 5000);
+    child.on('error', finish);
+    child.on('close', finish);
+    child.stdin.on('error', finish);
+    const send = message => child.stdin.write(JSON.stringify(message) + '\n');
+    const list = cursor => send({ id: ++request, method: 'model/list', params: { limit: 100, cursor } });
+    lines.on('line', line => {
+      if (ended) return;
+      let reply;
+      try { reply = JSON.parse(line); } catch { return; }
+      if (reply.id !== request) return;
+      if (reply.error) return finish();
+      if (request === 1) {
+        send({ method: 'initialized', params: {} });
+        return list(null);
+      }
+      for (const item of reply.result?.data ?? []) {
+        if (item.hidden || typeof item.model !== 'string') continue;
+        models.set(item.model, { id: item.model, label: item.displayName || item.model, default: !!item.isDefault });
+      }
+      if (reply.result?.nextCursor && request < 10) list(reply.result.nextCursor);
+      else finish();
+    });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'afm-desktop', version: '0.0.1' } } });
+  });
+}
+
 // One provider as the UI shows it: where it is, what it can do and whether it can sign in.
 export async function detectProvider(provider, { home, env, dirs }) {
   const base = { id: provider.id, name: provider.name, kind: provider.kind, builtIn: !provider.credential, credential: provider.credential ?? { type: 'cli' },
@@ -112,7 +156,9 @@ export async function detectProvider(provider, { home, env, dirs }) {
   const auth = provider.credential && provider.credential.type !== 'cli' ? await referencedAuth(provider.credential, env) : await cliAuth(provider, executable, env, home);
   // Reasoning is offered only when the CLI has a way to set it.
   const levels = provider.kind === 'claude' ? capabilities.effort ?? [] : capabilities.config ? REASONING_LEVELS.codex : [];
-  return { ...base, executable, version: version.stdout.trim().split('\n')[0] || null, found: true, capabilities,
+  const models = provider.kind === 'claude' ? ['sonnet', 'opus', 'haiku'].map(id => ({ id, label: id }))
+    : (!provider.credential || provider.credential.type === 'cli') ? await codexModels(executable, env) : [];
+  return { ...base, models, executable, version: version.stdout.trim().split('\n')[0] || null, found: true, capabilities,
     permissions: supportedPermissions(provider.kind, capabilities), reasoning: levels, auth };
 }
 

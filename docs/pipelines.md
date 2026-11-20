@@ -150,6 +150,13 @@ folder inside the repository, and `@<ref>` is a branch, tag or commit:
 afm run --pipeline github.com/akopichin/afm-pipelines//pipelines/refactor@v1.2.0
 ```
 
+In AFM Desktop, **Settings → Library → GitHub repository** also accepts the repository
+root. Desktop discovers nested packages and lists each workflow separately in
+**New run**. Use `afm pipelines catalog <git-source>` to list the package directories
+and the inspected commit as JSON. An explicit package directory selects only that
+package. A branch or tag suffix applies to the whole collection.
+
+
 A URL with embedded credentials is refused; use your git credential helper or ssh
 key. Prefer a tag or a full commit over a branch: the run is reproducible and a
 full commit already in the cache needs no network.

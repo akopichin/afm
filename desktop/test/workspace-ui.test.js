@@ -15,6 +15,21 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
+test('a project can be removed from Home without opening it', async t => {
+  const calls=[];
+  const {w,d,native}=await openShell(t,twoProjects([]),{removeProject:async id=>{
+    calls.push(id);
+    native.publish(snapshotOf([projectRow('b',[rb])]));
+  }});
+  const remove=d.querySelector('[data-forget="a"]');
+  assert.ok(remove.getAttribute('aria-label').includes('recent projects'));
+  remove.click();
+  await tick();
+  assert.deepEqual(calls,['a']);
+  assert.equal(d.querySelector('[data-forget="a"]'),null);
+  assert.equal(w.location.hash,'');
+});
+
 test('notices lead to the exact project, run and stage, in a stable queue, whichever project is open', async t => {
   const { w, d, get, key, native } = await openShell(t, twoProjects(queue));
   assert.equal(get('notice-count').textContent, '3');

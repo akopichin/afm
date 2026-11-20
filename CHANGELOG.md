@@ -9,6 +9,11 @@ older ones further down. Dates follow the commits that shipped each change.
 
 - Publish AFM Desktop for macOS and Linux (Apple Silicon/arm64 and x64) from separate `ds-vMAJOR.MINOR.PATCH` tags. Each release includes the bundled AFM executable and SHA-256 checksums. See `docs/releases.md`.
 
+### Fix:
+
+- Let users remove recent projects from Home and choose an assistant model from the provider list or enter a custom ID.
+- Discover individual packages when a Desktop Library Git source contains multiple pipelines.
+
 ## 2026-11-19
 
 ### Improvement:

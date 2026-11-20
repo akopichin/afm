@@ -153,12 +153,7 @@ func stageCommit(ctx context.Context, src Source, repoRoot, offlineCommit, stagi
 	defer unlock()
 
 	gitDir := filepath.Join(repoRoot, "repo.git")
-	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err != nil {
-		if _, err := runGit(ctx, "", "init", "--bare", "--quiet", gitDir); err != nil {
-			return "", nil, err
-		}
-	}
-	commit, err = pinCommit(ctx, src, gitDir, offlineCommit)
+	commit, err = initAndPin(ctx, src, gitDir, offlineCommit)
 	if err != nil {
 		return "", nil, err
 	}
@@ -167,6 +162,15 @@ func stageCommit(ctx context.Context, src Source, repoRoot, offlineCommit, stagi
 		return "", nil, err
 	}
 	return commit, skipped, nil
+}
+
+func initAndPin(ctx context.Context, src Source, gitDir, offlineCommit string) (string, error) {
+	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err != nil {
+		if _, err := runGit(ctx, "", "init", "--bare", "--quiet", gitDir); err != nil {
+			return "", err
+		}
+	}
+	return pinCommit(ctx, src, gitDir, offlineCommit)
 }
 
 func lockGitCache(ctx context.Context, lockPath string) (func(), error) {

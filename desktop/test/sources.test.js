@@ -71,6 +71,34 @@ test('a Git package is inspected through the AFM CLI', { timeout: 60000 }, async
   assert.equal((await serveConfig.read()).pipelines[0].source, 'file://' + repo);
 });
 
+test('a repository library discovers nested packages at the selected ref and registers launchable sources', async t => {
+  const { home } = await tempHome(t);
+  const repo = path.join(home, 'library');
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' });
+  await writePackage(path.join(repo, 'pipelines', 'dev'), 'dev');
+  await writePackage(path.join(repo, 'pipelines', 'review'), 'review');
+  git('init', '-q', '-b', 'main');
+  git('add', '.');
+  git('-c','user.name=T','-c','user.email=t@example.com','commit','-qm','packages');
+  git('tag', 'v1');
+  await rm(path.join(repo, 'pipelines', 'review'), {recursive:true});
+  git('add', '-A');
+  git('-c','user.name=T','-c','user.email=t@example.com','commit','-qm','remove review');
+  const url = 'file://' + repo;
+  const config = new ServeConfig(home);
+  const sources = new Sources({ home, serveConfig: config, binary: afmBinary });
+  const tagged = await sources.add({ location: url + '@v1' });
+  assert.equal(tagged.error, null);
+  assert.deepEqual(tagged.entries.map(e => e.source), [url + '//pipelines/dev@v1', url + '//pipelines/review@v1']);
+  assert.equal(new Set(tagged.entries.map(e => e.commit)).size, 1);
+  const current = await sources.add({ location: url });
+  assert.deepEqual(current.entries.map(e => e.name), ['dev']);
+  const single = await sources.add({ location: url + '//pipelines/dev' });
+  assert.equal(current.entries[0].id, single.entries[0].id);
+  await sources.remove(current.id);
+  assert.ok((await config.read()).pipelines.some(entry => entry.id === single.entries[0].id));
+});
+
 test('project flows carry their declared names and policies', async t => {
   const { home } = await tempHome(t);
   const dir = await makeProject(home, 'p', { flows: { 'x.yaml': 'name: ex\nworktrees: false\nstages: []\n', 'y.yml': 'stages: []\n', 'note.txt': 'no' } });
