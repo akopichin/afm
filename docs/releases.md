@@ -37,6 +37,8 @@ The commands use the same project configuration and run directories as `afm`.
 
 ## AFM Desktop releases
 
+The top bar shows the running Desktop version next to Settings.
+
 Install the macOS app with `brew install --cask akopichin/afm/afm-desktop`.
 When the tap is already installed, use `brew install --cask afm-desktop`.
 Update it with `brew upgrade --cask afm-desktop`. Homebrew selects the correct

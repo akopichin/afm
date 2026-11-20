@@ -22,7 +22,7 @@ export async function loadShell(t, { demo = true, platform = 'MacIntel', native 
   const w = dom.window;
   Object.defineProperty(w.navigator, 'platform', { value: platform, configurable: true });
   w.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-  w.nativeAFM = { models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), liveLayout: async () => {}, onLiveShortcut: () => {}, ...native };
+  w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), liveLayout: async () => {}, onLiveShortcut: () => {}, ...native };
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
   const scripts = demo ? ['store', 'desktop', 'library', 'controls', 'attention'] : ['store', 'desktop', 'library', 'assistant', 'controls', 'attention', 'inventory', 'native'];

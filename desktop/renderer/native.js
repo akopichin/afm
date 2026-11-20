@@ -50,6 +50,11 @@ if(!isDemo){
   });
   const unsubscribe=nativeAFM.onWorkspace(applyWorkspace);
   addEventListener('pagehide',unsubscribe);
+  nativeAFM.version().then(version=>{
+    const label=$('desktop-version');
+    label.textContent='v'+version;
+    label.hidden=false;
+  }).catch(showNativeError);
   nativeAFM.workspace().then(applyWorkspace).catch(showNativeError);
   startAssistant();
   addEventListener('focus',refreshNative);

@@ -8,6 +8,7 @@ button:focus-visible,a:focus-visible,input:focus-visible {outline:2px solid var(
 .brand svg {width:24px;stroke:var(--violet);fill:transparent;stroke-width:1.5}.brand circle {fill:var(--violet)}
 .spacer {flex:1}.switch,.action,.actions button,.shell-link {gap:8px;border:1px solid var(--separator-subtle);padding:6px 11px;border-radius:7px;background:var(--surface-overlay);color:var(--text-secondary);font-size:13px}
 .switch:hover,.action:hover,.actions button:hover,.shell-link:hover {border-color:var(--accent-primary);color:var(--text-primary);text-decoration:none}
+#desktop-version {flex:none;white-space:nowrap;font:11px var(--font-mono);color:var(--text-muted)}
 kbd {font:11px var(--font-mono);color:var(--text-muted);margin-left:5px}
 #screen {min-height:0;flex:1;overflow:auto}.home {max-width:1200px;margin:0 auto;padding:clamp(40px,7vh,90px) clamp(20px,5vw,72px)}
 .heading {justify-content:space-between;gap:15px;margin-bottom:32px}.heading h1 {font-size:clamp(32px,4vw,52px);line-height:1.12;letter-spacing:-.055em;font-weight:610}

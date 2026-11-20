@@ -86,6 +86,7 @@ handle('projects:pick', async () => {
   return folder ? projectSummary(await desktop.projects.add(folder)) : null;
 });
 handle('projects:overview', () => desktop.overview());
+handle('app:version', () => app.getVersion());
 handle('workspace:get', () => workspace.get());
 handle('workspace:refresh', () => workspace.refresh());
 // A folder only a run knows about has no Home entry yet; its details are readable because the host listed it.
@@ -227,6 +228,11 @@ app.whenReady().then(async () => {
       return document.activeElement.id === 'chat-input' && Array.isArray(await window.nativeAFM.runs());
     })()`);
     if (!ready) throw Error('Packaged Desktop failed its first-run check.');
+    const versionLabel = await window.webContents.executeJavaScript(`(() => {
+      const label = document.getElementById('desktop-version');
+      return label && !label.hidden && label.textContent;
+    })()`);
+    if (versionLabel !== 'v' + app.getVersion()) throw Error('Packaged Desktop did not display its version.');
     const probe = app.commandLine.getSwitchValue('desktop-check-run');
     if (probe) {
       const deadline = Date.now() + 12000;
