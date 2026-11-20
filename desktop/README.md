@@ -1,8 +1,28 @@
 # AFM Desktop
 
-A local Electron app for AFM projects. The first target is macOS on Apple Silicon. Design, acceptance criteria, reference screenshots and the overnight task live in [the Desktop spec](../specs/desktop/spec.md) and [implementation plan](../specs/desktop/plan.md).
+A local Electron app for AFM projects. Releases are available for macOS and Linux on arm64 and x64. Design, acceptance criteria, reference screenshots and the overnight task live in [the Desktop spec](../specs/desktop/spec.md) and [implementation plan](../specs/desktop/plan.md).
+
+## Install and open Desktop
+
+On macOS, install via Homebrew and open **AFM Desktop** from Applications:
+
+```sh
+brew install --cask akopichin/afm/afm-desktop
+```
+
+On Linux, extract the archive for your CPU and run the `AFM Desktop` executable.
+Each archive includes AFM and Chromium. During first launch, choose an assistant
+provider and use its login or a credential reference. Open a project folder to
+start a run. See the [Desktop release guide](../docs/releases.md#afm-desktop-releases)
+for archives, checksums and upgrades.
 
 ## Run the overnight development flow
+
+The pipeline package is [desktop/workflow](workflow/pipeline.yaml), with its stage
+graph in [flow.yaml](workflow/flow.yaml). The `doc` stage updates this guide and
+[the Desktop spec](../specs/desktop/spec.md) from the implemented behavior and
+check results. Three required AFM helper profiles review the delivery candidate
+before final verify. Their findings can send it back for correction.
 
 From the primary AFM checkout, with the dedicated .worktrees/desktop checkout in place, Docker running, Node 22.12+ and AFM available on the Mac:
 
@@ -10,7 +30,7 @@ From the primary AFM checkout, with the dedicated .worktrees/desktop checkout in
 caffeinate -i node .worktrees/desktop/desktop/scripts/overnight.js
 ```
 
-Keep the Mac awake and connected. The wrapper validates the package, starts a fresh desktop-dev run on the existing desktop branch, prints the local dashboard URL and passes the plan as its initial task. It uses the primary checkout's AFM configuration, Claude OAuth reference and configured Codex login. After all stages finish successfully, it installs native dependencies on the Mac, reruns checks and builds the bundle from the final checkout. Build failures exit with a nonzero status. Run with `--inspect` to validate configuration without starting any agents.
+Keep the Mac awake and connected. The wrapper validates the package, starts a fresh desktop-dev run on the existing desktop branch, enables AFM collaboration for the review helpers, prints the local dashboard URL and passes the plan as its initial task. It uses the primary checkout's AFM configuration, Claude OAuth reference and configured Codex login. After all stages finish successfully, it installs native dependencies on the Mac, reruns checks and builds the bundle from the final checkout. Build failures exit with a nonzero status. Run with `--inspect` to validate configuration without starting any agents.
 
 ```sh
 open ".worktrees/desktop/desktop/dist/AFM Desktop-darwin-arm64/AFM Desktop.app"
@@ -19,7 +39,7 @@ open ".worktrees/desktop/desktop/dist/AFM Desktop-darwin-arm64/AFM Desktop.app"
 For manual recovery, AFM supports resuming an interrupted pipeline with the same source and worktree, omitting the task flag. Run the following from the primary checkout, then use the native build commands below once delivery succeeds:
 
 ```sh
-afm run --pipeline .worktrees/desktop/desktop/workflow --worktree desktop --exit-on-fail
+AFM_COLLABORATION=1 afm run --pipeline .worktrees/desktop/desktop/workflow --worktree desktop --exit-on-fail
 ```
 
 ## Local development

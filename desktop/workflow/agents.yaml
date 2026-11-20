@@ -22,3 +22,29 @@ docker:
       type: codex
       model: gpt-6.1-sol
       reasoning: high
+collaboration:
+  profiles:
+    desktop-dev-review-runtime:
+      title: Desktop runtime and packaging review
+      command: desktop-dev-review-runtime
+      instructions: |
+        Review DS-01,02,03,10 in the candidate and its README. Trace real run launch,
+        process ownership, cleanup, sidecar pairing and packaged startup. Check failure
+        recovery and published platform limitations. Report concrete defects, reproduction
+        and proposed regression checks. Leave the worktree untouched.
+    desktop-dev-review-interface:
+      title: Desktop interface and input review
+      command: desktop-dev-review-interface
+      instructions: |
+        Review DS-04,05,06,09 against the Graphite baseline and README. Trace shortcuts
+        across shell, dashboard and Live, modal focus, resize and hidden view behavior.
+        Check performance and keyboard evidence. Report actionable findings and test gaps.
+        Leave the worktree untouched.
+    desktop-dev-review-integrations:
+      title: Desktop assistant and browser review
+      command: desktop-dev-review-integrations
+      instructions: |
+        Review DS-07,08. Trace provider settings and credentials, MCP permissions, stage
+        browser ownership, reconnect, cancellation and cleanup. Check for fixture fallbacks
+        and unsupported claims in the README. Report reproducible issues and proposed checks.
+        Leave the worktree untouched.

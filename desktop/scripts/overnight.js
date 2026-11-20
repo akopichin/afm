@@ -15,7 +15,7 @@ const task = path.join(worktree, 'specs', 'desktop', 'plan.md');
 function run(command, args, cwd, capture = false) {
   const result = spawnSync(command, args, {
     cwd, encoding: 'utf8', stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit',
-    env: { ...process.env, AFM_BROWSER: '0' }, maxBuffer: 128 * 1024 * 1024
+    env: { ...process.env, AFM_BROWSER: '0', AFM_COLLABORATION: '1' }, maxBuffer: 128 * 1024 * 1024
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw Error(command + ' ended with ' + (result.signal || result.status));
@@ -45,7 +45,6 @@ async function main() {
   if (process.platform !== 'darwin' || branch !== 'desktop' || path.basename(path.dirname(worktree)) !== '.worktrees')
     throw Error('Run the Mac launcher from the .worktrees/desktop checkout on branch desktop.');
   if (process.argv.slice(2).some(arg => arg !== '--inspect')) throw Error('Usage: overnight.js [--inspect]');
-  run('afm', ['--dir', primary, 'validate', path.join(pipeline, 'flow.yaml')], primary);
   run('afm', ['--dir', primary, 'pipelines', 'inspect', pipeline], primary, true);
   if (process.argv.includes('--inspect')) {
     console.log('Validated desktop-dev for ' + worktree + '\nInitial task: ' + task);

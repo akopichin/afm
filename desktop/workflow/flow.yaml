@@ -1,14 +1,13 @@
 name: desktop-dev
 description: Deliver AFM Desktop from its accepted Graphite prototype and Desktop spec
 worktrees: true
-max_parallel: 3
 prompt: |
   Work in the current desktop worktree. Read specs/desktop/spec.md and specs/desktop/plan.md.
   The accepted renderer and npm run demo are the visual and interaction contract.
   Communicate results in Russian. Keep product docs and spec deltas in English.
-  Apply approved scope autonomously. Use one writer at a time; the three review stages only
-  write their own AFM stage report. For every auto stage write execution_summary.md in
-  $AFM_STAGE_DIR with changed files, requirement IDs, check commands and observed outcomes.
+  Apply approved scope autonomously. Use one writer at a time. Review helpers report findings only.
+  For every auto stage write execution_summary.md in $AFM_STAGE_DIR with changed files,
+  requirement IDs, check commands and observed outcomes.
   Check previous stage summaries in sibling stage directories. Work on the current branch.
   Leave it available to the owner. Use npm and Node in desktop/. Build with the AFM binary
   available in the container. Do not start Electron, an external Chrome, run live UI acceptance,
@@ -87,52 +86,48 @@ stages:
       attention bursts, streamed chat updates, tab churn and subscriber cleanup. Preserve running
       agents when hiding a view. Record native-only latency/RSS as pending native measurements.
     verify: "npm --prefix desktop run perf && npm --prefix desktop test"
-  - id: review-runtime
-    name: Review processes and packaging
+  - id: doc
+    name: Update the Desktop README and spec
     depends_on: [performance]
-    command: desktop-dev-review-runtime
-    agents: [auto]
-    browser: false
-    description: |
-      Independent review of DS-01,02,03,10. Inspect normal production path, sidecar lookup,
-      version pairing, Windows limitations, cleanup and failure handling. Record concrete defects,
-      file/symbol, impact, reproduction and proposed regression in your execution_summary.md.
-      Do not edit product files. A finding is a successful review result for the next writer.
-  - id: review-interface
-    name: Review fidelity and input
-    depends_on: [performance]
-    command: desktop-dev-review-interface
-    agents: [auto]
-    browser: false
-    description: |
-      Independently compare the accepted interface baseline and production renderer, DS-04,05,06,09.
-      Trace every shortcut through shell, dashboard and stage browser, modal focus, drag behavior,
-      iframe/view bounds, hidden view CPU and keyboard-only interaction. Record actionable findings
-      and tests in your execution_summary.md. Do not edit product files.
-  - id: review-integrations
-    name: Review assistant and browser isolation
-    depends_on: [performance]
-    command: desktop-dev-review-integrations
-    agents: [auto]
-    browser: false
-    description: |
-      Independently inspect DS-07,08. Trace MCP tools, profile settings, credentials, stage
-      scoping, CDP target ownership, reconnect, cancellation and provider output. Inspect app
-      startup for accidental fixture paths. Record findings and tests in your execution_summary.md.
-      Do not edit product files.
-  - id: deliver
-    name: Resolve findings and package the candidate
-    depends_on: [review-runtime, review-interface, review-integrations]
     command: desktop-dev-writer
     agents: [auto]
     browser: false
     description: |
-      Read all three sibling review execution_summary.md files. Address each finding and add
-      its regression; record dispositions. Finish milestone 5. Update the Desktop spec evidence
-      and README with the exact command for this platform, expected output and unverified native
-      behavior. Build an unpacked platform application with AFM included. Check production entry,
-      offline app assets and dependency versions. Commit the result locally in Russian. Record
-      the git revision, artifact path, tests, outstanding platform limitations and host smoke steps.
+      Use the implemented behavior and previous stage evidence to update desktop/README.md
+      in English. Keep it the complete user-facing Desktop guide: installation and first launch,
+      projects and Library, run controls and shortcuts, assistant settings, Live, packaging
+      and troubleshooting. Keep existing details current and document relevant limitations.
+      Update specs/desktop/spec.md as the canonical behavior contract. Update the affected
+      DS requirements and their acceptance evidence, preserving unchanged requirement IDs.
+      Distinguish automated evidence, native checks and incomplete work. If a contract is
+      unchanged, record that in execution_summary.md with the affected requirement IDs.
+      Check relative links and command examples. Work on documentation only.
+    verify: "test -s desktop/README.md && test -s specs/desktop/spec.md && git diff --check"
+  - id: deliver
+    name: Resolve findings and package the candidate
+    depends_on: [doc]
+    command: desktop-dev-writer
+    agents: [auto]
+    browser: false
+    description: |
+      Finish milestone 5. Build an unpacked platform application with AFM included. Check
+      production entry, offline app assets and dependency versions. Read the doc stage summary
+      and keep the README and spec synchronized if review corrections change behavior or evidence.
+      Address actionable helper feedback, add regression checks and record each disposition.
+      Commit the result locally in Russian. Record the git revision, artifact path, tests,
+      outstanding platform limitations and host smoke steps.
+    pre_completion:
+      max_failures: 2
+    assistants:
+      - profile: desktop-dev-review-runtime
+        mode: required
+        trigger: pre_completion
+      - profile: desktop-dev-review-interface
+        mode: required
+        trigger: pre_completion
+      - profile: desktop-dev-review-integrations
+        mode: required
+        trigger: pre_completion
     verify:
       max_failures: 2
       steps:
@@ -141,7 +136,8 @@ stages:
         - command: desktop-dev-verify
           timeout: 20m
           prompt: |
-            Read specs/desktop/spec.md, plan.md, all three review reports and dispositions.
+            Read the Desktop spec, plan, README, doc summary and review dispositions.
+            Check that the README and affected requirements reflect the delivered behavior.
             Verify the normal entry point, AFM and provider adapters, actual packaged contents,
             all keyboard contracts and evidence. Fail concrete missing behavior or production
             fixture fallbacks. Distinguish headless evidence from manual native OS checks.
