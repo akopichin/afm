@@ -85,8 +85,9 @@ export class Assistant {
   }
 
   async #environment() {
-    const dirs = searchDirs({ home: this.home, env: this.baseEnv, loginPath: await this.loginPath(), systemDirs: this.systemDirs });
-    const env = { ...this.baseEnv, PATH: dirs.join(path.delimiter) };
+    const base = typeof this.baseEnv === 'function' ? await this.baseEnv() : this.baseEnv;
+    const dirs = searchDirs({ home: this.home, env: base, loginPath: await this.loginPath(), systemDirs: this.systemDirs });
+    const env = { ...base, PATH: dirs.join(path.delimiter) };
     delete env.ELECTRON_RUN_AS_NODE;
     return { env, dirs };
   }
@@ -236,7 +237,7 @@ export class Assistant {
         const messages = [{ role: 'system', content: this.#systemPrompt(scope, { label: PERMISSION_LABELS.read }, false) },
           ...this.#transcript(prior, text).map(line => ({ role: line.startsWith('User: ') ? 'user' : 'assistant', content: line.replace(/^(User|Assistant): /, '') })), { role: 'user', content: text }];
         if (!settings.model) throw new AssistantError('model_required', 'Choose a model for this endpoint first.');
-        const apiKey = await this.#secret(provider);
+        const apiKey = await this.#secret(provider, env);
         redact.add(apiKey);
         if (turn.cancelled) return this.#finish(turn, 'cancelled');
         turn.process = runEndpoint({ endpoint: provider.endpoint, apiKey, model: settings.model, messages, onEvent });
@@ -246,7 +247,7 @@ export class Assistant {
         const { args } = this.#invocation(turn, bridge);
         const cwd = scope.kind === 'all' ? this.home : scope.projectRoot;
         const prompt = [...this.#transcript(prior, text), `User: ${text}`].join('\n\n');
-        const credential = await this.#providerCredential(provider);
+        const credential = await this.#providerCredential(provider, env);
         Object.values(credential).forEach(redact.add);
         Object.assign(env, credential);
         if (turn.cancelled) return this.#finish(turn, 'cancelled');
@@ -285,16 +286,16 @@ export class Assistant {
 
   // A key file or environment variable the user configured is read here and passed to the provider's environment
   // under the variable that provider's CLI expects; it beats a standard variable already present.
-  async #providerCredential(provider) {
+  async #providerCredential(provider, env) {
     const { type } = provider.credential;
     if (type !== 'file' && type !== 'env') return {};
-    const value = await this.#secret(provider);
+    const value = await this.#secret(provider, env);
     return value ? { [provider.kind === 'codex' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY']: value } : {};
   }
 
-  async #secret(provider) {
+  async #secret(provider, env) {
     if (provider.credential.type === 'file') return (await readFile(provider.credential.ref, 'utf8')).trim();
-    return this.baseEnv[provider.credential.ref] ?? '';
+    return env[provider.credential.ref] ?? '';
   }
 
   #onProviderEvent(turn, event, redact) {

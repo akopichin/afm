@@ -10,6 +10,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   pickProject:()=>ipcRenderer.invoke('projects:pick'),
   runs:()=>ipcRenderer.invoke('runs:list'),
   dashboard:(id,instance,external=false)=>ipcRenderer.invoke('runs:open',id,instance,external),
+  openLaunchLog:id=>ipcRenderer.invoke('runs:launch-log',id),
   start:args=>ipcRenderer.invoke('runs:start',args),
   cancel:(id,instance)=>ipcRenderer.invoke('runs:cancel',id,instance),
   release:(id,instance)=>ipcRenderer.invoke('runs:release',id,instance),
@@ -33,6 +34,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   removeSource:id=>ipcRenderer.invoke('sources:remove',id),
   refreshSource:id=>ipcRenderer.invoke('sources:refresh',id),
   prefs:()=>ipcRenderer.invoke('prefs:get'),
+  updateEnvironment:changes=>ipcRenderer.invoke('prefs:environment', changes),
   setPrefs:changes=>ipcRenderer.invoke('prefs:set',changes),
   assistant:{
     state:()=>ipcRenderer.invoke('assistant:state'),

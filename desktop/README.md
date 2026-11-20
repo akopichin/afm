@@ -16,6 +16,21 @@ provider and use its login or a credential reference. Open a project folder to
 start a run. See the [Desktop release guide](../docs/releases.md#afm-desktop-releases)
 for archives, checksums and upgrades.
 
+## Environment and failed launches
+
+Use **Settings → Environment** to import exported variables from `.zshrc` or
+`.bashrc`, load an optional dotenv file, or set individual variables. Manual
+values take precedence over the file, then the shell, then the app's inherited
+environment. Desktop stores manual values locally and displays their names
+only. Restart the AFM host from this tab to apply changes to new runs. Assistant
+requests use the updated settings without restarting Desktop.
+
+AFM looks for secrets in the project's `.afm/secrets.env`, then
+`~/.afm/secrets.env`, then the host environment. An explicit AFM secrets file
+uses AFM's existing override behavior. The run launcher waits for AFM to
+report readiness and offers the launch log when an early failure occurs.
+Missing environment variable names from preflight are shown in the launcher.
+
 ## Run the overnight development flow
 
 The pipeline package is [desktop/workflow](workflow/pipeline.yaml), with its stage

@@ -121,7 +121,10 @@ function providerError(raw){
   } catch {return raw}
 }
 function messageHTML(msg){
-  if(msg.role==='user')return `<div class="bubble mine"><small>${esc(msg.context||'')}</small><p>${esc(msg.text)}</p></div>`;
+  if(msg.role==='user'){
+    const status=msg.error?`<p class="bubble-error" role="alert">${esc(msg.error)}</p>`:msg.pending?'<small>Sending…</small>':'';
+    return `<div class="bubble mine"><small>${esc(msg.context||'')}</small><p>${esc(msg.text)}</p>${status}</div>`;
+  }
   const tools=(msg.tools||[]).map(tool=>`<div class="tool ${tool.status}"><code>${esc(tool.name)}</code> <small>${esc(tool.input||'')}</small>${tool.status==='error'?`<p class="tool-error">${esc(tool.text||'Failed')}</p>`:''}</div>`).join('');
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
   const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
@@ -131,7 +134,7 @@ function drawAssistant(){
   $('chat-context').textContent=scopeText();
   $('chat-model').textContent=effectiveLine()||'Choose a provider';
   const box=$('messages'),stick=box.scrollHeight-box.scrollTop-box.clientHeight<80;
-  const messages=assistantChat.messages;
+  const messages=assistantChat.pending ? [...assistantChat.messages, assistantChat.pending] : assistantChat.messages;
   box.innerHTML=(messages.length?messages.map(messageHTML).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>')
     +(assistantChat.local?`<div class="bubble error"><p class="bubble-error" role="alert">${esc(assistantChat.local)}</p></div>`:'');
   if(stick)box.scrollTop=box.scrollHeight;
@@ -148,12 +151,22 @@ function queueChatDraw(){
 }
 async function sendAssistant(text){
   if(assistantChat.busy)return;
-  assistantChat.local='';assistantChat.busy=true;drawAssistant();
+  const input=$('chat-input');
+  assistantChat.local='';
+  assistantChat.busy=true;
+  assistantChat.pending={role:'user',text,context:scopeText().slice(7),pending:true};
+  input.value='';
+  drawAssistant();
   try{
     await nativeAFM.assistant.send({text,scope:currentScope()});
-    $('chat-input').value='';
   }catch(error){
-    assistantChat.busy=false;assistantChat.local=error.message;drawAssistant();
+    assistantChat.busy=false;
+    if(assistantChat.pending){
+      assistantChat.messages.push({...assistantChat.pending,pending:false,error:error.message});
+      assistantChat.pending=null;
+    }
+    if(!input.value)input.value=text;
+    drawAssistant();
   }
 }
 function stopAssistant(){nativeAFM.assistant.cancel().catch(showNativeError)}
@@ -161,7 +174,7 @@ const replyFor=event=>assistantChat.messages.find(m=>m.turnId===event.turnId&&m.
 function handleAssistantEvent(event){
   const {messages}=assistantChat;
   if(event.type==='start'){
-    assistantChat.busy=true;assistantChat.local='';
+    assistantChat.busy=true;assistantChat.local='';assistantChat.pending=null;
     if(!messages.some(m=>m.id===event.message.id))messages.push(event.message,{...event.reply,turnId:event.turnId,approvals:[],notes:[]});
   }else{
     const reply=replyFor(event);

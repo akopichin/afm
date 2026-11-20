@@ -43,7 +43,7 @@
   <label>Project<select id="launch-project"></select></label>
   <label class="sr-only" for="workflow-search">Find a flow or pipeline</label><input id="workflow-search" type="search" placeholder="Find a flow or pipeline…" autocomplete="off">
   <div id="workflows" class="choices"></div>
-  <div class="git-row"><label for="launch-git">Workspace</label><select id="launch-git"></select></div><p class="hint" id="git-hint"></p><div class="actions"><kbd id="launch-hint"></kbd><button class="primary" id="launch-submit">Start run</button></div>
+  <div class="git-row"><label for="launch-git">Workspace</label><select id="launch-git"></select></div><p class="hint" id="git-hint"></p><p id="launch-status" class="hint" role="status" hidden></p><button id="launch-log" hidden>Open launch log</button><div class="actions"><kbd id="launch-hint"></kbd><button class="primary" id="launch-submit">Start run</button></div>
 </dialog>
 <dialog id="quick-model" aria-labelledby="quick-model-title"><form id="quick-model-form">
   <div class="pane-head"><h2 id="quick-model-title">Assistant model</h2><button type="button" class="icon" data-close aria-label="Close model picker">×</button></div>

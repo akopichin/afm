@@ -45,6 +45,8 @@ test('a message goes to the main process with the selected run as scope and the 
   assert.equal(get('chat-model').textContent, 'Claude Code · CLI default · Ask before actions');
   type(w, get, 'what is running?');
   submit(w, get);
+  assert.equal(get('chat-input').value, '');
+  assert.match(d.querySelector('.bubble.mine').textContent, /what is running/);
   await tick();
   assert.deepEqual(assistant.calls.send, [{ text: 'what is running?', scope: { runId: 'ra', instanceId: 'i-ra' } }]);
   assert.equal(get('chat-input').value, '', 'the field clears once the request was accepted');

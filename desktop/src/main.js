@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { desktopEnvironment } from './environment.js';
 import { Desktop } from './desktop.js';
 import { LiveView } from './live-view.js';
 import { afmBinary } from './binary.js';
@@ -38,7 +39,8 @@ function afmOrigins() {
   return [desktop.host.state.endpoint, ...runs.map(run => run.apiUrl)].filter(Boolean);
 }
 const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined),
-  hostEnv: async () => (await desktop.prefs.get()).stageBrowser ? stageBrowsers.hostEnv() : {}});
+  hostEnv: async () => ({...await environment(), ...((await desktop.prefs.get()).stageBrowser ? await stageBrowsers.hostEnv() : {})})});
+const environment = () => desktopEnvironment(desktop.prefs, home);
 const entry = pathToFileURL(path.join(root, 'renderer/index.html')).href;
 const demo = process.argv.includes('--demo');
 const origins = new DashboardOrigins();
@@ -48,7 +50,7 @@ stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
 // A Finder-launched app lacks the login shell's PATH; it is read once, when the assistant first needs it.
 let loginPath;
 const assistant = new Assistant({
-  home, env: process.env, loginPath: () => (loginPath ??= loginShellPath(process.env)),
+  home, env: environment, loginPath: () => (loginPath ??= loginShellPath(process.env)),
   context: {
     endpoint: async () => { await desktop.host.connect(); return desktop.host.state.endpoint; },
     runs: () => desktop.host.runs(),
@@ -95,8 +97,13 @@ handle('sources:add', location => desktop.sources.add({location}));
 handle('sources:pick', async () => { const folder = await pickFolder(); return folder ? desktop.sources.add({location: folder}) : null; });
 handle('sources:remove', id => desktop.sources.remove(id));
 handle('sources:refresh', id => desktop.sources.refresh(id));
-handle('prefs:get', () => desktop.prefs.get());
-handle('prefs:set', changes => desktop.prefs.set(changes));
+handle('prefs:get', () => desktop.prefs.view());
+handle('prefs:environment', async changes => {
+  const prefs = await desktop.prefs.updateEnvironment(changes);
+  assistant.detections.clear();
+  return prefs;
+});
+handle('prefs:set', async changes => { await desktop.prefs.set(changes); return desktop.prefs.view(); });
 handle('host:status', () => desktop.host.state);
 handle('host:restart', confirm => desktop.host.restart({confirmExternal: confirm === true}));
 handle('runs:list', async () => desktop.host.runs());
@@ -123,9 +130,17 @@ handle('runs:start', async request => {
   const projectId = request.projectId ?? (await desktop.projects.add(request.folder)).id;
   const explicit = request.explicit ?? (request.worktree ? 'worktree' : undefined);
   const worktree = request.worktree ?? undefined;
-  try { return await desktop.runs.start({...request, projectId, explicit, worktree}); }
+  try {
+    const launch = await desktop.runs.start({...request, projectId, explicit, worktree});
+    return await desktop.runs.waitForLaunch(launch);
+  }
   // Error codes do not survive IPC, so a host Desktop did not start is reported as data the UI can confirm.
   catch (error) { if (error.code === 'external_host') return {status: 'external_host', message: error.message}; throw error; }
+});
+handle('runs:launch-log', async id => {
+  if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw Error('Invalid launch ID.');
+  const error = await shell.openPath(path.join(home, '.afm', 'serve', 'logs', id + '.log'));
+  if (error) throw Error('Could not open the AFM launch log.');
 });
 handle('runs:cancel', async (id, instanceId) => {
   instanceId ??= (await desktop.host.runs()).find(row=>row.run_id===id)?.instance_id;

@@ -151,24 +151,39 @@ function startRun(){
   r.noticeAt=Date.now();r.liveNotice=r.live;
   p.runs.push(r);save();$('launch').close();openProject(p,r,'run');
 }
+let launching=false;
+function launchStatus(message, id){
+  const status=$('launch-status'),log=$('launch-log');
+  status.hidden=!message;status.textContent=message;
+  log.hidden=!id;
+  log.onclick=id?()=>nativeAFM.openLaunchLog(id).catch(showNativeError):null;
+}
 async function startNative(p,item){
+  if(launching)return;
+  launching=true;
   $('launch-submit').disabled=true;
+  launchStatus('Starting AFM…');
   try{
     const projectId=p.external?(await nativeAFM.addProject(p.path)).id:p.id;
     const request=launchRequest(projectId,item);
     let started=await nativeAFM.start(request);
     if(started?.status==='external_host'){
       // The host belongs to another tool; restarting it keeps runs alive but needs the user's consent.
-      if(!confirm(started.message+'\n\nRestart that host and start the run?')){showNativeError('Run not started: the AFM host was left as it is.');return}
+      if(!confirm(started.message+'\n\nRestart that host and start the run?')){launchStatus('Run not started.');return}
       started=await nativeAFM.start({...request,confirmHostRestart:true});
     }
-    attempt={signature:'',id:''};
+    if(started?.state!=='pending')attempt={signature:'',id:''};
+    if(started?.message){
+      launchStatus(started.message, started.logPath ? started.launch_id : null);
+      return;
+    }
+    launchStatus('');
     $('launch').close();
     await refreshNative();
     const opened=projects.find(project=>project.id===projectId)||projects.find(project=>project.path===p.path);
     if(opened)openProject(opened);
-  }catch(error){showNativeError(error)}
-  finally{$('launch-submit').disabled=false;if($('launch').open)updateGit()}
+  }catch(error){showNativeError(error);launchStatus(error.message)}
+  finally{launching=false;$('launch-submit').disabled=false;if($('launch').open)updateGit()}
 }
 $('launch-submit').onclick=startRun;
 $('launch-project').onchange=()=>{choice=0;updateWorkflows();loadLaunchData()};
@@ -197,13 +212,14 @@ async function loadSettingsData(){
   try{
     const [sources,prefs]=await Promise.all([nativeAFM.sources(),nativeAFM.prefs()]);
     state.sources=sources.map(nativeSource);state.gitDefault=prefs.gitMode;
+    if(prefs.environment)savedEnvironment=prefs.environment;
     if($('settings').open&&settingsTab!=='models')drawSettings();
   }catch(error){showNativeError(error)}
 }
 const demoModelForm=`<form id="model-form" hidden><label>Provider or CLI<input name="name" required placeholder="Ollama, Gemini CLI…"></label><label>Model or deployment<input name="model" required placeholder="Model ID"></label><label>Credential source<select name="auth"><option>Existing CLI login</option><option>Environment variable</option><option>Config file</option><option>Local endpoint</option></select></label><label id="reference-label" hidden><span>Source</span><input name="reference"></label><div class="actions"><button class="primary">Add model</button></div></form>`;
 function drawSettings(){
   $('settings-title').textContent=onboarding?'Set up AFM Desktop':'Settings';
-  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs']].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
+  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],...(!isDemo?[['environment','Environment']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
   const body=$('settings-body');
   if(settingsTab==='models'){
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
@@ -245,6 +261,8 @@ function drawSettings(){
       try{addSource(await gitHubSource(name))}catch(err){sourceMessage=err.message}
       finally{remoteBusy=false;if(settingsTab==='library')drawSettings()}
     };
+  }else if(settingsTab==='environment'){
+    drawEnvironment(body,tabs);
   }else{
     body.innerHTML=tabs+`<label>Default workspace for Git projects<select id="default-git">${gitOptions(state.gitDefault)}</select></label>
     <p class="muted">A flow’s workspace preference takes precedence. You can change it for an individual run in the launcher.</p>
@@ -259,6 +277,45 @@ function drawSettings(){
       if(!isDemo)nativeAFM.setPrefs({gitMode:e.target.value}).catch(showNativeError);
     };
   }
+}
+let savedEnvironment={shell:'none',file:'',names:[]}, environmentStatus='';
+function drawEnvironment(body,tabs){
+  const {shell,file,names}=savedEnvironment;
+  body.innerHTML=tabs+`<form id="env-source">
+    <label>Import exported shell variables<select name="shell">${[['none','None'],['zsh','.zshrc'],['bash','.bashrc']].map(([id,label])=>option(id,label,id===shell)).join('')}</select></label>
+    <label>Environment file<input name="file" placeholder="~/.config/afm/desktop.env" value="${esc(file)}"></label>
+    <div class="actions"><button class="primary">Save sources</button></div></form>
+    <form id="env-variable"><label>Name<input name="name" required pattern="[A-Za-z_][A-Za-z0-9_]*"></label>
+    <label>Value<input name="value" type="password" autocomplete="off"></label>
+    <div class="actions"><button class="primary">Set variable</button></div></form>
+    <div class="source-list">${names.map(name=>`<div><span>${esc(name)}</span><button data-env-remove="${esc(name)}">Remove</button></div>`).join('')}</div>
+    <p class="muted">Restart AFM host to apply these settings to new runs. Existing runs keep their environment.</p>
+    <button id="env-restart">Restart AFM host</button><p class="hint" role="status">${esc(environmentStatus)}</p>`;
+  async function update(changes){
+    try {savedEnvironment=(await nativeAFM.updateEnvironment(changes)).environment;environmentStatus='Saved.';assistantChat.scanned=false}
+    catch(error){environmentStatus=error.message}
+    if($('settings').open&&settingsTab==='environment')drawSettings();
+  }
+  $('env-source').onsubmit=event=>{
+    event.preventDefault();
+    update({shell:event.target.elements.shell.value,file:event.target.elements.file.value.trim()});
+  };
+  $('env-variable').onsubmit=event=>{
+    event.preventDefault();
+    update({name:event.target.elements.name.value.trim(),value:event.target.elements.value.value});
+  };
+  for(const button of body.querySelectorAll('[data-env-remove]'))button.onclick=()=>update({remove:button.dataset.envRemove});
+  $('env-restart').onclick=async()=>{
+    try {
+      const host=await nativeAFM.hostStatus();
+      const external=host.ownership==='external';
+      if(external&&!confirm('Restart the externally started AFM host? Existing runs keep running.'))return;
+      await nativeAFM.restartHost(external);
+      environmentStatus='AFM host restarted.';
+      await refreshNative();
+    }catch(error){environmentStatus=error.message}
+    if($('settings').open&&settingsTab==='environment')drawSettings();
+  };
 }
 // Runs one source operation in the main process, then redraws the library from its stored inventory.
 async function changeSource(operation){

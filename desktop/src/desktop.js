@@ -41,7 +41,7 @@ export class Desktop {
 
   // Flows, sources and Git state of a folder, whether or not it is on Home yet.
   async folderDetails(project) {
-    const [flows, sources, prefs, git] = await Promise.all([projectFlows(this.home, project.path), this.sources.list(), this.prefs.get(), inspectGit(project.path)]);
+    const [flows, sources, prefs, git] = await Promise.all([projectFlows(this.home, project.path), this.sources.list(), this.prefs.view(), inspectGit(project.path)]);
     return { project, flows, sources, prefs, git };
   }
 

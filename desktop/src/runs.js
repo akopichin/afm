@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { open } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
 import { HostError, dashboardURL } from './host.js';
 import { belongsTo } from './projects.js';
@@ -175,6 +177,27 @@ export class Runs {
     }
   }
 
+  async waitForLaunch(launch) {
+    const id = launch.launch_id;
+    if (!/^[a-f0-9]{64}$/.test(id)) throw Error('AFM returned an invalid launch ID.');
+    const server = path.join(this.home, '.afm', 'serve');
+    const receiptPath = path.join(server, 'launches', id + '.json');
+    const logPath = path.join(server, 'logs', id + '.log');
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      const current = await readJSON(receiptPath, launch);
+      if (current.state === 'ready' || (current.state === 'exited' && current.run_id)) return {...launch, state: current.state, run_id: current.run_id, instance_id: current.instance_id};
+      if (['failed', 'lost', 'exited'].includes(current.state)) {
+        const missing = await missingLaunchSecrets(logPath);
+        return {...launch, state: current.state, logPath, message: missing.length
+          ? 'Missing environment variables: ' + missing.join(', ') + '. Add them in Settings → Environment or in .afm/secrets.env.'
+          : 'AFM exited before the run was ready. See the launch log.'};
+      }
+      await delay(250);
+    }
+    return {...launch, state: 'pending', logPath, message: 'AFM is still starting. The run will appear in the project when ready.'};
+  }
+
   // The host reads serve.yaml once at startup, so a project or pipeline registered since then is unknown
   // to it. Restart the host only when it says so, then repeat the same request.
   async #startOnHost(args, confirmHostRestart) {
@@ -185,4 +208,19 @@ export class Runs {
       return this.host.tool('afm_run_start', args);
     }
   }
+}
+
+
+// The log can contain provider diagnostics. Only extract names from the known AFM preflight error.
+async function missingLaunchSecrets(file) {
+  try {
+    const log = await open(file);
+    try {
+      const prefix = Buffer.alloc(16384);
+      const {bytesRead} = await log.read(prefix);
+      const text = prefix.toString('utf8', 0, bytesRead);
+      return [...new Set([...text.matchAll(/^\s*- secret:[^\n]*: secret not found: env:([A-Za-z_][A-Za-z0-9_]*) \(checked secrets file and process env\)/gm)]
+        .map(match => match[1]))];
+    } finally { await log.close(); }
+  } catch { return []; }
 }
