@@ -3,8 +3,21 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { loadShell, primaryMods, tick } from './shell-support.js';
+import { dashboardShortcutMessage } from '../src/shortcuts.js';
 
 const PLATFORMS = ['MacIntel', 'Linux x86_64'];
+
+test('Electron reserves only the Desktop navigation bindings from the run view', () => {
+  const key = (input, platform = 'darwin') => dashboardShortcutMessage({type: 'keyDown', ...input}, platform);
+  for (const [code, name] of [['KeyH','home'], ['KeyJ','next'], ['KeyK','previous'], ['KeyA','assistant']]) {
+    assert.deepEqual(key({alt:true, code, key:'composed character'}), {navigate:name});
+  }
+  assert.equal(key({meta:true, key:'k'}), 'switch-project');
+  assert.deepEqual(key({meta:true, key:','}), {navigate:'settings'});
+  assert.equal(key({control:true, key:'k'}, 'linux'), 'switch-project');
+  for (const input of [{control:true,key:'k'}, {meta:true,key:'f'}, {alt:true,code:'KeyM'},
+    {meta:true,key:'k',isAutoRepeat:true}, {alt:true,code:'KeyH',isComposing:true}]) assert.equal(key(input), null);
+});
 
 for (const platform of PLATFORMS) {
   test(`accepted Desktop keyboard routes work through the real shell with a focused run (${platform})`, async t => {

@@ -1,4 +1,5 @@
 import { WebContentsView, session } from 'electron';
+import { dashboardShortcutMessage } from './shortcuts.js';
 
 // AFM serves its dashboard with frame-ancestors 'none'. Each verified run gets a top-level guest
 // in the project window, and only that run's HTTP and WebSocket origin is available to the guest.
@@ -35,6 +36,14 @@ export class DashboardViews {
     const guard = event => { if (new URL(event.url).origin !== origin) event.preventDefault(); };
     wc.on('will-frame-navigate', guard);
     wc.on('will-redirect', guard);
+    wc.on('before-input-event', (event, input) => {
+      if (key !== this.active) return;
+      const message = dashboardShortcutMessage(input);
+      if (!message) return;
+      event.preventDefault();
+      this.window.webContents.focus();
+      this.window.webContents.send('dashboard:event', key, message);
+    });
     wc.ipc.on('dashboard:event', (event, message) => {
       if (event.senderFrame !== wc.mainFrame || key !== this.active) return;
       this.window.webContents.send('dashboard:event', key, message);

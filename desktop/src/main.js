@@ -363,6 +363,41 @@ app.whenReady().then(async () => {
         if (!rendered) await new Promise(resolve => setTimeout(resolve, 120));
       }
       if (!rendered) throw Error('The real AFM stage did not render in the packaged dashboard.');
+      const page = dashboardViews.pages.get(dashboardViews.active);
+      await window.webContents.executeJavaScript(`window.desktopCheckShortcuts = [];
+        nativeAFM.onDashboardEvent((_key, message) => {
+          if (message?.navigate || message === 'switch-project') window.desktopCheckShortcuts.push(message.navigate ?? message);
+        });
+        if (!document.getElementById('assistant').hidden) document.getElementById('close-chat').click();`);
+      const shortcuts = [
+        [{code:'KeyJ', alt:true}, 'next'], [{code:'KeyK', alt:true}, 'previous'], [{code:'KeyA', alt:true}, 'assistant'],
+        [{key:'k', meta:true}, 'switch-project', 'picker'], [{key:',', meta:true}, 'settings', 'settings'], [{code:'KeyH', alt:true}, 'home'],
+      ];
+      const dispatch = input => {
+        let prevented = false;
+        page.view.webContents.emit('before-input-event', {preventDefault: () => { prevented = true; }}, {type:'keyDown', ...input});
+        return prevented;
+      };
+      const waitFor = async (check, error) => {
+        const until = Date.now() + 2500;
+        while (Date.now() < until) {
+          if (await check()) return;
+          await new Promise(resolve => setTimeout(resolve, 35));
+        }
+        throw Error(error);
+      };
+      if (dispatch({code:'KeyZ', key:'z'})) throw Error('Desktop intercepted an ordinary key.');
+      for (const [input, action, modal] of shortcuts) {
+        await waitFor(() => dashboardViews.pages.get(dashboardViews.active) === page, 'AFM did not return after closing a Desktop overlay.');
+        if (!dispatch(input)) throw Error(`Desktop did not intercept ${action}.`);
+        await waitFor(() => window.webContents.executeJavaScript(`desktopCheckShortcuts.includes(${JSON.stringify(action)})`), `Desktop missed ${action} inside AFM.`);
+        if (modal) {
+          await waitFor(() => window.webContents.executeJavaScript(`document.getElementById(${JSON.stringify(modal)}).open`), `Desktop did not open ${modal}.`);
+          await window.webContents.executeJavaScript(`document.getElementById(${JSON.stringify(modal)}).close()`);
+        }
+      }
+      await waitFor(() => window.webContents.executeJavaScript(`location.hash === '' && !document.getElementById('assistant').hidden`),
+        'Desktop did not open the assistant and return Home from AFM.');
     }
     console.log('AFM Desktop window and host ready');
     app.quit();

@@ -17,6 +17,8 @@
 
 ### Fix:
 
+- Handle Desktop navigation, Settings, and Assistant shortcuts while an
+  embedded AFM run has keyboard focus.
 - Preserve the destination of a clicked notification across AFM host outages.
 - Announce a pending question once across pauses and reconnects, based on its
   dialog identity.

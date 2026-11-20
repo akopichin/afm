@@ -152,7 +152,7 @@ onDashboardMessage((frame,msg)=>{
     document.body.classList.toggle('desktop-focus',Boolean(focusedFrame));
     if(focusedFrame)frame.focus();
   }
-  if(['home','next','previous','model','assistant','live'].includes(msg?.navigate))navigateApp(msg.navigate);
+  if(['home','next','previous','model','assistant','live','settings'].includes(msg?.navigate))navigateApp(msg.navigate);
   if(msg==='stage-ready')deliverStage();
   if(msg==='stage-opened')pendingStage=null;
 });

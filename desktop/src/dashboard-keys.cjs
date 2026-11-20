@@ -35,10 +35,11 @@ window.addEventListener('DOMContentLoaded', () => {
     else window.addEventListener('message', e => { if (e.source === parent) command(e.data); });
     sync();
   }
+  const actions=ipc?{KeyM:'model',KeyL:'live'}:{KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant',KeyL:'live'};
   document.addEventListener('keydown',e=>{
     if(e.isComposing||e.repeat||document.querySelector('dialog[open]'))return;
     if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
-      const navigate={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant',KeyL:'live'}[e.code];
+      const navigate=actions[e.code];
       if(navigate){e.preventDefault();send({navigate})}
       return;
     }
@@ -46,7 +47,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const primary=/Mac/i.test(navigator.platform)?e.metaKey&&!e.ctrlKey:e.ctrlKey&&!e.metaKey;
     if(!primary||e.altKey)return;
     const key=e.key.toLowerCase();
-    if(!e.shiftKey&&key===','){e.preventDefault();send({navigate:'settings'});return}
-    if(e.shiftKey?key==='enter':key==='k'){e.preventDefault();send(key==='k'?'switch-project':'new-run')}
+    if(!ipc&&!e.shiftKey&&key===','){e.preventDefault();send({navigate:'settings'});return}
+    if(e.shiftKey?key==='enter':!ipc&&key==='k'){e.preventDefault();send(key==='k'?'switch-project':'new-run')}
   });
 });
