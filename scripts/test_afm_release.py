@@ -2,6 +2,10 @@ import hashlib
 import io
 import json
 import pathlib
+import base64
+import runpy
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -100,6 +104,25 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(publish["permissions"], {"contents": "write"})
         self.assertNotIn("ENGINE_READ_TOKEN", json.dumps(publish))
         self.assertIn("--latest=false", json.dumps(publish))
+
+
+    def test_desktop_cask_matches_both_mac_archives(self):
+        script = pathlib.Path(__file__).parents[1] / "scripts/publish-cask.py"
+        with tempfile.TemporaryDirectory() as folder:
+            pathlib.Path(folder, "SHA256SUMS").write_text(
+                "1" * 64 + "  afm-desktop-0.2.0-darwin-arm64.zip\n" +
+                "2" * 64 + "  afm-desktop-0.2.0-darwin-x64.zip\n")
+            missing = subprocess.CompletedProcess([], 1, "", "HTTP 404")
+            with mock.patch.object(sys, "argv", [str(script), "ds-v0.2.0", folder]), \
+                    mock.patch.object(subprocess, "run", side_effect=[missing, None]) as gh:
+                runpy.run_path(str(script))
+        args, kwargs = gh.call_args
+        self.assertIn("repos/akopichin/homebrew-afm/contents/Casks/afm-desktop.rb", args[0])
+        cask = base64.b64decode(json.loads(kwargs["input"])["content"]).decode()
+        self.assertIn('version "0.2.0"', cask)
+        self.assertIn('sha256 arm:   "' + "1" * 64 + '"', cask)
+        self.assertIn('intel: "' + "2" * 64 + '"', cask)
+        self.assertIn('app "AFM Desktop.app"', cask)
 
 
 class ProductWorkflowTests(unittest.TestCase):

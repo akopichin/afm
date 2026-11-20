@@ -37,6 +37,11 @@ The commands use the same project configuration and run directories as `afm`.
 
 ## AFM Desktop releases
 
+Install the macOS app with `brew install --cask akopichin/afm/afm-desktop`.
+When the tap is already installed, use `brew install --cask afm-desktop`.
+Update it with `brew upgrade --cask afm-desktop`. Homebrew selects the correct
+archive for the Mac's processor and checks its SHA-256 digest.
+
 Desktop has its own stable version sequence. To publish from the reviewed commit on
 `main`, push an annotated tag in the form `ds-vMAJOR.MINOR.PATCH`. For example:
 
@@ -59,7 +64,8 @@ choose a provider default, a listed model, or **Custom model…** to enter an ID
 Codex suggestions come from the installed client's account-specific model list.
 The macOS app uses an ad-hoc signature and may require manual approval.
 The repository’s Latest release continues to track the CLI. Desktop builds use
-the existing `ENGINE_READ_TOKEN` secret and publish with the workflow token.
+the existing `ENGINE_READ_TOKEN` secret. The `afm-release` environment publishes
+the GitHub Release with the workflow token and updates the Desktop cask with `RELEASE_TOKEN`.
 For a build-only rehearsal, run **AFM Desktop release** from the Actions tab with
 the intended version (for example `0.0.1`). This uploads the archives as workflow artifacts.
 

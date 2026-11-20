@@ -97,10 +97,18 @@ jobs:
   publish:
     if: github.event_name == 'push'
     needs: build
+    environment: afm-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify distribution approval
+        env:
+          DISTRIBUTION_APPROVED: ${{ vars.AFM_DISTRIBUTION_APPROVED }}
+        run: test "$DISTRIBUTION_APPROVED" = true
       - uses: actions/download-artifact@v4
         with:
           pattern: afm-desktop-*
@@ -128,3 +136,7 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" "${archives[@]}" SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest=false
+      - name: Update the AFM Desktop Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: python3 scripts/publish-cask.py "$RELEASE_TAG" release

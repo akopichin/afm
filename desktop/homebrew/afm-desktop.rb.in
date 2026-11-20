@@ -1,0 +1,16 @@
+cask "afm-desktop" do
+  arch arm: "arm64", intel: "x64"
+
+  version "@VERSION@"
+  sha256 arm:   "@ARM64@",
+         intel: "@X64@"
+
+  url "https://github.com/akopichin/afm/releases/download/ds-v#{version}/afm-desktop-#{version}-darwin-#{arch}.zip"
+  name "AFM Desktop"
+  desc "Manage AFM projects and runs"
+  homepage "https://github.com/akopichin/afm"
+
+  depends_on macos: ">= :ventura"
+
+  app "AFM Desktop.app"
+end
