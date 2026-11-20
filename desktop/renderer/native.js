@@ -81,6 +81,7 @@ if(!isDemo){
   }).catch(showNativeError);
   nativeAFM.workspace().then(applyWorkspace).catch(showNativeError);
   startAssistant();
+  startTasks();
   // Main skips a banner for the run page already on screen; it only needs the run's key, and only when it changes.
   let reportedRun;
   const reportSelection=()=>{

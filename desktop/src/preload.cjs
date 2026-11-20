@@ -42,9 +42,11 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   removeSource:id=>ipcRenderer.invoke('sources:remove',id),
   refreshSource:id=>ipcRenderer.invoke('sources:refresh',id),
   onNoticeOpen:callback=>ipcRenderer.on('notice:open',(_event,target)=>callback(target)),
+  onWatchOpen:callback=>ipcRenderer.on('watch:open',(_event,target)=>callback(target)),
   reportSelection:runKey=>ipcRenderer.invoke('notify:selection',runKey),
   prefs:()=>ipcRenderer.invoke('prefs:get'),
   updateEnvironment:changes=>ipcRenderer.invoke('prefs:environment', changes),
+  refreshEnvironment:()=>ipcRenderer.invoke('prefs:environment-refresh'),
   setPrefs:changes=>ipcRenderer.invoke('prefs:set',changes),
   assistant:{
     state:()=>ipcRenderer.invoke('assistant:state'),
@@ -62,6 +64,18 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
       const listener=(_event,event)=>callback(event);
       ipcRenderer.on('assistant:event',listener);
       return ()=>ipcRenderer.removeListener('assistant:event',listener);
+    }
+  },
+  watch:{
+    list:()=>ipcRenderer.invoke('watch:list'),
+    pause:id=>ipcRenderer.invoke('watch:pause',id),
+    resume:id=>ipcRenderer.invoke('watch:resume',id),
+    stop:id=>ipcRenderer.invoke('watch:stop',id),
+    markRead:id=>ipcRenderer.invoke('watch:read',id),
+    onChange:callback=>{
+      const listener=(_event,tasks)=>callback(tasks);
+      ipcRenderer.on('watch:changed',listener);
+      return ()=>ipcRenderer.removeListener('watch:changed',listener);
     }
   },
   hostStatus:()=>ipcRenderer.invoke('host:status'),

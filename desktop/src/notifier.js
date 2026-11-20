@@ -8,19 +8,21 @@ const BANNER_LIMIT = 5;
 const DOCK_KINDS = new Set(['question', 'approval', 'decision']);
 
 // Fixed text per kind: banners never carry question text, artifacts or secrets.
-const TEXT = {
+export const TEXT = {
   question: { title: 'AFM needs your answer', waiting: 'an answer' },
   approval: { title: 'AFM needs your approval', waiting: 'your approval' },
   decision: { title: 'AFM needs a decision', waiting: 'your decision' },
   failed: { title: 'An AFM stage failed', waiting: 'your attention' },
+  finished: { title: 'An AFM run finished', waiting: 'nothing more' },
 };
 
 // Turns new attention items into one banner each. Pure main-process logic: Electron is injected as `show`.
 export class Notifier {
+  // `claimed(item, snapshot)` is true when a watch task reports the same event, which then owns the banner.
   // `visible(item)` tells whether the user already looks at that stage; `settings` is the notifications preference.
-  constructor({ home, show, visible = () => false, settings, dock }) {
+  constructor({ home, show, visible = () => false, claimed = () => false, settings, dock }) {
     this.file = path.join(desktopDir(home), 'notified.json');
-    Object.assign(this, { show, visible, settings, dock });
+    Object.assign(this, { show, visible, claimed, settings, dock });
     this.lock = new Mutex();
     this.seen = null;
     this.dockPending = false;
@@ -59,7 +61,7 @@ export class Notifier {
       await writeJSON(this.file, Object.fromEntries(this.seen));
       // Questions already pending when Desktop starts are in the queue, not a burst of banners.
       if (first) return;
-      const banners = fresh.filter(item => this.#wanted(item));
+      const banners = fresh.filter(item => this.#wanted(item, snapshot));
       if (banners.some(item => DOCK_KINDS.has(item.kind))) this.dock?.bounce();
       for (const item of banners.slice(0, BANNER_LIMIT)) this.#announce(item, snapshot);
       if (banners.length > BANNER_LIMIT) this.show({ title: 'AFM needs you', body: `${banners.length - BANNER_LIMIT} more requests are waiting.` });
@@ -74,7 +76,7 @@ export class Notifier {
     this.dockPending = pending;
   }
 
-  #wanted(item) { return this.settings.enabled && this.settings.kinds[item.kind] && !this.visible(item); }
+  #wanted(item, snapshot) { return this.settings.enabled && this.settings.kinds[item.kind] && !this.visible(item) && !this.claimed(item, snapshot); }
 
   #announce(item, snapshot) {
     const runs = snapshot.projects.flatMap(project => project.runs.map(run => ({ project, run })));

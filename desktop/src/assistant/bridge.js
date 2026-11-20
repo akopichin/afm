@@ -6,7 +6,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { localURL } from '../host.js';
-import { askApproval } from './approval.js';
+import { askApproval, askLocal } from './approval.js';
+import { isWatchTool, WATCH_TOOLS } from './watch-tools.js';
 import { filterRuns, modeDecision, scopeLabel, scopeViolation, toolKind, visibleTools } from './policy.js';
 import { PERMISSION_LABELS } from './modes.js';
 
@@ -15,11 +16,21 @@ const clip = (text, limit = 300) => (text.length > limit ? text.slice(0, limit) 
 
 // The AFM tools the provider sees: the host's own tools, filtered by the user's permission mode and the
 // selected scope, with approval asked for what the mode does not allow outright. `host` and `approve` are injected.
-export function createBridge({ host, policy, approve }) {
+// `local` answers the Desktop-side watch tools; without it (or with `policy.watch` off) those tools are not offered.
+export function createBridge({ host, policy, approve, local = null }) {
+  const watching = Boolean(policy.watch && local);
   const server = new Server({ name: 'afm-desktop-assistant', version: '0.0.1' }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools(await host.listTools(), policy) }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...visibleTools(await host.listTools(), policy), ...(watching ? WATCH_TOOLS : [])] }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     const args = params.arguments ?? {};
+    if (isWatchTool(params.name)) {
+      if (!watching) return refusal(`${params.name}: not_found: Unknown AFM tool.`);
+      // Observation only, so every permission mode allows it; Desktop checks the scope against this turn's.
+      try {
+        const answer = await local({ op: 'watch', turnId: policy.turnId, tool: params.name, args });
+        return { content: [{ type: 'text', text: answer.text }] };
+      } catch (error) { return refusal(`${params.name}: rejected: ${error.message}`); }
+    }
     const tool = (await host.listTools()).find(item => item.name === params.name);
     if (!tool) return refusal(`${params.name}: not_found: Unknown AFM tool.`);
     const kind = toolKind(tool);
@@ -48,13 +59,17 @@ function scopedList(result, scope) {
 // Entry point of the stdio server the provider starts. It reads its policy from the file named on its command line.
 async function main() {
   const policy = JSON.parse(await readFile(process.argv[process.argv.indexOf('--policy') + 1], 'utf8'));
-  const client = new Client({ name: 'afm-desktop-assistant', version: '0.0.1' });
-  await client.connect(new StreamableHTTPClientTransport(localURL(policy.endpoint), { requestInit: { redirect: 'error' } }));
-  const host = {
-    listTools: async () => (await client.listTools()).tools,
-    callTool: (name, args) => client.callTool({ name, arguments: args }),
-  };
-  await createBridge({ host, policy, approve: request => askApproval(policy.approvalSocket, request) }).connect(new StdioServerTransport());
+  let host = { listTools: async () => [], callTool: async () => refusal('AFM host is unavailable.') };
+  // Without a host endpoint only the Desktop-side watch tools are served.
+  if (policy.endpoint) {
+    const client = new Client({ name: 'afm-desktop-assistant', version: '0.0.1' });
+    await client.connect(new StreamableHTTPClientTransport(localURL(policy.endpoint), { requestInit: { redirect: 'error' } }));
+    host = {
+      listTools: async () => (await client.listTools()).tools,
+      callTool: (name, args) => client.callTool({ name, arguments: args }),
+    };
+  }
+  await createBridge({ host, policy, approve: request => askApproval(policy.approvalSocket, request), local: request => askLocal(policy.approvalSocket, request) }).connect(new StdioServerTransport());
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

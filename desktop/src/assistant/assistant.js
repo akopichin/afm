@@ -1,16 +1,19 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 import { ApprovalServer } from './approval.js';
 import { detectProvider, searchDirs } from './detect.js';
 import { runEndpoint } from './endpoint.js';
-import { buildInvocation, describeMode, PERMISSION_LABELS } from './modes.js';
+import { buildInvocation, canResume, describeMode, PERMISSION_LABELS } from './modes.js';
+import { belongsTo } from '../projects.js';
 import { scopeLabel } from './policy.js';
 import { runProcess } from './run.js';
 import { AssistantSettings, BUILT_IN, SettingsError } from './settings.js';
 import { parserFor } from './stream.js';
+import { isWatchTool, runWatchTool } from './watch-tools.js';
 
 const MAX_MESSAGES = 60;
 const MAX_TEXT = 8000;
@@ -21,19 +24,54 @@ const PROMPT_BUDGET = 24000;
 const DETECTION_TTL_MS = 5 * 60 * 1000;
 const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
 const SECRET_NAME = /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL/i;
+const SESSION_ID = /^[A-Za-z0-9][\w.-]{0,127}$/;
+// What the CLIs say when they do not know the session; any other failure is shown, not retried.
+const SESSION_REJECTED = /no conversation found|no rollout found|session\b.*\b(not found|does not exist|expired)|unknown session|could not find\b.*\bsession/i;
 
 export class AssistantError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 
+// Identifies a scope or credential choice without storing either.
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 32);
 const clip = (text, limit) => (text.length > limit ? text.slice(0, limit) + '…' : text);
+// What a provider is given of the chat: failed replies and empty messages are left out.
+const forProvider = message => message.status !== 'error' && message.text;
+
+// The longest end of `text` that could still grow into one of `values`.
+function unfinishedValue(text, values) {
+  const longest = Math.max(0, ...values.map(value => value.length));
+  for (let start = Math.max(0, text.length - longest + 1); start < text.length; start++) {
+    const end = text.slice(start);
+    if (values.some(value => value.length > end.length && value.startsWith(end))) return end;
+  }
+  return '';
+}
 
 // Removes the values of secret-looking environment variables from text that may be shown to the user.
 // `add` registers a credential resolved later, so it is hidden from everything the provider prints.
 function redactor(env) {
   const secrets = Object.entries(env).filter(([name, value]) => SECRET_NAME.test(name) && value?.length >= 8).map(([, value]) => value);
-  const redact = text => typeof text === 'string' ? secrets.reduce((out, secret) => out.split(secret).join('[hidden]'), text) : text;
+  const sessions = [];
+  // Longest first, so a short value inside a longer one cannot leave the rest of the longer one visible.
+  const redact = text => typeof text === 'string'
+    ? [...secrets, ...sessions].sort((a, b) => b.length - a.length).reduce((out, secret) => out.split(secret).join('[hidden]'), text) : text;
   redact.add = value => { if (value?.length >= 8) secrets.push(value); };
+  // Provider session ids stay private however short they are; they only go into the provider's own command line.
+  redact.addSession = value => { if (value && !sessions.includes(value)) sessions.push(value); };
+  // A text delta can end in the middle of a session id, so the part that could begin one is held back until
+  // later text shows what it is. A tool call or an approval in between does not end the text; `release` does.
+  let held = '';
+  redact.stream = text => {
+    const safe = redact(held + text);
+    held = unfinishedValue(safe, sessions);
+    return safe.slice(0, safe.length - held.length);
+  };
+  redact.release = () => {
+    const rest = held;
+    held = '';
+    return rest;
+  };
   return redact;
 }
 
@@ -44,24 +82,38 @@ function redactInput(redact, input) {
 
 // The Desktop-wide assistant. `context` is the app's view of AFM: {endpoint(), runs(), project(id)}.
 // `bridge` says how a provider starts the AFM tool bridge: {command, script, env}.
+// `watch` is the background watch service (create, list, pause, resume, stop); without it the watch tools are not offered.
 export class Assistant {
-  constructor({ home, context, bridge, env = process.env, loginPath = async () => '', systemDirs, maxActive = 3, grace }) {
-    Object.assign(this, { home, context, bridge, baseEnv: env, loginPath, systemDirs, maxActive, grace });
+  // `onTiming` receives one record per reply (milliseconds, no text), for the performance script and diagnostics.
+  constructor({ home, context, bridge, watch = null, env = process.env, loginPath = async () => '', systemDirs, maxActive = 3, grace, onTiming = () => {} }) {
+    Object.assign(this, { home, context, bridge, watch, baseEnv: env, loginPath, systemDirs, maxActive, grace, onTiming });
     this.settings = new AssistantSettings(home);
     this.historyFile = path.join(desktopDir(home), 'assistant-history.json');
     this.historyLock = new Mutex();
     this.listeners = new Set();
     this.detections = new Map();
+    this.detectGeneration = 0;
+    this.clearing = new Set();
     this.active = new Map();
-    this.approvals = new ApprovalServer(request => this.#askUser(request));
+    this.approvals = new ApprovalServer(request => (request.op === 'watch' ? this.#watchTool(request) : this.#askUser(request)));
     this.pending = new Map();
   }
 
   onEvent(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   #emit(event) {
-    // Anything else about a reply must not overtake the text that came before it.
+    // Anything else about a reply must not overtake the text already let through before it.
     if (event.type !== 'delta') this.#flushDelta(this.active.get(event.conversationId));
     for (const listener of this.listeners) listener(event);
+  }
+
+  // The reply has ended, so text held back in case it began a session id can no longer become one.
+  #releaseText(turn) {
+    const held = turn.redact?.release();
+    if (held) {
+      turn.reply.text += held;
+      this.#queueDelta(turn, held);
+    }
+    this.#flushDelta(turn);
   }
 
   #queueDelta(turn, text) {
@@ -84,27 +136,40 @@ export class Assistant {
     return { settings, definitions: [...BUILT_IN, ...settings.providers] };
   }
 
-  async #environment() {
-    const base = typeof this.baseEnv === 'function' ? await this.baseEnv() : this.baseEnv;
-    const dirs = searchDirs({ home: this.home, env: base, loginPath: await this.loginPath(), systemDirs: this.systemDirs });
-    const env = { ...base, PATH: dirs.join(path.delimiter) };
-    delete env.ELECTRON_RUN_AS_NODE;
-    return { env, dirs };
+  // Detections taken before this are dropped, and any scan still running cannot store its result afterwards.
+  resetDetections() {
+    this.detections.clear();
+    this.detectGeneration++;
   }
 
-  async #detect(definition) {
-    const { env, dirs } = await this.#environment();
-    const info = await detectProvider(definition, { home: this.home, env, dirs });
-    this.detections.set(definition.id, { at: Date.now(), info });
+  // The import (and the login-shell PATH) is timed on its own, so a slow shell startup is not mistaken for a slow provider.
+  // `key` identifies the environment, so detections made under another one are not reused.
+  async #environment(timing) {
+    const started = performance.now();
+    const generation = this.detectGeneration;
+    const base = typeof this.baseEnv === 'function' ? await this.baseEnv() : this.baseEnv;
+    const loginPath = await this.loginPath();
+    if (timing) timing.environmentMs += performance.now() - started;
+    const dirs = searchDirs({ home: this.home, env: base, loginPath, systemDirs: this.systemDirs });
+    const env = { ...base, PATH: dirs.join(path.delimiter) };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const key = createHash('sha256').update(JSON.stringify(Object.entries(env).sort())).digest('hex');
+    return { env, dirs, key, generation };
+  }
+
+  async #detect(definition, environment) {
+    const info = await detectProvider(definition, { home: this.home, env: environment.env, dirs: environment.dirs });
+    if (environment.generation === this.detectGeneration) this.detections.set(definition.id, { at: Date.now(), info, key: environment.key });
     return info;
   }
 
-  async #provider(id, { fresh = false } = {}) {
+  async #provider(id, { fresh = false, environment } = {}) {
     const { definitions } = await this.#definitions();
     const definition = definitions.find(item => item.id === id);
     if (!definition) throw new AssistantError('unknown_provider', 'The selected provider no longer exists. Choose another one.');
+    environment ??= await this.#environment();
     const cached = this.detections.get(id);
-    return !fresh && cached && Date.now() - cached.at < DETECTION_TTL_MS ? cached.info : this.#detect(definition);
+    return !fresh && cached?.key === environment.key && Date.now() - cached.at < DETECTION_TTL_MS ? cached.info : this.#detect(definition, environment);
   }
 
   // Settings and whatever has been detected so far. Detection itself runs on scan(), never here.
@@ -121,7 +186,8 @@ export class Assistant {
 
   async scan() {
     const { definitions } = await this.#definitions();
-    await Promise.all(definitions.map(definition => this.#detect(definition)));
+    const environment = await this.#environment();
+    await Promise.all(definitions.map(definition => this.#detect(definition, environment)));
     return this.state();
   }
 
@@ -142,20 +208,47 @@ export class Assistant {
 
   // ---- conversations ----
 
-  async history(conversationId = 'main') { return (await readJSON(this.historyFile, { conversations: {} })).conversations[conversationId] ?? []; }
+  // `sessions` is optional in files written before provider sessions were kept.
+  #readHistory() { return readJSON(this.historyFile, { conversations: {} }); }
 
-  #saveMessages(conversationId, change) {
+  async history(conversationId = 'main') { return (await this.#readHistory()).conversations[conversationId] ?? []; }
+
+  // One write changes the messages and, when `session` is given, the provider session kept beside them:
+  // an object replaces it and null forgets it. Without `session` the stored one stays as it is.
+  #saveMessages(conversationId, change, session) {
     return this.historyLock.run(async () => {
-      const all = await readJSON(this.historyFile, { conversations: {} });
+      const all = await this.#readHistory();
       const next = change(all.conversations[conversationId] ?? []).slice(-MAX_MESSAGES);
-      await writeJSON(this.historyFile, { conversations: { ...all.conversations, [conversationId]: next } });
+      const sessions = { ...all.sessions };
+      if (session) sessions[conversationId] = session;
+      else if (session === null) delete sessions[conversationId];
+      await writeJSON(this.historyFile, { ...all, conversations: { ...all.conversations, [conversationId]: next }, sessions });
       return next;
     });
   }
 
+  // The transcript and the provider session go together, so a cleared chat never resumes the old conversation.
   async clear(conversationId = 'main') {
-    if (this.active.has(conversationId)) throw new AssistantError('busy', 'Stop the running reply before clearing the chat.');
-    await this.#saveMessages(conversationId, () => []);
+    if (this.active.has(conversationId) || this.clearing.has(conversationId)) throw new AssistantError('busy', 'Stop the running reply before clearing the chat.');
+    // A message sent while the files are being rewritten would read the old chat and session back in.
+    this.clearing.add(conversationId);
+    try { await this.#saveMessages(conversationId, () => [], null); }
+    finally { this.clearing.delete(conversationId); }
+  }
+
+  // The stored provider session, if it belongs to this provider, scope and identified credential and the CLI can resume it.
+  // `catchUp` is whatever was said after the session last saw the chat (another provider, a failed reply).
+  async #resumableSession(turn) {
+    if (!turn.sessionKey.credentialKey || !canResume(turn.provider, turn.settings)) return null;
+    const stored = (await this.#readHistory()).sessions?.[turn.conversationId];
+    if (!stored?.sessionId || stored.providerId !== turn.sessionKey.providerId || stored.scopeKey !== turn.sessionKey.scopeKey
+      || stored.credentialKey !== turn.sessionKey.credentialKey) return null;
+    const seen = turn.prior.findIndex(message => message.id === stored.upTo);
+    if (seen < 0) return null;
+    const catchUp = turn.prior.slice(seen + 1);
+    // A resumed session would silently miss what the budget drops, so the bounded transcript starts a fresh one instead.
+    if (this.#transcript(catchUp, turn.text).length < catchUp.filter(forProvider).length) return null;
+    return { id: stored.sessionId, catchUp };
   }
 
   async #resolveScope(input) {
@@ -174,7 +267,7 @@ export class Assistant {
 
   // Older turns are dropped first; the provider gets only what fits the budget.
   #transcript(messages, text) {
-    const lines = messages.filter(item => item.status !== 'error' && item.text).map(item => `${item.role === 'user' ? 'User' : 'Assistant'}: ${clip(item.text, 2000)}`);
+    const lines = messages.filter(forProvider).map(item => `${item.role === 'user' ? 'User' : 'Assistant'}: ${clip(item.text, 2000)}`);
     let used = text.length;
     const kept = [];
     for (const line of lines.reverse()) {
@@ -190,49 +283,84 @@ export class Assistant {
       `Scope: ${scopeLabel(scope)}${scope.kind === 'all' ? '' : ` (${scope.projectRoot})`}. Permission mode: ${effective.label}.`,
       hasTools ? 'Use the afm_* tools to inspect or control AFM runs. They only work inside the scope and mode above; report any tool error to the user as it is.'
         : 'AFM tools are not available in this conversation; say so if the user asks you to inspect or control runs.',
-      'Answer briefly in the user\'s language.'].join('\n');
+      hasTools && this.watch ? `The desktop_watch_* tools watch runs in the background (observation only, any mode). Current time: ${new Date().toISOString()}. Use absolute ISO times with an offset.` : '',
+      'Answer briefly in the user\'s language.'].filter(Boolean).join('\n');
   }
 
   // Starts a reply and returns at once; progress arrives through onEvent.
-  async send({ conversationId = 'main', text, scope: scopeInput } = {}) {
+  // `internal.readOnly` is for Desktop's own replies (watch reports): read-only mode and no tools.
+  async send({ conversationId = 'main', text, scope: scopeInput } = {}, internal = {}) {
     text = String(text ?? '').trim();
     if (!text) throw new AssistantError('invalid', 'Write a message first.');
     if (text.length > MAX_TEXT) throw new AssistantError('invalid', `Messages are limited to ${MAX_TEXT} characters.`);
     if (this.active.has(conversationId)) throw new AssistantError('busy', 'The assistant is still answering. Stop it or wait.');
-    if (this.active.size >= this.maxActive) throw new AssistantError('too_many', 'Too many replies are running at once.');
-    const turn = { turnId: randomUUID(), conversationId, cancelled: false };
+    if (this.clearing.has(conversationId)) throw new AssistantError('busy', 'The chat is being cleared. Try again in a moment.');
+    // Reports Desktop writes for itself do not take chat capacity.
+    if ([...this.active.keys()].filter(id => !id.startsWith('watch:')).length >= this.maxActive) throw new AssistantError('too_many', 'Too many replies are running at once.');
+    const turn = { turnId: randomUUID(), conversationId, cancelled: false, noTools: internal.readOnly === true, timing: { sentAt: performance.now(), environmentMs: 0 } };
+    // close() waits on this as soon as the turn is active, so a turn that is still preparing is not cut off.
+    const { promise: finished, resolve: settle } = Promise.withResolvers();
+    turn.finished = finished;
     this.active.set(conversationId, turn);
+    let user;
     try {
-      const settings = await this.settings.get();
-      const provider = await this.#provider(settings.provider);
+      const settings = internal.readOnly ? { ...await this.settings.get(), permission: 'read' } : await this.settings.get();
+      // One snapshot serves the provider check and the process that is started from it.
+      turn.environment = await this.#environment(turn.timing);
+      const provider = await this.#provider(settings.provider, { environment: turn.environment });
       if (!provider.found) throw new AssistantError('provider_missing', provider.auth.detail);
       if (provider.auth.state !== 'ready') throw new AssistantError('missing_credentials', `${provider.name} is not signed in. ${provider.auth.detail}`);
       const scope = await this.#resolveScope(scopeInput);
       const prior = await this.history(conversationId);
       Object.assign(turn, { settings, provider, scope, prior, text });
+      if (provider.kind !== 'openai') {
+        // The credential is resolved once: it is both what the session is bound to and what the process gets.
+        turn.credential = await this.#providerCredential(provider, turn.environment.env);
+        const secrets = [...Object.values(turn.credential), provider.auth.via === 'env' ? turn.environment.env[provider.auth.detail] : ''].filter(Boolean);
+        // A native CLI login gives Desktop no credential value, so one account cannot be told from another:
+        // its key stays null and its sessions are neither resumed nor kept.
+        turn.sessionKey = { providerId: provider.id, scopeKey: digest({ kind: scope.kind, runId: scope.runId, instanceId: scope.instanceId, projectId: scope.projectId, projectRoot: scope.projectRoot }),
+          credentialKey: secrets.length ? digest({ credential: provider.credential, via: provider.auth.via, detail: provider.auth.detail, secrets }) : null };
+        turn.resume = await this.#resumableSession(turn);
+      }
       const effective = provider.kind === 'openai' ? { permission: 'read', label: PERMISSION_LABELS.read, flags: 'chat only', model: settings.model || null, reasoning: 'default' } : this.#invocation(turn).effective;
       turn.effective = effective;
-    } catch (error) { this.active.delete(conversationId); throw error; }
-    const user = { id: randomUUID(), role: 'user', text, context: scopeLabel(turn.scope), at: new Date().toISOString() };
-    turn.reply = { id: randomUUID(), role: 'assistant', text: '', context: user.context, status: 'streaming', tools: [], effective: { provider: turn.provider.name, ...turn.effective }, at: user.at };
-    await this.#saveMessages(conversationId, messages => [...messages, user]);
+      user = { id: randomUUID(), role: 'user', text, context: scopeLabel(turn.scope), at: new Date().toISOString() };
+      turn.reply = { id: randomUUID(), role: 'assistant', text: '', context: user.context, status: 'streaming', tools: [], effective: { provider: turn.provider.name, ...turn.effective }, at: user.at };
+      await this.#saveMessages(conversationId, messages => [...messages, user]);
+    } catch (error) {
+      this.active.delete(conversationId);
+      settle();
+      throw error;
+    }
+    turn.timing.receiptAt = performance.now();
     this.#emit({ type: 'start', conversationId, turnId: turn.turnId, message: user, reply: turn.reply });
-    turn.finished = this.#run(turn).catch(error => this.#finish(turn, 'error', error.message));
+    this.#run(turn).catch(error => this.#finish(turn, 'error', error.message)).then(settle, settle);
     return { turnId: turn.turnId, effective: turn.effective, scope: scopeLabel(turn.scope) };
   }
 
-  #invocation(turn, bridge = null) {
-    return buildInvocation({ provider: turn.provider, settings: turn.settings, bridge, systemPrompt: this.#systemPrompt(turn.scope, { label: PERMISSION_LABELS[turn.settings.permission] }, Boolean(bridge)) });
+  #invocation(turn, bridge = null, resume = null) {
+    return buildInvocation({ provider: turn.provider, settings: turn.settings, bridge, resume, isolated: turn.noTools, systemPrompt: this.#systemPrompt(turn.scope, { label: PERMISSION_LABELS[turn.settings.permission] }, Boolean(bridge)) });
+  }
+
+  // The provider refused the resumed session before doing anything. Retrying any other failure could repeat
+  // work that already happened, so only this one is retried, and only while nothing has been said or done.
+  #sessionRejected(turn, outcome) {
+    return Boolean(outcome.error || outcome.code || turn.failure) && !turn.workStarted
+      && SESSION_REJECTED.test(`${outcome.stderr ?? ''}\n${turn.failure ?? ''}`);
   }
 
   async #run(turn) {
     const { provider, settings, scope, prior, text } = turn;
-    const { env } = await this.#environment();
+    const env = { ...turn.environment.env };
     const redact = redactor(env);
     turn.redact = redact;
+    if (turn.resume) redact.addSession(turn.resume.id);
     const onEvent = event => this.#onProviderEvent(turn, event, redact);
-    let tempDir;
+    let tempDir, outcome;
     try {
+      // Stopped while preparing: nothing has been started yet, so no bridge or approval socket is created.
+      if (turn.cancelled) return this.#finish(turn, 'cancelled');
       if (provider.kind === 'openai') {
         const messages = [{ role: 'system', content: this.#systemPrompt(scope, { label: PERMISSION_LABELS.read }, false) },
           ...this.#transcript(prior, text).map(line => ({ role: line.startsWith('User: ') ? 'user' : 'assistant', content: line.replace(/^(User|Assistant): /, '') })), { role: 'user', content: text }];
@@ -241,24 +369,37 @@ export class Assistant {
         redact.add(apiKey);
         if (turn.cancelled) return this.#finish(turn, 'cancelled');
         turn.process = runEndpoint({ endpoint: provider.endpoint, apiKey, model: settings.model, messages, onEvent });
+        turn.timing.readyAt = performance.now();
       } else {
         tempDir = await mkdtemp(path.join(os.tmpdir(), 'afm-turn-'));
         const bridge = await this.#prepareBridge(turn, tempDir);
-        const { args } = this.#invocation(turn, bridge);
         const cwd = scope.kind === 'all' ? this.home : scope.projectRoot;
-        const prompt = [...this.#transcript(prior, text), `User: ${text}`].join('\n\n');
-        const credential = await this.#providerCredential(provider, env);
-        Object.values(credential).forEach(redact.add);
-        Object.assign(env, credential);
+        Object.values(turn.credential).forEach(redact.add);
+        Object.assign(env, turn.credential);
+        // A resumed session already holds the conversation up to its catch-up point; a fresh one gets the bounded transcript.
+        const start = resume => {
+          const { args } = this.#invocation(turn, bridge, resume?.id);
+          const prompt = [...this.#transcript(resume ? resume.catchUp : prior, text), `User: ${text}`].join('\n\n');
+          turn.process = runProcess({ command: provider.executable, args, cwd, env, input: prompt, parser: parserFor(provider.kind), onEvent, grace: this.grace });
+          turn.timing.readyAt ??= performance.now();
+          return turn.process.done;
+        };
         if (turn.cancelled) return this.#finish(turn, 'cancelled');
-        turn.process = runProcess({ command: provider.executable, args, cwd, env, input: prompt, parser: parserFor(provider.kind), onEvent, grace: this.grace });
+        outcome = turn.resume ? await start(turn.resume) : null;
+        if (outcome && !turn.cancelled && this.#sessionRejected(turn, outcome)) {
+          // Expired or unknown session: forget it and answer from the saved chat instead.
+          Object.assign(turn, { sessionForgotten: true, failure: null, sessionId: null });
+          this.#emit({ type: 'notice', conversationId: turn.conversationId, turnId: turn.turnId, text: 'The earlier provider session could not be resumed, so this reply continues from the saved chat.' });
+          outcome = null;
+        }
+        if (!outcome) outcome = await start(null);
       }
-      const outcome = await turn.process.done;
+      outcome ??= await turn.process.done;
       if (turn.cancelled) return this.#finish(turn, 'cancelled');
       if (outcome.error) return this.#finish(turn, 'error', redact(`${provider.name} could not run: ${outcome.error.message}`));
       if (turn.failure) return this.#finish(turn, 'error', turn.failure);
       if (outcome.code) return this.#finish(turn, 'error', redact(`${provider.name} exited with code ${outcome.code}.${outcome.stderr ? ' ' + clip(outcome.stderr.trim(), 400) : ''}`));
-      if (!turn.reply.text && !turn.reply.tools.length) return this.#finish(turn, 'error', `${provider.name} ended without a reply.`);
+      if (!turn.textReceived && !turn.reply.tools.length) return this.#finish(turn, 'error', `${provider.name} ended without a reply.`);
       return this.#finish(turn, 'done');
     } catch (error) {
       return this.#finish(turn, 'error', redact(error.message));
@@ -269,14 +410,16 @@ export class Assistant {
 
   // The tool bridge is a separate stdio server per turn, bound to this turn's scope and permission mode.
   async #prepareBridge(turn, dir) {
-    let endpoint;
+    if (turn.noTools) return null;
+    let endpoint = null;
     try { endpoint = await this.context.endpoint(); }
     catch (error) {
-      this.#emit({ type: 'notice', conversationId: turn.conversationId, turnId: turn.turnId, text: 'AFM host is unavailable, so AFM tools are off for this reply.' });
-      return null;
+      // The watch tools live in Desktop, so they still work without the host.
+      this.#emit({ type: 'notice', conversationId: turn.conversationId, turnId: turn.turnId, text: this.watch ? 'AFM host is unavailable, so AFM run tools are off for this reply.' : 'AFM host is unavailable, so AFM tools are off for this reply.' });
+      if (!this.watch) return null;
     }
     const policyFile = path.join(dir, 'policy.json');
-    const policy = { endpoint, mode: turn.settings.permission, scope: turn.scope, turnId: turn.turnId, approvalSocket: await this.approvals.listen() };
+    const policy = { endpoint, mode: turn.settings.permission, scope: turn.scope, turnId: turn.turnId, watch: Boolean(this.watch), approvalSocket: await this.approvals.listen() };
     await writeFile(policyFile, JSON.stringify(policy), { mode: 0o600 });
     const spec = { command: this.bridge.command, args: [this.bridge.script, '--policy', policyFile], env: this.bridge.env ?? {} };
     const configFile = path.join(dir, 'mcp.json');
@@ -302,11 +445,24 @@ export class Assistant {
     const base = { conversationId: turn.conversationId, turnId: turn.turnId };
     const { reply } = turn;
     if (turn.cancelled) return;
-    if (event.type === 'delta') {
-      const text = redact(event.text);
+    if (event.type === 'session') {
+      // The id goes into a later command line, so only a plain token is accepted.
+      if (SESSION_ID.test(event.id)) {
+        turn.sessionId = event.id;
+        redact.addSession(event.id);
+      }
+    } else if (event.type === 'activity') {
+      turn.workStarted = true;
+    } else if (event.type === 'delta') {
+      turn.workStarted = true;
+      // Received, not necessarily shown: text held back in case it begins a session id is still part of the reply.
+      turn.textReceived = true;
+      const text = redact.stream(event.text);
+      turn.timing.firstTextAt ??= performance.now();
       reply.text += text;
-      this.#queueDelta(turn, text);
+      if (text) this.#queueDelta(turn, text);
     } else if (event.type === 'tool') {
+      turn.workStarted = true;
       if (reply.tools.length < MAX_TOOLS) reply.tools.push({ id: event.id, name: event.name, input: redactInput(redact, event.input), status: 'running' });
       this.#emit({ ...base, type: 'tool', tool: { id: event.id, name: event.name, input: redactInput(redact, event.input) } });
     } else if (event.type === 'tool_result') {
@@ -315,20 +471,39 @@ export class Assistant {
       this.#emit({ ...base, type: 'tool_result', id: event.id, error: event.error, text: redact(event.text) });
     } else if (event.type === 'result') {
       if (!event.ok) turn.failure = redact(event.error || 'The provider reported an error.');
-      else if (!reply.text && event.text) this.#onProviderEvent(turn, { type: 'delta', text: event.text }, redact);
+      else if (!turn.textReceived && event.text) this.#onProviderEvent(turn, { type: 'delta', text: event.text }, redact);
     }
   }
 
   async #finish(turn, status, message) {
     if (turn.settled) return;
     turn.settled = true;
-    this.#flushDelta(turn);
+    this.#releaseText(turn);
     this.#denyApprovals(turn.turnId);
     const { reply } = turn;
+    // Every error passes here, so one built without redaction still cannot show a credential or session id.
+    message = turn.redact?.(message) ?? message;
     Object.assign(reply, { status, error: message ?? null, text: clip(turn.redact?.(reply.text) ?? reply.text, MAX_TEXT * 4) });
-    await this.#saveMessages(turn.conversationId, messages => [...messages, reply]);
+    await this.#saveMessages(turn.conversationId, messages => [...messages, reply], this.#sessionToKeep(turn, status));
     this.active.delete(turn.conversationId);
+    this.#reportTiming(turn, status);
     this.#emit({ type: status === 'done' ? 'done' : status, conversationId: turn.conversationId, turnId: turn.turnId, message: status === 'error' ? message : undefined, reply });
+  }
+
+  #reportTiming(turn, status) {
+    const { sentAt, receiptAt, readyAt, firstTextAt, environmentMs } = turn.timing;
+    const since = at => at === undefined ? null : Math.round(at - sentAt);
+    this.onTiming({ conversationId: turn.conversationId, turnId: turn.turnId, status, environmentMs: Math.round(environmentMs),
+      receiptMs: since(receiptAt), providerReadyMs: since(readyAt), firstTextMs: since(firstTextAt), totalMs: since(performance.now()) });
+  }
+
+  // undefined keeps what is stored. A session that was refused is forgotten even if the reply then failed.
+  #sessionToKeep(turn, status) {
+    // A turn under an unidentified login also forgets the session kept before it: that one belongs to another credential.
+    if (turn.sessionKey && !turn.sessionKey.credentialKey) return null;
+    // `upTo` marks the last reply this session has seen, so later messages can be handed over when it is resumed.
+    if (status !== 'error' && turn.sessionId && turn.sessionKey) return { sessionId: turn.sessionId, upTo: turn.reply.id, model: turn.settings.model || null, ...turn.sessionKey };
+    return turn.sessionForgotten ? null : undefined;
   }
 
   cancel(conversationId = 'main') {
@@ -341,6 +516,41 @@ export class Assistant {
     return true;
   }
 
+  // ---- background watch tools and reports ----
+
+  // Called by the tool bridge over the local socket. The turn's own scope bounds what it may watch.
+  async #watchTool({ turnId, tool, args }) {
+    const turn = [...this.active.values()].find(item => item.turnId === turnId);
+    if (!this.watch || !turn || turn.cancelled || turn.noTools || !isWatchTool(tool)) throw new AssistantError('not_available', 'Watch tools are not available for this reply.');
+    // The title is shown and stored, so a credential or session id the model repeats in it is removed first.
+    const given = { ...args };
+    if (typeof given.title === 'string') given.title = turn.redact(given.title);
+    const outcome = await runWatchTool({ watch: this.watch, tool, args: given, turnScope: turn.scope, belongsTo, scopeName: scopeLabel,
+      resolveScope: input => this.#resolveScope(input), authorized: () => this.active.get(turn.conversationId) === turn && !turn.cancelled && !turn.settled });
+    // The card comes from Desktop, not from what the model says about it.
+    if (outcome.card) this.#emit({ type: 'watch_card', conversationId: turn.conversationId, turnId, card: outcome.card });
+    return outcome;
+  }
+
+  // One read-only reply in a conversation of its own, for watch reports. It never touches the main chat or its busy state,
+  // and its transcript is dropped afterwards.
+  async summarize(taskId, prompt) {
+    const conversationId = `watch:${taskId}`;
+    let stop;
+    const ended = new Promise(resolve => {
+      stop = this.onEvent(event => { if (event.conversationId === conversationId && ['done', 'error', 'cancelled'].includes(event.type)) resolve(event); });
+    });
+    try {
+      await this.send({ conversationId, text: prompt, scope: {} }, { readOnly: true });
+      const end = await ended;
+      if (end.type !== 'done') throw Error(end.message ?? 'The summary was not written.');
+      return end.reply.text;
+    } finally {
+      stop();
+      await this.clear(conversationId).catch(() => {});
+    }
+  }
+
   // ---- approvals ----
 
   #askUser({ turnId, tool, kind, scope, summary }) {
@@ -350,7 +560,9 @@ export class Assistant {
     return new Promise(resolve => {
       const timer = setTimeout(() => this.approve(approvalId, false), APPROVAL_TIMEOUT_MS);
       this.pending.set(approvalId, { turnId, conversationId: turn.conversationId, resolve: value => { clearTimeout(timer); resolve(value); } });
-      this.#emit({ type: 'approval', conversationId: turn.conversationId, turnId, approvalId, tool, kind, scope, summary });
+      // The bridge describes the action from the tool's arguments, which can name the session or carry a credential.
+      const { redact } = turn;
+      this.#emit({ type: 'approval', conversationId: turn.conversationId, turnId, approvalId, tool: redact(tool), kind, scope: redact(scope), summary: redact(summary) });
     });
   }
 
@@ -367,6 +579,8 @@ export class Assistant {
     for (const [id, pending] of this.pending) if (pending.turnId === turnId) this.approve(id, false);
   }
 
+  // Part of Quit. main.js has stopped the environment imports first, so a reply still waiting for a startup shell
+  // fails at once instead of outliving the quit deadline.
   async close() {
     const turns = [...this.active.values()];
     for (const turn of turns) this.cancel(turn.conversationId);

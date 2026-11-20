@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { desktopEnvironment } from './environment.js';
+import { desktopEnvironment, refreshEnvironment, stopEnvironmentImports } from './environment.js';
 import { PipelineOptions } from './pipeline-options.js';
 import { Desktop } from './desktop.js';
 import { LiveView } from './live-view.js';
@@ -12,6 +12,10 @@ import { afmBinary } from './binary.js';
 import { DashboardViews } from './dashboard-views.js';
 import { Workspace } from './workspace.js';
 import { Notifier } from './notifier.js';
+import { WatchService } from './watch/index.js';
+import { SummaryRunner } from './watch/summary.js';
+import { registerWatchIpc } from './watch/ipc.js';
+import { createWatchBanners } from './watch/banners.js';
 import { DashboardOrigins, allowRequest } from './protocol.js';
 import { Assistant } from './assistant/assistant.js';
 import { loginShellPath } from './assistant/detect.js';
@@ -65,15 +69,21 @@ const notifier = new Notifier({ home, show: showBanner, settings: {enabled: fals
   dock: app.dock && !demo ? {
     setPending: pending => app.dock.setIcon(path.join(root, 'assets', pending ? 'afm-desktop-attention.png' : 'afm-desktop.png')),
     bounce: () => { if (!window?.isFocused()) app.dock.bounce('informational'); },
-  } : undefined });
-const workspace = new Workspace({ desktop, stageBrowsers, watchHidden: () => notifier.enabled });
+  } : undefined,
+  claimed: (item, snapshot) => watchTasks.covers(item.kind, item.runKey) });
+// Background watch tasks keep the one hidden-window poll running while any of them is active.
+let publishWatch;
+const watchBanners = createWatchBanners({ show: banner => showBanner(banner), visible: result => Boolean(window?.isFocused() && shownRun === result.runKey) });
+const watchTasks = new WatchService({ home, onActiveChange: () => workspace.wake(), onChange: () => publishWatch?.(), onResult: (task, result) => watchBanners.result(task, result), onSummaryDue: task => summaries.run(task).catch(error => console.error('Watch report:', error)), onError: error => console.error('Watch tasks were not saved:', error) });
+const workspace = new Workspace({ desktop, stageBrowsers, watchHidden: () => notifier.enabled || watchTasks.active, watchActive: () => watchTasks.active });
+watchTasks.load().then(() => workspace.wake()).catch(error => console.error('Watch tasks:', error));
 const loadNotificationSettings = () => desktop.prefs.get().then(prefs => notifier.setSettings(prefs.notifications, workspace.snapshot?.attention));
 // A stage browser appearing or going away changes the Live tabs at once, not at the next poll.
 stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
 // A Finder-launched app lacks the login shell's PATH; it is read once, when the assistant first needs it.
 let loginPath;
 const assistant = new Assistant({
-  home, env: environment, loginPath: () => (loginPath ??= loginShellPath(process.env)),
+  home, env: environment, watch: watchTasks.tools(), loginPath: () => (loginPath ??= loginShellPath(process.env)),
   context: {
     endpoint: async () => { await desktop.host.connect(); return desktop.host.state.endpoint; },
     runs: () => desktop.host.runs(),
@@ -81,6 +91,9 @@ const assistant = new Assistant({
   },
   bridge: { command: process.execPath, script: path.join(root, 'src/assistant/bridge.js'), env: { ELECTRON_RUN_AS_NODE: '1' } },
 });
+
+// The scheduled report asks the assistant for a read-only reply and falls back to the plain collected facts.
+const summaries = new SummaryRunner({ watch: watchTasks, ask: (id, prompt) => assistant.summarize(id, prompt), onReport: (task, report) => watchBanners.report(task, report) });
 
 function handle(name, handler) {
   ipcMain.handle(name, (event, ...args) => {
@@ -165,8 +178,16 @@ handle('sources:refresh', id => desktop.sources.refresh(id));
 handle('prefs:get', () => desktop.prefs.view());
 handle('prefs:environment', async changes => {
   const prefs = await desktop.prefs.updateEnvironment(changes);
-  assistant.detections.clear();
+  assistant.resetDetections();
   return prefs;
+});
+// Imports again now, so a broken shell file is reported where the user pressed Refresh.
+handle('prefs:environment-refresh', async () => {
+  if (quitting) throw Error('Desktop is quitting, so the environment was not refreshed.');
+  refreshEnvironment();
+  assistant.resetDetections();
+  await environment();
+  return true;
 });
 handle('prefs:set', async changes => { await desktop.prefs.set(changes); await loadNotificationSettings(); return desktop.prefs.view(); });
 handle('notify:selection', runKey => { shownRun = typeof runKey === 'string' ? runKey : null; });
@@ -235,6 +256,7 @@ handle('runs:delete', (id, instanceId) => desktop.runs.delete(id, instanceId, as
 handle('runs:release', (id, instanceId) => desktop.runs.release(id, instanceId));
 handle('runs:attach', endpoint => desktop.runs.attach(endpoint));
 registerAssistantIpc(handle, assistant, event => window?.webContents.send('assistant:event', event));
+publishWatch = registerWatchIpc(handle, watchTasks, tasks => window?.webContents.send('watch:changed', tasks));
 let sampleView;
 handle('live:focus', async stage => {
   if(!demo){ if(typeof stage==='string') stageBrowsers.focus(stage); return; }
@@ -266,6 +288,7 @@ function pushWorkspace(snapshot){
 }
 workspace.onChange(pushWorkspace);
 workspace.onChange(snapshot => notifier.onSnapshot(snapshot).catch(error => console.error('Notifications:', error)));
+workspace.onPoll(snapshot => watchTasks.onSnapshot(snapshot));
 // The renderer registers its banner listener while loading, so every opener waits for the same load.
 let windowLoaded = Promise.resolve();
 // Only the newest banner click navigates when several arrive while the window is still loading.
@@ -278,17 +301,17 @@ async function showWindow() {
   window.show();
   window.focus();
 }
-function showBanner({ title, body, runKey, stageId }) {
+function showBanner({ title, body, runKey, stageId, watchTaskId, itemId }) {
   if (!Notification.isSupported()) return;
   const banner = new Notification({ title, body, icon: path.join(root, 'assets/afm-desktop.png'), silent: false });
   banners.add(banner);
   banner.on('close', () => banners.delete(banner));
   banner.on('failed', (_event, error) => { banners.delete(banner); console.error('Notification failed:', error); });
   banner.on('click', () => {
-    const target = runKey ? { runKey, stageId } : null;
+    // A stage request keeps the run and stage path; a watch result or summary opens in Tasks. The overflow banner only brings Desktop forward.
+    const target = runKey ? { channel: 'notice:open', payload: { runKey, stageId } } : watchTaskId ? { channel: 'watch:open', payload: { taskId: watchTaskId, itemId } } : null;
     latestTarget = target;
-    // The summary banner has no run; it only brings Desktop forward.
-    showWindow().then(() => { if (target && latestTarget === target) window?.webContents.send('notice:open', target); }).catch(console.error);
+    showWindow().then(() => { if (target && latestTarget === target) window?.webContents.send(target.channel, target.payload); }).catch(console.error);
   });
   banner.show();
 }
@@ -419,14 +442,16 @@ app.whenReady().then(async () => {
   console.error(error);
   app.exit(1);
 });
-app.on('activate',()=>{if(app.isReady()&&!window)showWindow().catch(console.error)});
+// Clicking the Dock icon brings a hidden or minimized window back and refreshes at once, so nothing shown is stale.
+app.on('activate',()=>{if(app.isReady())showWindow().then(()=>workspace.refresh()).catch(console.error)});
 // Quit waits for assistant providers to stop (SIGTERM, then SIGKILL after the grace period), at most a few seconds.
+// Shells still importing the environment are killed at once; their retries could outlast that deadline.
 let quitting=false;
 app.on('before-quit',event=>{
   if(quitting)return;
   event.preventDefault();quitting=true;
-  stageBrowsers.close();workspace.close();
-  const settled=Promise.allSettled([assistant.close(),desktop.close()]);
+  stopEnvironmentImports();stageBrowsers.close();workspace.close();
+  const settled=Promise.allSettled([assistant.close(),desktop.close(),watchTasks.flush().catch(error=>console.error('Watch tasks were not saved on Quit:',error))]);
   Promise.race([settled,new Promise(resolve=>setTimeout(resolve,6000))]).finally(()=>app.quit());
 });
 app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit()});

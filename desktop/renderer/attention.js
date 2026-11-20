@@ -69,7 +69,11 @@ function openPendingNotice(){
   if(!target)return;
   // The user chose this request explicitly, so it takes priority over an open dialog.
   for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
-  const item=notices().find(n=>n.r.key===runKey&&n.stage===stageId);
+  openRun(target,stageId);
+}
+// Opens a run at the stage that still waits for an answer, otherwise the run itself.
+function openRun(target,stageId){
+  const item=notices().find(n=>n.r.key===target.r.key&&n.stage===stageId);
   if(item){jumpTo(item);return}
   closeQueue();closeFocus();openProject(target.p,target.r,'run');
 }
@@ -89,6 +93,8 @@ function runTab(number){
   return tabs.length>1?tabs[number-1]:undefined;
 }
 function navigateApp(command){
+  // A summary dialog gives way to the navigation shortcuts; any other dialog keeps them for itself.
+  if(['home','next','previous'].includes(command))closeReportForNavigation();
   if(document.querySelector('dialog[open]'))return;
   if(Number.isInteger(command)){
     const tab=runTab(command);

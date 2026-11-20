@@ -5,7 +5,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { registerAssistantIpc } from '../src/assistant/ipc.js';
-import { makeAssistant, providerHome, settled, until } from './assistant-support.js';
+import { API_KEYS, makeAssistant, providerHome, settled, until } from './assistant-support.js';
+import { eventually } from './support.js';
 
 const KEY = 'endpoint-key-abcdefgh';
 
@@ -79,6 +80,22 @@ test('an endpoint failure and a cancelled stream are reported as such', async t 
   await until(slow.events, 'delta');
   slow.assistant.cancel();
   assert.equal((await until(slow.events, 'cancelled')).reply.text, 'One ');
+});
+
+test('a turn answered by an endpoint in between is handed to the resumed CLI session, not lost', async t => {
+  const server = await endpoint(t);
+  const { assistant, events, ctx, id } = await withProvider(t, server, { type: 'env', ref: 'LOCAL_KEY' }, { LOCAL_KEY: KEY, FAKE_PAUSE: '5', ...API_KEYS });
+  const turn = async text => { const n = events.filter(e => e.type === 'done').length; await assistant.send({ text }); await eventually(() => events.filter(e => e.type === 'done').length > n, { what: 'a reply' }); };
+  await assistant.configure({ provider: 'claude', model: '' });
+  await turn('first, with the CLI');
+  await assistant.configure({ provider: id, model: 'tiny-model' });
+  await turn('second, with the endpoint');
+  await assistant.configure({ provider: 'claude', model: '' });
+  await turn('third, back on the CLI');
+  const call = (await ctx.invocations()).at(-1);
+  assert.ok(call.args.includes('--resume'));
+  assert.match(call.stdin, /User: second, with the endpoint\n\nAssistant: One two three\n\nUser: third, back on the CLI$/);
+  assert.doesNotMatch(call.stdin, /first, with the CLI/, 'what the session already saw is not repeated');
 });
 
 test('the window reaches the assistant only through narrow IPC calls that ignore extra fields', async t => {

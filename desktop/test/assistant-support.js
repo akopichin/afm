@@ -28,6 +28,9 @@ export async function providerHome(t, vars = {}) {
   return { home, bin, env, record, invocations, clients };
 }
 
+// Credentials Desktop can identify. A provider session is only resumed under one of these, never under a native CLI login.
+export const API_KEYS = { ANTHROPIC_API_KEY: 'sk-ant-session-test-key-0001', OPENAI_API_KEY: 'sk-session-test-key-0001' };
+
 export const stubContext = (extra = {}) => ({
   endpoint: async () => { throw Error('no host'); }, runs: async () => [], project: async () => { throw Error('unknown'); }, ...extra });
 

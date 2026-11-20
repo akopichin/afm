@@ -15,5 +15,6 @@ export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:approve', (approvalId, approved) => assistant.approve(String(approvalId), approved === true));
   handle('assistant:history', () => assistant.history('main'));
   handle('assistant:clear', () => assistant.clear('main'));
-  return assistant.onEvent(publish);
+  // Replies Desktop writes for itself (watch reports) have their own conversations and stay out of the chat.
+  return assistant.onEvent(event => { if (event.conversationId === 'main') publish(event); });
 }

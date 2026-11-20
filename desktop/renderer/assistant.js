@@ -128,15 +128,17 @@ function messageHTML(msg){
   const tools=(msg.tools||[]).map(tool=>`<div class="tool ${tool.status}"><code>${esc(tool.name)}</code> <small>${esc(tool.input||'')}</small>${tool.status==='error'?`<p class="tool-error">${esc(tool.text||'Failed')}</p>`:''}</div>`).join('');
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
   const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
-  return `<div class="bubble ${msg.status}"><small>${esc(msg.context||'')}${msg.effective?' · '+esc(msg.effective.label):''}</small>${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${msg.text?`<p>${esc(msg.text)}</p>`:''}${tools}${approvals}${end}</div>`;
+  return `<div class="bubble ${msg.status}"><small>${esc(msg.context||'')}${msg.effective?' · '+esc(msg.effective.label):''}</small>${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${msg.text?`<p>${esc(msg.text)}</p>`:''}${tools}${approvals}${(msg.cards||[]).map(watchCardHTML).join('')}${end}</div>`;
 }
 function drawAssistant(){
   $('chat-context').textContent=scopeText();
   $('chat-model').textContent=effectiveLine()||'Choose a provider';
   const box=$('messages'),stick=box.scrollHeight-box.scrollTop-box.clientHeight<80;
   const messages=assistantChat.pending ? [...assistantChat.messages, assistantChat.pending] : assistantChat.messages;
-  box.innerHTML=(messages.length?messages.map(messageHTML).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>')
-    +(assistantChat.local?`<div class="bubble error"><p class="bubble-error" role="alert">${esc(assistantChat.local)}</p></div>`:'');
+  paintKeepingFocus('messages',()=>{
+    box.innerHTML=(messages.length?messages.map(messageHTML).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>')
+      +(assistantChat.local?`<div class="bubble error"><p class="bubble-error" role="alert">${esc(assistantChat.local)}</p></div>`:'');
+  });
   if(stick)box.scrollTop=box.scrollHeight;
   const send=document.querySelector('#chat-form .send');
   send.textContent=assistantChat.busy?'■':'↑';
@@ -150,7 +152,7 @@ function queueChatDraw(){
   requestAnimationFrame(()=>{chatDrawQueued=false;drawAssistant()});
 }
 async function sendAssistant(text){
-  if(assistantChat.busy)return;
+  if(assistantChat.busy||assistantChat.clearing)return;
   const input=$('chat-input');
   assistantChat.local='';
   assistantChat.busy=true;
@@ -169,6 +171,24 @@ async function sendAssistant(text){
     drawAssistant();
   }
 }
+// `/clear` is handled here, never sent to a provider: the main process drops the transcript and the provider session together.
+const isClearCommand=text=>text.trim()==='/clear';
+// Electron prefixes errors thrown in the main process.
+const ipcMessage=error=>String(error?.message||error).replace(/^Error invoking remote method '[^']+': (Error: )?/,'');
+async function clearAssistant(){
+  if(assistantChat.clearing)return;
+  assistantChat.local='';
+  if(assistantChat.busy){assistantChat.local='A reply is still running. Stop it first, then clear the chat.';drawAssistant();return}
+  // Nothing is sent while the main process rewrites the chat, and the first history load can no longer fill it back in.
+  assistantChat.clearing=true;
+  try{
+    await nativeAFM.assistant.clear();
+    Object.assign(assistantChat,{messages:[],pending:null,cleared:true});
+    $('chat-input').value='';
+  }catch(error){assistantChat.local=ipcMessage(error)}
+  assistantChat.clearing=false;
+  drawAssistant();
+}
 function stopAssistant(){nativeAFM.assistant.cancel().catch(showNativeError)}
 const replyFor=event=>assistantChat.messages.find(m=>m.turnId===event.turnId&&m.role==='assistant');
 function handleAssistantEvent(event){
@@ -184,11 +204,12 @@ function handleAssistantEvent(event){
     else if(event.type==='approval'&&reply){reply.approvals.push(event)}
     else if(event.type==='approval_done'&&reply){reply.approvals=reply.approvals.filter(a=>a.approvalId!==event.approvalId)}
     else if(event.type==='notice'&&reply){reply.notes.push(event.text)}
+    else if(event.type==='watch_card'&&reply){(reply.cards??=[]).push(event.card)}
     else if(['done','error','cancelled'].includes(event.type)){
-      const final={...event.reply,turnId:event.turnId,approvals:[],notes:reply?.notes??[]};
+      const final={...event.reply,turnId:event.turnId,approvals:[],notes:reply?.notes??[],cards:reply?.cards??[]};
       const at=messages.indexOf(reply);
       if(at>=0)messages[at]=final;else messages.push(final);
-      assistantChat.busy=false;
+      assistantChat.busy=false;assistantChat.local='';
       // Reply finished while the assistant was open: the input is ready for the next message.
       if(!$('assistant').hidden&&document.activeElement===document.body)$('chat-input').focus();
     }
@@ -204,6 +225,6 @@ function startAssistant(){
   nativeAFM.assistant.onEvent(handleAssistantEvent);
   nativeAFM.assistant.state().then(applyAssistantInfo).catch(showNativeError);
   nativeAFM.assistant.history().then(history=>{
-    if(!assistantChat.messages.length){assistantChat.messages=history.map(m=>({...m,approvals:[],notes:[]}));drawAssistant()}
+    if(!assistantChat.messages.length&&!assistantChat.cleared){assistantChat.messages=history.map(m=>({...m,approvals:[],notes:[]}));drawAssistant()}
   }).catch(showNativeError);
 }

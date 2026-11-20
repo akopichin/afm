@@ -1,6 +1,7 @@
 import { localURL } from './host.js';
 
 const FETCH_LIMIT = 6;
+const NOTHING_OBSERVED = { notices: [], status: {}, unavailable: [] };
 
 // Stage statuses that wait for a person, with the notice each one produces.
 function stageNotice(stage) {
@@ -29,7 +30,10 @@ async function getJSON(origin, route, request, missingIsEmpty = false) {
 }
 
 export async function fetchAttention(run, request = fetch, previous = []) {
-  const status = await readRunStatus(run, request);
+  return noticesOf(run, await readRunStatus(run, request), request, previous);
+}
+
+async function noticesOf(run, status, request, previous = []) {
   const notices = [];
   for (const stage of status.stages ?? []) {
     const notice = stageNotice(stage);
@@ -59,13 +63,15 @@ export async function fetchAttention(run, request = fetch, previous = []) {
 // sleeps while the window is hidden, never overlaps itself, and reports only real changes.
 export class Workspace {
   // A hidden window still watches open stage browsers, more slowly, so a finished stage frees its page.
-  constructor({ desktop, interval = 3000, hiddenInterval = interval * 5, request = fetch, stageBrowsers = null, watchHidden = () => false }) {
-    Object.assign(this, { desktop, interval, hiddenInterval, request, stageBrowsers, watchHidden });
+  // `watchActive` says whether a watch task needs the runs the host does not flag; without one they are not read.
+  constructor({ desktop, interval = 3000, hiddenInterval = interval * 5, request = fetch, stageBrowsers = null, watchHidden = () => false, watchActive = () => false }) {
+    Object.assign(this, { desktop, interval, hiddenInterval, request, stageBrowsers, watchHidden, watchActive });
     this.listeners = new Set();
+    this.pollListeners = new Set();
     this.snapshot = null;
     this.signature = '';
     this.order = new Map();
-    this.lastItems = new Map();
+    this.lastReads = new Map();
     this.sequence = 0;
     this.visible = false;
     this.inflight = null;
@@ -74,6 +80,12 @@ export class Workspace {
   }
 
   onChange(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+
+  // Called after every refresh, changed or not, so deadlines and summary times are met on an idle system.
+  onPoll(listener) { this.pollListeners.add(listener); return () => this.pollListeners.delete(listener); }
+
+  // Starts the hidden-window poll if `watchHidden` just became true.
+  wake() { this.#scheduleNext(); }
 
   get() { return this.snapshot ?? this.refresh(); }
 
@@ -106,32 +118,52 @@ export class Workspace {
     const overview = await this.desktop.overview();
     const runs = [...overview.projects.flatMap(project => project.runs), ...overview.unassigned];
     // While the host is unreachable the last known notices stay, so a reconnect does not reorder them.
-    const attention = overview.host.error ? this.snapshot?.attention ?? [] : await this.#attention(runs);
+    const { attention, observed } = overview.host.error ? { attention: this.snapshot?.attention ?? [], observed: this.snapshot?.observed ?? NOTHING_OBSERVED }
+      : await this.#read(runs);
     await this.stageBrowsers?.reconcile(runs);
     const snapshot = { host: overview.host, projects: overview.projects, unassigned: overview.unassigned,
-      candidates: overview.candidates, attention, stageBrowsers: this.stageBrowsers?.list() ?? [] };
+      candidates: overview.candidates, attention, observed, stageBrowsers: this.stageBrowsers?.list() ?? [] };
     const signature = JSON.stringify(snapshot);
-    if (signature !== this.signature) {
-      this.signature = signature;
-      this.snapshot = snapshot;
-      for (const listener of this.listeners) listener(snapshot);
-    }
+    const changed = signature !== this.signature;
+    if (changed) { this.signature = signature; this.snapshot = snapshot; }
+    // The watch sees the poll first, so the notifier knows which events it announces.
+    if (this.snapshot) for (const listener of this.pollListeners) listener(this.snapshot);
+    if (changed) for (const listener of this.listeners) listener(snapshot);
     return this.snapshot;
   }
 
   // Precise notices for runs the host says need a person. A failed read keeps what was known, so one
-  // dropped request neither removes nor re-adds a notice.
-  async #attention(runs) {
+  // dropped request neither removes nor re-adds a notice; a run never read successfully is `unavailable`.
+  // Watch tasks also need live runs the host does not flag: discovered ones (the host never reports their
+  // attention) and API-only ones. Those land in `observed`, apart from `attention`, so they start no banners,
+  // and are read only while a watch task is active; otherwise they are `unavailable` too: unknown, not empty.
+  async #read(runs) {
     const flagged = runs.filter(run => run.attention && (run.state === 'running' || run.can?.open));
+    const watchable = runs.filter(run => run.apiLive && !flagged.includes(run) && (run.attention || run.ownership === 'discovered'));
+    const watched = this.watchActive() ? watchable : [];
     const found = new Map();
-    for (let i = 0; i < flagged.length; i += FETCH_LIMIT) {
-      await Promise.all(flagged.slice(i, i + FETCH_LIMIT).map(async run => {
-        try { found.set(run.key, await fetchAttention(run, this.request, this.lastItems.get(run.key))); }
-        catch { found.set(run.key, this.lastItems.get(run.key) ?? []); }
+    const reads = [...flagged, ...watched];
+    for (let i = 0; i < reads.length; i += FETCH_LIMIT) {
+      await Promise.all(reads.slice(i, i + FETCH_LIMIT).map(async run => {
+        const known = this.lastReads.get(run.key);
+        try {
+          const status = await readRunStatus(run, this.request);
+          found.set(run.key, { status: status.run_status ?? null, notices: await noticesOf(run, status, this.request, known?.notices) });
+        } catch {
+          if (known) found.set(run.key, known);
+        }
       }));
     }
-    this.lastItems = found;
-    const items = flagged.flatMap(run => found.get(run.key));
+    this.lastReads = found;
+    const noticesFor = run => found.get(run.key)?.notices ?? [];
+    // The status read that found the notices also tells a discovered run's outcome, so no second fetch is needed.
+    const status = Object.fromEntries(watched.filter(run => found.has(run.key)).map(run => [run.key, found.get(run.key).status]));
+    return { attention: this.#ordered(flagged.flatMap(noticesFor)),
+      observed: { notices: watched.flatMap(noticesFor), status, unavailable: [...flagged, ...watchable].filter(run => !found.has(run.key)).map(run => run.key) } };
+  }
+
+  // Notices keep the order they first appeared in, so a poll never reshuffles the queue.
+  #ordered(items) {
     const live = new Set(items.map(item => item.id));
     for (const id of this.order.keys()) if (!live.has(id)) this.order.delete(id);
     for (const item of items) if (!this.order.has(item.id)) this.order.set(item.id, ++this.sequence);
@@ -142,5 +174,6 @@ export class Workspace {
     this.closed = true;
     clearTimeout(this.timer);
     this.listeners.clear();
+    this.pollListeners.clear();
   }
 }

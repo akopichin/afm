@@ -1,12 +1,15 @@
 // Main-process workloads of DS-09: idle inventory, attention bursts, streamed chat and subscriber churn.
 // Each prints one JSON line; budgets are asserted so a regression fails `npm run perf`.
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { Assistant } from '../src/assistant/assistant.js';
+import { desktopEnvironment, refreshEnvironment } from '../src/environment.js';
+import { Prefs } from '../src/prefs.js';
 import { Workspace } from '../src/workspace.js';
 
 const fake = fileURLToPath(new URL('../test/fake-provider.js', import.meta.url));
@@ -155,7 +158,52 @@ async function streamedChat() {
   } finally { await rm(home, { recursive: true, force: true }); }
 }
 
+// Send → receipt → provider ready → first text, with a shell startup file that takes 300 ms. "Uncached" forces an
+// import per turn, which is what every call did before the snapshot cache; "cached" is the shipped behavior.
+async function replyLatency() {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'perf-latency-'));
+  try {
+    const bin = path.join(home, 'bin');
+    await mkdir(bin);
+    for (const name of ['claude', 'codex']) {
+      await writeFile(path.join(bin, name), `#!/bin/sh\nexec "${process.execPath}" "${fake}" ${name} "$@"\n`);
+      await chmod(path.join(bin, name), 0o755);
+    }
+    await writeFile(path.join(home, '.bashrc'), '/bin/sleep 0.3\n');
+    const prefs = new Prefs(home);
+    await prefs.updateEnvironment({ shell: 'bash' });
+    const base = { PATH: bin, HOME: home, FAKE_SCENARIO: 'stream' };
+    const records = [];
+    const assistant = new Assistant({ home, env: () => desktopEnvironment(prefs, home, base), context: { endpoint: async () => { throw Error('no host'); }, runs: async () => [], project: async () => { throw Error('unknown'); } },
+      bridge: { command: process.execPath, script: '', env: {} }, grace: 300, systemDirs: [], onTiming: record => records.push(record) });
+    const turn = async text => {
+      const before = records.length;
+      let ended;
+      const finished = new Promise(resolve => { ended = resolve; });
+      const off = assistant.onEvent(event => { if (['done', 'error', 'cancelled'].includes(event.type)) ended(event); });
+      await assistant.send({ text });
+      const end = await finished;
+      off();
+      assert.equal(end.type, 'done', end.message);
+      return records[before];
+    };
+    refreshEnvironment();
+    const cold = await turn('cold');
+    const cached = [];
+    for (let i = 0; i < 3; i++) cached.push(await turn('repeat ' + i));
+    const uncached = [];
+    for (let i = 0; i < 3; i++) { refreshEnvironment(); uncached.push(await turn('uncached ' + i)); }
+    const median = (items, key) => percentile(items.map(item => item[key]), 0.5);
+    report('reply-latency', { shell_startup_ms: 300, cold: cold, cached_env_ms: median(cached, 'environmentMs'), cached_first_text_ms: median(cached, 'firstTextMs'),
+      uncached_env_ms: median(uncached, 'environmentMs'), uncached_first_text_ms: median(uncached, 'firstTextMs') });
+    assert.ok(median(cached, 'environmentMs') < 50, 'A repeat reply imported the environment again');
+    assert.ok(median(uncached, 'environmentMs') >= 300, 'The uncached baseline did not import');
+    await assistant.close();
+  } finally { await rm(home, { recursive: true, force: true }); }
+}
+
 await idleInventory();
 await attentionBurst();
 await subscriberChurn();
 await streamedChat();
+if (await access('/bin/bash', constants.X_OK).then(() => true, () => false)) await replyLatency();

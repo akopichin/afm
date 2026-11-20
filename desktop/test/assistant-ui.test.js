@@ -18,6 +18,7 @@ async function openShell(t, { assistant = fakeAssistant(), saved = [] } = {}) {
 const frames = w => new Promise(resolve => w.requestAnimationFrame(() => resolve()));
 const type = (w, get, text) => { get('chat-input').value = text; };
 const submit = (w, get) => get('chat-form').dispatchEvent(new w.Event('submit', { cancelable: true, bubbles: true }));
+const enter = (w, get) => get('chat-input').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
 const start = (id, text, extra = {}) => ({ type: 'start', turnId: id, message: { id: 'u' + id, role: 'user', text, context: 'a / flow-ra' },
   reply: { id: 'r' + id, role: 'assistant', text: '', status: 'streaming', tools: [], context: 'a / flow-ra', effective: { label: 'Ask before actions' }, ...extra } });
 
@@ -205,4 +206,149 @@ test('a provider is added as a reference to its credential and can be tested and
   get('remove-model').click();
   await tick();
   assert.deepEqual(assistant.calls.remove, ['custom-1']);
+});
+
+test('the composer takes the message at once and stays usable while the provider warms up', async t => {
+  const assistant = fakeAssistant();
+  let release;
+  assistant.send = request => new Promise(resolve => { assistant.calls.send.push(request); release = resolve; });
+  const { w, d, get, key } = await openShell(t, { assistant });
+  key('KeyA', 'a', { altKey: true });
+  type(w, get, 'first question');
+  submit(w, get);
+  await tick();
+  assert.match(d.querySelector('.bubble.mine').textContent, /first question[\s\S]*Sending…/);
+  assert.equal(get('chat-input').disabled, false);
+  get('chat-input').value = 'next draft';
+  assert.equal(get('chat-input').value, 'next draft', 'typing is not blocked while the first message is pending');
+  release({ turnId: 't1' });
+  await tick();
+  assert.equal(get('chat-input').value, 'next draft', 'the accepted request does not wipe the draft');
+});
+
+test('Settings → Environment refresh asks the main process to import again and reports it', async t => {
+  const native = fakeNative(snapshot);
+  native.prefs = async () => ({ gitMode: 'current', environment: { shell: 'zsh', file: '', names: [] } });
+  native.refreshEnvironment = async () => { native.refreshes = (native.refreshes ?? 0) + 1; if (native.refreshFails) throw Error('Could not load the exported environment from .zshrc.'); };
+  native.assistant = fakeAssistant();
+  const { d, get } = await loadShell(t, { demo: false, native }).then(async shell => { await tick(); shell.get('finish-setup')?.click(); await tick(); return shell; });
+  get('settings-toggle').click();
+  await tick();
+  d.querySelector('[data-panel="environment"]').click();
+  await tick();
+  get('env-refresh').click();
+  await tick();
+  assert.equal(native.refreshes, 1);
+  assert.match(get('settings-body').textContent, /Environment reloaded\./);
+  native.refreshFails = true;
+  get('env-refresh').click();
+  await tick();
+  assert.match(get('settings-body').textContent, /Could not load the exported environment/);
+});
+
+test('/clear is handled in the window: the main process drops the chat, nothing is sent to a provider', async t => {
+  const saved = [{ id: 'u1', role: 'user', text: 'old question' }, { id: 'r1', role: 'assistant', text: 'old answer', status: 'done', tools: [] }];
+  const { w, d, get, key, assistant } = await openShell(t, { saved });
+  key('KeyA', 'a', { altKey: true });
+  await tick();
+  assert.match(get('messages').textContent, /old answer/);
+  type(w, get, '  /clear ');
+  submit(w, get);
+  await tick();
+  assert.equal(assistant.calls.clear, 1);
+  assert.deepEqual(assistant.calls.send, [], '/clear is never a message to the provider');
+  assert.equal(get('chat-input').value, '', 'the command is consumed');
+  assert.doesNotMatch(get('messages').textContent, /old answer|old question/);
+  assert.equal(d.querySelectorAll('.bubble').length, 0);
+  assert.match(get('messages').textContent, /What’s running/);
+});
+
+test('/clear while a reply is running explains itself, keeps the chat and does not stop the reply', async t => {
+  const { w, d, get, key, assistant } = await openShell(t);
+  key('KeyA', 'a', { altKey: true });
+  type(w, get, 'question');
+  submit(w, get);
+  await tick();
+  assistant.emit(start('t1', 'question'));
+  await frames(w);
+  type(w, get, '/clear');
+  enter(w, get);
+  await frames(w);
+  assert.equal(assistant.calls.clear, 0, 'the main process is not asked while a reply runs');
+  assert.equal(assistant.calls.cancel, 0, 'the running reply is not stopped by the command');
+  assert.match(get('messages').textContent, /Stop it first, then clear the chat/);
+  assert.match(get('messages').textContent, /question/);
+  assert.equal(get('chat-input').value, '/clear', 'the command stays so it can be repeated');
+  assistant.emit({ type: 'done', turnId: 't1', reply: { id: 'rt1', role: 'assistant', text: 'fine', status: 'done', tools: [], context: 'a / flow-ra' } });
+  await frames(w);
+  assert.doesNotMatch(get('messages').textContent, /Stop it first/, 'the refusal is gone once the reply ended');
+  submit(w, get);
+  await tick();
+  assert.equal(assistant.calls.clear, 1, 'once the reply ended the same command clears');
+  assert.equal(d.querySelectorAll('.bubble.mine').length, 0);
+});
+
+test('a refused /clear from the main process shows why and keeps the messages', async t => {
+  const saved = [{ id: 'u1', role: 'user', text: 'keep me' }];
+  const assistant = fakeAssistant();
+  assistant.rejectClear = 'Stop the running reply before clearing the chat.';
+  const { w, get, key } = await openShell(t, { assistant, saved });
+  key('KeyA', 'a', { altKey: true });
+  await tick();
+  type(w, get, '/clear');
+  submit(w, get);
+  await tick();
+  assert.match(get('messages').textContent, /Stop the running reply before clearing the chat/);
+  assert.match(get('messages').textContent, /keep me/);
+});
+
+test('the stop button stops a running reply even when the field holds /clear', async t => {
+  const { w, get, key, assistant } = await openShell(t);
+  key('KeyA', 'a', { altKey: true });
+  type(w, get, 'question');
+  submit(w, get);
+  await tick();
+  assistant.emit(start('t1', 'question'));
+  await frames(w);
+  type(w, get, '/clear');
+  submit(w, get);
+  await tick();
+  assert.equal(assistant.calls.cancel, 1);
+  assert.equal(assistant.calls.clear, 0);
+});
+
+test('nothing is sent while /clear is being written, and the first history load cannot bring the chat back', async t => {
+  const saved = [{ id: 'u1', role: 'user', text: 'old question' }];
+  const assistant = fakeAssistant();
+  let release;
+  assistant.clear = () => new Promise(resolve => { assistant.calls.clear++; release = () => { assistant.saved = []; resolve(); }; });
+  let loadHistory;
+  assistant.history = () => new Promise(resolve => { loadHistory = () => resolve(saved); });
+  const { w, get, key } = await openShell(t, { assistant });
+  key('KeyA', 'a', { altKey: true });
+  type(w, get, '/clear');
+  submit(w, get);
+  await tick();
+  type(w, get, 'sent too early');
+  submit(w, get);
+  await tick();
+  assert.deepEqual(assistant.calls.send, [], 'the composer is held while the chat is rewritten');
+  release();
+  await tick();
+  loadHistory();
+  await tick();
+  assert.doesNotMatch(get('messages').textContent, /old question/, 'a history read that started earlier does not refill a cleared chat');
+});
+
+test('a /clear that main refuses shows the reason without the Electron prefix', async t => {
+  const assistant = fakeAssistant();
+  assistant.rejectClear = "Error invoking remote method 'assistant:clear': Error: Stop the running reply before clearing the chat.";
+  const { w, get, key } = await openShell(t, { assistant });
+  key('KeyA', 'a', { altKey: true });
+  await tick();
+  type(w, get, '/clear');
+  submit(w, get);
+  await tick();
+  assert.match(get('messages').textContent, /^.*Stop the running reply before clearing the chat\./s);
+  assert.doesNotMatch(get('messages').textContent, /Error invoking remote method/);
 });

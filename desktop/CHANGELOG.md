@@ -19,6 +19,13 @@
 - Delete a stopped Desktop run and remove its clean, dedicated worktree after
   confirmation.
 - Unlock a passphrase-protected SSH key from Library and pipeline preflight.
+- Add background watch tasks: ask the assistant to watch a run, a project or all
+  projects, manage them in a new Tasks tab and read reports in a wide dialog.
+  Native banners open the run, stage or report.
+- Resume the provider session between assistant messages and clear the chat
+  locally with `/clear`.
+- Reply to assistant messages faster by caching the imported shell environment.
+  Refresh it in Settings → Environment.
 - Review each Desktop development task through the AFM mesh, verify with Astra,
   and ask for approval of the prepared merge candidate in the dashboard.
 

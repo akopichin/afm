@@ -1,0 +1,65 @@
+#assistant .pane-head { padding-bottom: 14px }
+.watch-nav { display: flex; gap: 16px; padding: 0 18px; border-bottom: 1px solid var(--separator-subtle) }
+.watch-nav button { padding: 9px 2px 7px; border-bottom: 2px solid transparent; font-size: 13px; color: var(--text-secondary); white-space: nowrap }
+.watch-nav button[aria-pressed="true"] { border-color: var(--accent-primary); color: var(--text-primary) }
+.watch-nav .watch-unread { margin-left: 3px; padding: 1px 5px; border-radius: 4px; font: 11px var(--font-mono); color: var(--violet); background: var(--surface-overlay) }
+.watch-card { margin-bottom: 12px; padding: 12px; border: 1px solid var(--separator-subtle); border-radius: 9px; background: var(--surface-tool) }
+.watch-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 13px }
+.watch-title svg, .watch-event svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round }
+.watch-title svg { color: var(--violet) }
+.watch-state { margin-left: auto; color: var(--success); font-size: 11px; white-space: nowrap; display: flex; align-items: center; gap: 5px }
+.watch-state .dot { --tone: currentColor; width: 5px; height: 5px }
+.watch-state[data-inactive] { color: var(--text-muted) }
+.watch-meta { display: grid; gap: 4px; margin: 10px 0; font-size: 12px }
+.watch-meta div { display: grid; grid-template-columns: 55px minmax(0,1fr); gap: 7px }
+.watch-meta dt { color: var(--text-muted) }
+.watch-meta dd { margin: 0; color: var(--text-secondary) }
+.watch-buttons { display: flex; gap: 7px; flex-wrap: wrap; align-items: center }
+.watch-buttons .action { padding: 4px 8px; font-size: 12px }
+.watch-buttons .watch-stop { padding: 4px 8px; color: var(--text-muted); font-size: 12px; border-radius: 6px }
+.watch-buttons .watch-stop:hover, .watch-event:hover { background: var(--surface-hover) }
+.watch-event { width: 100%; display: grid; grid-template-columns: 15px minmax(0,1fr) 15px; gap: 9px; align-items: center; margin-top: 10px; padding: 9px; border: 1px solid var(--separator-subtle); border-radius: 8px; background: var(--surface-agent-message); color: var(--attention); font-size: 12px }
+.watch-event strong { display: block; color: var(--text-primary); font-size: 12px }
+.watch-event small { display: block; color: var(--text-muted) }
+.watch-activity { color: var(--text-muted); font-size: 12px; font-weight: 550 }
+.watch-result { align-items: start; color: var(--violet) }
+.watch-result strong .dot { margin-right: 6px; --tone: var(--accent-primary); width: 5px; height: 5px; vertical-align: 2px }
+.watch-result-link { display: block; margin-top: 3px }
+#watch-report { width: min(900px, calc(100vw - 32px)); max-width: none; max-height: 86vh; padding: 0; overflow: hidden }
+#watch-report[open] { display: flex; flex-direction: column }
+.watch-report-head { flex: none; padding: 16px 24px; margin: 0; border-bottom: 1px solid var(--separator-subtle) }
+.watch-report-head h2 { margin-top: 3px; font-size: 23px; letter-spacing: -.025em }
+.watch-report { overflow: auto; min-height: 0; padding: 18px 24px 26px; font-size: 14px; line-height: 1.55; overflow-wrap: anywhere }
+.watch-report-overview { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; color: var(--text-secondary) }
+.watch-report-overview small { color: var(--text-muted); font: 11px var(--font-mono) }
+.watch-report .watch-outcomes { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; padding: 0; margin: 10px 0 18px; list-style: none }
+.watch-report .watch-outcomes li { padding: 8px 10px; margin: 0; border-radius: 6px; background: var(--surface-tool) }
+.watch-outcomes .dot { margin-right: 4px; --tone: var(--attention) }
+.watch-outcomes li:first-child .dot { --tone: var(--success) }
+.watch-outcomes strong { color: var(--text-primary) }
+.watch-report section { border-top: 1px solid var(--separator-subtle); padding-top: 15px; margin-top: 15px }
+.watch-report h4 { margin: 0 0 5px; font-weight: 650; font-size: 14px }
+.watch-report section p, .watch-report ul { color: var(--text-secondary) }
+.watch-report ul { margin: 0; padding-left: 17px }
+.watch-report li { margin-bottom: 3px }
+.watch-report details { margin: 7px 0; border: 1px solid var(--separator-subtle); border-radius: 7px; padding: 6px 8px; background: var(--surface-tool) }
+.watch-report details[open] summary { margin-bottom: 5px }
+.watch-report summary { color: var(--text-primary); cursor: pointer }
+.watch-report pre { background: var(--surface-raised); color: var(--text-secondary); margin: 6px 0 0; padding: 6px; border-radius: 4px; white-space: pre-wrap }
+.watch-report code { font: 11px var(--font-mono) }
+@media (max-width: 620px) {
+  .watch-report .watch-outcomes { grid-template-columns: 1fr }
+  .watch-report, .watch-report-head { padding-inline: 16px }
+}
+#tasks { flex: 1; overflow: auto; padding: 18px }
+#tasks[hidden] { display: none }
+#tasks .watch-card { margin-bottom: 14px }
+.watch-card.compact { margin: 8px 0 0 }
+.watch-line, .watch-none, .watch-note { margin: 6px 0; color: var(--text-muted); font-size: 12px }
+.watch-note { padding: 7px 9px; border-radius: 6px; background: var(--surface-tool); color: var(--attention) }
+.watch-result .dot, .watch-event .dot { margin-right: 6px; --tone: var(--accent-primary); width: 5px; height: 5px; vertical-align: 2px }
+.watch-event { text-align: left; grid-template-columns: 15px minmax(0, 1fr) }
+.watch-report-time { display: block; padding: 8px 24px 0; color: var(--text-muted); font: 11px var(--font-mono) }
+.watch-report .diagram-note { margin: 10px 0 0; color: var(--text-muted); font-size: 12px }
+.watch-report p { margin: 6px 0 }
+.watch-nav[hidden] { display: none }

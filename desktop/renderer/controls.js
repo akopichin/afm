@@ -435,7 +435,8 @@ function drawEnvironment(body,tabs){
     <div class="actions"><button class="primary">Set variable</button></div></form>
     <div class="source-list">${names.map(name=>`<div><span>${esc(name)}</span><button data-env-remove="${esc(name)}">Remove</button></div>`).join('')}</div>
     <p class="muted">Restart AFM host to apply these settings to new runs. Existing runs keep their environment.</p>
-    <button id="env-restart">Restart AFM host</button><p class="hint" role="status">${esc(environmentStatus)}</p>`;
+    <div class="actions"><button id="env-refresh">Refresh environment</button><button id="env-restart">Restart AFM host</button></div>
+    <p class="muted">Variables from your shell and environment file are read once and kept. Refresh after changing them outside Desktop.</p><p class="hint" role="status">${esc(environmentStatus)}</p>`;
   async function update(changes){
     try {savedEnvironment=(await nativeAFM.updateEnvironment(changes)).environment;environmentStatus='Saved.';assistantChat.scanned=false}
     catch(error){environmentStatus=error.message}
@@ -450,6 +451,11 @@ function drawEnvironment(body,tabs){
     update({name:event.target.elements.name.value.trim(),value:event.target.elements.value.value});
   };
   for(const button of body.querySelectorAll('[data-env-remove]'))button.onclick=()=>update({remove:button.dataset.envRemove});
+  $('env-refresh').onclick=async()=>{
+    try {await nativeAFM.refreshEnvironment();environmentStatus='Environment reloaded.';assistantChat.scanned=false}
+    catch(error){environmentStatus=error.message}
+    if($('settings').open&&settingsTab==='environment')drawSettings();
+  };
   $('env-restart').onclick=async()=>{
     try {
       const host=await nativeAFM.hostStatus();
@@ -596,7 +602,7 @@ function toggleChat(open){
 }
 function sendMessage(text){
   if(!text.trim())return;
-  if(!isDemo)return sendAssistant(text);
+  if(!isDemo)return isClearCommand(text)?clearAssistant():sendAssistant(text);
   const {p,r}=selection(),context=p?[p.name,r?.flow].filter(Boolean).join(' / '):'All projects';
   state.chat.push({role:'user',text,context});$('chat-input').value='';
   const reply={role:'assistant',text:''};
@@ -629,7 +635,7 @@ function sendMessage(text){
 $('assistant-toggle').onclick=()=>toggleChat($('assistant').hidden);
 $('close-chat').onclick=()=>toggleChat(false);
 $('chat-form').onsubmit=e=>{e.preventDefault();if(!isDemo&&assistantChat.busy)stopAssistant();else sendMessage($('chat-input').value)};
-$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!isDemo&&assistantChat.busy)return;sendMessage(e.target.value)}};
+$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!isDemo&&assistantChat.busy&&!isClearCommand(e.target.value))return;sendMessage(e.target.value)}};
 document.querySelector('.suggestions').onclick=e=>{if(e.target.dataset.prompt)sendMessage(e.target.dataset.prompt)};
 document.addEventListener('workspace-change',drawChat);
 $('launch-hint').title=`${modKey} Shift Enter`;

@@ -50,6 +50,8 @@ export function runView(row, ledger = {}) {
     projectRoot: row.project_root, pid: row.pid ?? null, mode: row.mode, apiUrl: row.api_url, ownership: row.ownership,
     origin: launch ? 'desktop' : 'external', launchState: row.launch?.state ?? null,
     status: row.run_status ?? null, attention: Boolean(row.attention_required), state,
+    // The run's API answers, whatever the UI may do with it; watch reads use this, not `can.open`.
+    apiLive: alive,
     can: { open: dashboard, cancel: actions.includes('cancel'), release: actions.includes('release'),
       attach: actions.includes('attach'), report: actions.includes('report'), resume: resumable(row, launch), delete: stoppedDesktop(row, launch) },
   };

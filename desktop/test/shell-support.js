@@ -23,10 +23,10 @@ export async function loadShell(t, { demo = true, platform = 'MacIntel', native 
   Object.defineProperty(w.navigator, 'platform', { value: platform, configurable: true });
   if (windowControls) w.navigator.windowControlsOverlay = Object.assign(new w.EventTarget(), { visible: true });
   w.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-  w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), liveLayout: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, reportSelection: async () => {}, onSSHKeyPrompt: () => {}, onSSHKeyClosed: () => {}, ...native };
+  w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), watch: fakeWatch(), liveLayout: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, onWatchOpen: () => {}, reportSelection: async () => {}, onSSHKeyPrompt: () => {}, onSSHKeyClosed: () => {}, ...native };
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
-  const scripts = demo ? ['store', 'desktop', 'library', 'controls', 'attention'] : ['store', 'desktop', 'library', 'assistant', 'controls', 'attention', 'inventory', 'native'];
+  const scripts = demo ? ['store', 'desktop', 'library', 'tasks', 'report', 'controls', 'attention'] : ['store', 'desktop', 'library', 'assistant', 'tasks', 'report', 'controls', 'attention', 'inventory', 'native'];
   // Classic scripts in page order, so a name used before its script has loaded fails here as it would in a browser.
   const addScript = text => { const script = w.document.createElement('script'); script.textContent = text; w.document.body.append(script); };
   for (const name of scripts) addScript(await readFile(new URL(name + '.js', files), 'utf8'));
@@ -70,6 +70,7 @@ export function fakeNative(initial) {
     },
     onDashboardEvent: listener => { native.emitDashboard = listener; },
     onNoticeOpen: listener => { native.openNotice = listener; },
+    onWatchOpen: listener => { native.openWatch = listener; },
     reportSelection: async runKey => { native.selections.push(runKey); },
     prefs: async () => ({ gitMode: 'current', notifications: native.notifications }),
     setPrefs: async changes => { Object.assign(native, changes); native.prefChanges.push(changes); return { gitMode: 'current', notifications: native.notifications }; },
@@ -92,7 +93,7 @@ export const providerInfo = (id, extra = {}) => ({ id, name: id === 'claude' ? '
 // Objects built in the page belong to another realm; a JSON copy compares by value.
 const plain = value => JSON.parse(JSON.stringify(value ?? null));
 export function fakeAssistant() {
-  const fake = { listeners: new Set(), saved: [], calls: { scan: 0, send: [], cancel: 0, approve: [], configure: [], add: [], test: [], remove: [] },
+  const fake = { listeners: new Set(), saved: [], calls: { scan: 0, send: [], cancel: 0, approve: [], configure: [], add: [], test: [], remove: [], clear: 0 },
     info: { settings: { provider: 'claude', model: '', reasoning: 'default', permission: 'ask', providers: [] }, scanned: false, providers: [providerInfo('claude'), providerInfo('codex')] } };
   Object.assign(fake, {
     state: async () => fake.info,
@@ -105,8 +106,36 @@ export function fakeAssistant() {
     cancel: async () => { fake.calls.cancel++; return true; },
     approve: async (id, approved) => { fake.calls.approve.push([id, approved]); return true; },
     history: async () => fake.saved,
+    clear: async () => { fake.calls.clear++; if (fake.rejectClear) throw Error(fake.rejectClear); fake.saved = []; },
     onEvent: callback => { fake.listeners.add(callback); return () => fake.listeners.delete(callback); },
     emit: event => { for (const callback of fake.listeners) callback(event); },
   });
   return fake;
 }
+
+// The watch API of the main process: a list the test controls, the calls it receives and pushed changes.
+export function fakeWatch(tasks = []) {
+  const fake = { tasks, listeners: new Set(), calls: { pause: [], resume: [], stop: [], markRead: [] } };
+  const change = (name, apply) => async id => {
+    fake.calls[name].push(id);
+    const task = fake.tasks.find(item => item.id === id);
+    if (!task) throw Error('That watch task no longer exists.');
+    apply(task);
+    fake.emit();
+    return JSON.parse(JSON.stringify(task));
+  };
+  Object.assign(fake, {
+    list: async () => JSON.parse(JSON.stringify(fake.tasks)),
+    pause: change('pause', task => { task.status = 'paused'; }),
+    resume: change('resume', task => { task.status = 'active'; }),
+    stop: change('stop', task => { task.status = 'stopped'; }),
+    markRead: change('markRead', task => { task.unread = 0; }),
+    onChange: callback => { fake.listeners.add(callback); return () => fake.listeners.delete(callback); },
+    emit: () => { for (const callback of fake.listeners) callback(JSON.parse(JSON.stringify(fake.tasks))); },
+  });
+  return fake;
+}
+
+export const watchTask = (id, extra = {}) => ({ id, title: 'Overnight watch', status: 'active', scope: { kind: 'all', projectId: null, runId: null, instanceId: null },
+  events: ['question', 'failed'], deadline: null, summaryAt: null, createdAt: '2026-06-01T08:00:00.000Z', results: [], reports: [], unread: 0,
+  summaryDue: false, summaryDone: false, ...extra });

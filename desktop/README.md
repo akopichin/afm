@@ -97,6 +97,35 @@ Dock icon until the last pending request resolves. A new batch makes the icon
 bounce briefly while the app is in the background. Requests already pending at
 startup show the dot immediately after discovery.
 
+## Background watch tasks
+
+Ask the assistant to watch work in the background, for example "tell me when
+any run in this project needs me". A watch covers all projects, one project or
+one exact run, within the scope of the conversation. It reports questions,
+approvals, decisions, failures and finished runs, and can have a deadline and a
+summary time. Watches also cover runs started outside Desktop. Observation is
+read-only.
+
+Open the **Tasks** tab in the assistant drawer to see watches and results, with
+an unread count. Pause, resume or stop a watch there; collected results are
+kept. Chat shows a compact card when a watch is created or reports a result.
+**Open summary** opens the report in a wide dialog. Press Escape to close it, or
+Command/Control+H, J or K to close it and navigate. Reports use a safe Markdown subset
+and never run HTML.
+
+Watches are stored in `~/.afm/desktop/watch-tasks.json`, separately from the
+chat, and survive restarts and `/clear`. A watch banner has fixed text, one per
+event, and ignores the notification categories in Settings because you asked for
+it. Click it to open the run and stage, or Tasks for finished runs and summaries.
+Routine events make no model call; a scheduled summary asks the read-only
+assistant and falls back to a plain-text summary.
+
+Limits: Desktop does not catch up on events that happened before a watch started,
+while Desktop was closed, during a host outage or while paused. A run that
+disappears from the host loses its history. Codex scheduled summaries always use
+the plain-text fallback. Quitting Desktop does not finish an in-flight summary;
+it runs again after restart. At most 50 watches are kept.
+
 ## Run the overnight development flow
 
 The pipeline package is [desktop/workflow](workflow/pipeline.yaml). Its stages are
@@ -188,14 +217,17 @@ Known limits: runs on folders that are not on Home are shown in an ephemeral pro
 
 - **Providers.** Claude Code and Codex are built in; a custom provider is a Claude or Codex CLI at an absolute path, or an OpenAI-compatible endpoint (https, or http on this machine). Detection runs only when the assistant or settings opens, never on the first-paint path. It searches `PATH`, the login shell's `PATH` and the usual install folders, because a Finder-launched app has a minimal environment. Capabilities (streaming, permission modes, reasoning levels) are read from the installed CLI's own `--help`.
 - **Credentials.** Only references are stored in `~/.afm/desktop/assistant.json`: the CLI's own login, an environment variable name or a key file path. Values are read in the main process and passed to the provider through its environment (never argv), under the variable that provider's CLI expects (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`); a configured file or variable name beats a standard variable already set. They are removed from streamed text, tool input and output, errors and the stored history. Quitting the app waits for provider processes to stop (SIGTERM, then SIGKILL after the grace period, at most a few seconds). The renderer sees only "ready / needs sign-in" and a label.
+- **Sessions and `/clear`.** The provider's session id is kept privately in `assistant-history.json` and resumed (`claude --resume`, `codex exec resume`) only when the CLI supports it, and provider, scope and effective credential still match. A CLI's own login has no verifiable identity, so it never resumes; the bounded transcript is sent instead. Typing `/clear` discards transcript and session together and is refused while a reply runs. Watches are kept. The composer stays usable while the provider starts, and the imported shell environment is cached until Settings, the dotenv file or a shell startup file changes (**Settings → Environment → Refresh** forces it).
 - **Settings.** Provider, model, reasoning level and permission mode persist and show as the effective mode in the chat footer. A mode the installed CLI cannot enforce is not offered, and a stale one is refused at send time instead of being approximated. Command/Control+M opens the quick chooser.
 - **Modes.** Claude: Ask = default/manual, Read only = `plan`, Allow edits = `acceptEdits`, YOLO = `--dangerously-skip-permissions`. Codex: Read only = `--sandbox read-only`, Ask and Allow edits = `workspace-write` with `approval_policy` `on-request` and `never`, YOLO = `--dangerously-bypass-approvals-and-sandbox`. An endpoint provider is chat only.
 - **Streaming and control.** One reply per conversation and at most three at once. The prompt goes through stdin. Output is parsed line by line and reaches the window as it arrives. Stop kills the provider's whole process group; the partial text is kept. History is bounded (60 messages, and a size budget for what is sent back to the provider).
 - **AFM tools.** Every turn gets a private stdio bridge (`src/assistant/bridge.js`) to the AFM host's MCP endpoint. The bridge, not the provider, enforces the scope picked in the UI (all projects, one project or one run, resolved in the main process) and the permission mode: read-only offers no control tools, Ask and destructive actions wait for an in-app Approve/Deny card, Allow edits runs non-destructive control tools directly, YOLO runs everything. Refusals and tool errors are returned to the model and shown in the feed.
 
+- **Watch tools.** `desktop_watch_create`, `_list`, `_pause`, `_resume` and `_stop` are offered in every permission mode because they only observe. Main validates scope against the conversation scope. The code is in `src/watch/` and `src/assistant/watch-tools.js`.
+
 Covered headlessly by `test/assistant*.test.js` with deterministic fake `claude`/`codex` executables (`test/fake-provider.js`), a local streaming endpoint and a real `afm serve` host. No test calls a paid provider.
 
-Not verified here: the real Claude Code and Codex CLIs, Codex's handling of MCP calls under `on-request`, the Electron-as-Node launch of the bridge inside `app.asar`, and a Finder-launched `PATH`. Those belong to the Mac handoff.
+Not verified here: real session resume, the real Claude Code and Codex CLIs, Codex's handling of MCP calls under `on-request`, the Electron-as-Node launch of the bridge inside `app.asar`, and a Finder-launched `PATH`. Those belong to the Mac handoff.
 
 ## Stage browser (Live tab)
 
@@ -224,7 +256,7 @@ npm run build && npm run check:package
 
 `npm run sidecar` builds the AFM executable of this branch for this machine (`go build` with `GOWORK=off`) into `dist/sidecars/<platform>-<arch>/afm`; on a clean checkout that is the reproducible native build, and the Mac launcher runs it before the checks. The tests, `npm run build` and `npm run check:package` resolve AFM the same way (`src/binary.js`): `AFM_DESKTOP_BINARY` alone if set, otherwise the staged sidecar, otherwise `afm` from PATH; the build bundles only an executable that matches this OS and CPU (read from its header) and contains the `AFM_CHROME_EXECUTABLE` hook; a Linux binary never goes into the Mac app and an AFM 3.1.11 from Homebrew is rejected. `npm run check:package` verifies the executable inside the package the same way, prints its version, platform and sha256, fails unless that hash equals the AFM the tests resolve, and starts the packaged chrome-devtools-mcp with no external copy on PATH (the app's own runtime is also run where it can load; on a Linux container without GUI libraries it reports that it did not). The Finder app resolves the packaged sidecar directly. The build uses the repository's Graphite and base dashboard assets. On Apple Silicon the application is written to dist/AFM Desktop-darwin-arm64/AFM Desktop.app. This is a local development bundle.
 
-`npm run perf` runs two headless workloads. `scripts/perf.js` reconciles 100 projects and 1,000 runs in the renderer. `scripts/perf-runtime.js` drives the main process: idle polling with identical results, a burst of 200 attention notices (at most six run reads in flight, stable order), 100 project switches (no leaked subscribers, no polling while hidden) and a stream of 2,500 provider deltas (batched into a few IPC messages every 40 ms). Native cold start, keyboard latency and process-tree RSS are still pending a Mac measurement.
+`npm run perf` runs two headless workloads. `scripts/perf.js` reconciles 100 projects and 1,000 runs in the renderer. `scripts/perf-runtime.js` drives the main process: reply latency (cold, cached and uncached environment import), a watch burst (10 tasks, 1,000 runs), idle polling with identical results, a burst of 200 attention notices (at most six run reads in flight, stable order), 100 project switches (no leaked subscribers, no polling while hidden) and a stream of 2,500 provider deltas (batched into a few IPC messages every 40 ms). Native cold start, keyboard latency and process-tree RSS are still pending a Mac measurement.
 
 For the Docker check, run `./scripts/docker-check.sh` in the desktop directory. It cross-compiles the Linux AFM sidecar on the host using the checkout’s pinned Go modules, copies the inputs into a disposable container and installs Linux dependencies there. It runs JS checks, keyboard tests, an actual temporary AFM host/launch/dashboard/cancel integration, the inventory benchmark, and native-to-container packaging. The container exits after verifying the artifact. The Mac build is generated on the Mac. Finder startup, native focus, accessibility, compositor behavior and end-to-end stage browsing need native verification.
 

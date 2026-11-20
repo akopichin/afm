@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="../.generated/dashboard/skins/graphite/index.css">
   <link rel="stylesheet" href="desktop.css">
 <link rel="stylesheet" href="select.css">
+<link rel="stylesheet" href="watch.css">
 </head>
 <body>
 <div id="window-titlebar" hidden aria-hidden="true"><span id="window-title">Projects · AFM Desktop</span></div>
@@ -35,7 +36,9 @@
 <aside id="assistant" hidden aria-labelledby="assistant-title">
   <div id="assistant-resizer" class="rail-resizer" role="separator" aria-label="Assistant width" aria-controls="assistant" aria-orientation="vertical" tabindex="0"><span class="rail-resizer-grip" aria-hidden="true"></span></div>
   <div class="pane-head"><div><h2 id="assistant-title">AFM Assistant</h2><small id="chat-context"></small></div><button class="icon" id="close-chat" aria-label="Close assistant">×</button></div>
+  <nav id="assistant-tabs" class="watch-nav" aria-label="Assistant view" hidden><button type="button" data-assistant-view="chat" aria-pressed="true">Chat</button><button type="button" data-assistant-view="tasks" aria-pressed="false">Tasks <span class="watch-unread" id="tasks-unread" hidden></span></button></nav>
   <div id="messages" role="log" aria-live="polite"></div>
+  <div id="tasks" aria-label="Watch tasks" hidden></div>
   <div class="chat-foot"><div class="suggestions"><button data-prompt="List active runs">Active runs</button><button data-prompt="Start a run">Start a run</button></div>
   <form id="chat-form"><textarea id="chat-input" aria-label="Message AFM Assistant" placeholder="Ask about your projects…" rows="2" required></textarea><button class="send" aria-label="Send message">↑</button></form><div class="model-tools"><button id="chat-model" title="Assistant settings"></button><button id="quick-model-key" title="Change assistant model and reasoning" aria-label="Change assistant model and reasoning"></button></div></div>
 </aside></div>
@@ -75,6 +78,11 @@
   <button class="action" id="browse-project">Browse folders…</button>
   <form id="path-form"><label>Or enter a project path<input id="project-path" placeholder="~/work/my-project" required></label><label class="check"><input type="checkbox" id="path-git"> Git repository</label><div class="actions"><button class="primary">Open project</button></div></form>
 </dialog>
+<dialog id="watch-report" aria-labelledby="watch-report-title">
+  <header class="pane-head watch-report-head"><div><small id="watch-report-scope"></small><h2 id="watch-report-title" tabindex="-1"></h2></div><button type="button" class="icon" data-report-close aria-label="Close summary">×</button></header>
+  <small id="watch-report-time" class="watch-report-time"></small>
+  <article id="watch-report-body" class="watch-report"></article>
+</dialog>
 <input type="file" id="folder" webkitdirectory multiple hidden>
 <dialog id="ssh-key-dialog" aria-labelledby="ssh-key-title">
   <form id="ssh-key-form">
@@ -85,6 +93,6 @@
   </form>
 </dialog>
 <input type="file" id="source-folder" webkitdirectory multiple hidden>
-<script src="store.js"></script><script src="desktop.js"></script><script src="library.js"></script><script src="assistant.js"></script><script src="controls.js"></script><script src="attention.js"></script>
+<script src="store.js"></script><script src="desktop.js"></script><script src="library.js"></script><script src="assistant.js"></script><script src="tasks.js"></script><script src="report.js"></script><script src="controls.js"></script><script src="attention.js"></script>
 <script src="inventory.js"></script><script src="native.js"></script><script src="select.js"></script>
 </body></html>

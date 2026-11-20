@@ -7,13 +7,22 @@ function textOf(content) {
 }
 
 // Each parser turns one line of provider output into zero or more events:
-// {type:'delta',text} {type:'tool',id,name,input} {type:'tool_result',id,error,text} {type:'result',ok,text,error}.
+// {type:'delta',text} {type:'tool',id,name,input} {type:'tool_result',id,error,text} {type:'result',ok,text,error} {type:'session',id} {type:'activity'} (native work started).
 // Lines that are not JSON or not understood are ignored, so a newer CLI does not break the chat.
 export class ClaudeParser {
   #streamed = false;
+  #session = null;
   parse(line) {
     let event;
     try { event = JSON.parse(line); } catch { return []; }
+    // Every stream-json event names the session; the id is reported when it first appears or changes.
+    if (typeof event.session_id === 'string' && event.session_id !== this.#session) {
+      this.#session = event.session_id;
+      return [{ type: 'session', id: this.#session }, ...this.#parseEvent(event)];
+    }
+    return this.#parseEvent(event);
+  }
+  #parseEvent(event) {
     if (event.type === 'stream_event') {
       const inner = event.event;
       if (inner?.type === 'message_start') this.#streamed = false;
@@ -49,11 +58,14 @@ export class CodexParser {
   parse(line) {
     let event;
     try { event = JSON.parse(line); } catch { return []; }
+    if (event.type === 'thread.started' && typeof event.thread_id === 'string') return [{ type: 'session', id: event.thread_id }];
     const item = event.item;
     if (event.type === 'item.completed' && item?.type === 'agent_message' && item.text) {
       // Codex reports whole messages; separate them so they read as paragraphs.
       return [{ type: 'delta', text: (this.#messages++ ? '\n\n' : '') + item.text }];
     }
+    // Commands, file changes and searches have effects of their own; nothing may be replayed once one has started.
+    if (item && !['agent_message', 'reasoning', 'mcp_tool_call'].includes(item.type)) return [{ type: 'activity' }];
     if (item?.type === 'mcp_tool_call') {
       const name = String(item.tool ?? 'tool').replace(TOOL_PREFIX, '');
       if (event.type === 'item.started') return [{ type: 'tool', id: item.id, name, input: clip(JSON.stringify(item.arguments ?? {})) }];

@@ -54,12 +54,15 @@ export function claudeCapabilities(help) {
     model: hasFlag(help, '--model'),
     effort: hasFlag(help, '--effort') ? (effort ? effort[1].split(',').map(item => item.trim()) : REASONING_LEVELS.claude.slice()) : null,
     mcpConfig: hasFlag(help, '--mcp-config') && hasFlag(help, '--strict-mcp-config'),
+    tools: hasFlag(help, '--tools'),
     allowedTools: hasFlag(help, '--allowedTools') || hasFlag(help, '--allowed-tools'),
     appendSystemPrompt: hasFlag(help, '--append-system-prompt'),
+    resume: hasFlag(help, '--resume'),
   };
 }
 
-export function codexCapabilities(help) {
+// `resumeHelp` is the help of `codex exec resume`: resuming is offered only if it can still enforce the sandbox.
+export function codexCapabilities(help, resumeHelp = '') {
   return {
     json: hasFlag(help, '--json'),
     sandbox: hasFlag(help, '--sandbox'),
@@ -67,6 +70,14 @@ export function codexCapabilities(help) {
     config: hasFlag(help, '--config') || hasFlag(help, '-c'),
     model: hasFlag(help, '--model') || hasFlag(help, '-m'),
     skipGitCheck: hasFlag(help, '--skip-git-repo-check'),
+    resume: hasFlag(resumeHelp, '--json') && hasFlag(resumeHelp, '--sandbox') && (hasFlag(resumeHelp, '--config') || hasFlag(resumeHelp, '-c')),
+    // A resumed session accepts only what its own help lists, which can be fewer flags than a fresh `exec`.
+    resumeFlags: {
+      config: hasFlag(resumeHelp, '--config') || hasFlag(resumeHelp, '-c'),
+      model: hasFlag(resumeHelp, '--model') || hasFlag(resumeHelp, '-m'),
+      bypass: hasFlag(resumeHelp, '--dangerously-bypass-approvals-and-sandbox'),
+      skipGitCheck: hasFlag(resumeHelp, '--skip-git-repo-check'),
+    },
   };
 }
 
@@ -148,11 +159,12 @@ export async function detectProvider(provider, { home, env, dirs }) {
   }
   const executable = await findExecutable(provider.executable, dirs);
   if (!executable) return { ...base, found: false, capabilities: {}, permissions: [], auth: missing(`${provider.name} was not found. Install it or set its executable path.`) };
-  const [version, help] = await Promise.all([
+  const [version, help, resumeHelp] = await Promise.all([
     probe(executable, ['--version'], { env }),
     probe(executable, provider.kind === 'codex' ? ['exec', '--help'] : ['--help'], { env }),
+    provider.kind === 'codex' ? probe(executable, ['exec', 'resume', '--help'], { env }) : { stdout: '', stderr: '' },
   ]);
-  const capabilities = provider.kind === 'codex' ? codexCapabilities(help.stdout + help.stderr) : claudeCapabilities(help.stdout + help.stderr);
+  const capabilities = provider.kind === 'codex' ? codexCapabilities(help.stdout + help.stderr, resumeHelp.stdout + resumeHelp.stderr) : claudeCapabilities(help.stdout + help.stderr);
   const auth = provider.credential && provider.credential.type !== 'cli' ? await referencedAuth(provider.credential, env) : await cliAuth(provider, executable, env, home);
   // Reasoning is offered only when the CLI has a way to set it.
   const levels = provider.kind === 'claude' ? capabilities.effort ?? [] : capabilities.config ? REASONING_LEVELS.codex : [];
