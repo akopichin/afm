@@ -22,6 +22,17 @@ test('manual Desktop environment values override the file and values never appea
   assert.equal((await desktopEnvironment(prefs, home)).SETUP_TOKEN, 'from-file');
 });
 
+test('zsh import reads exported variables even when the startup file prints a banner', async t => {
+  if (process.platform === 'win32') return t.skip('Requires zsh');
+  const {home} = await tempHome(t);
+  const prefs = new Prefs(home);
+  await writeFile(path.join(home, '.zshrc'), 'echo banner\nexport ZSH_TEST=imported\nLOCAL_TEST=local\n');
+  await prefs.updateEnvironment({shell: 'zsh'});
+  const env = await desktopEnvironment(prefs, home, {...process.env, ZDOTDIR: home});
+  assert.equal(env.ZSH_TEST, 'imported');
+  assert.equal(env.LOCAL_TEST, undefined);
+});
+
 test('an accepted launch that fails before readiness exposes missing variable names without forwarding log content', async t => {
   const {home} = await tempHome(t);
   const id = 'a'.repeat(64);

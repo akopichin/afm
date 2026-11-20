@@ -112,7 +112,7 @@ test('stop cancels, a failure keeps the typed text and shows the reason, and can
   assistant.emit(start('t3', 'again'));
   assistant.emit({ type: 'error', turnId: 't3', message: 'Codex exited with code 3. boom', reply: { id: 'rt3', role: 'assistant', text: '', status: 'error', error: 'Codex exited with code 3. boom', tools: [] } });
   await frames(w);
-  assert.match(d.querySelector('.bubble-error').textContent, /exited with code 3/);
+  assert.match(d.querySelector('.bubble.error .bubble-error').textContent, /exited with code 3/);
 });
 
 test('saved history is restored and only streaming events of the current turn change the reply', async t => {
