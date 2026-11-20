@@ -8,6 +8,7 @@
   categories in Settings and click a banner to open its run and stage.
 - Delete a stopped Desktop run and remove its clean, dedicated worktree after
   confirmation.
+- Unlock a passphrase-protected SSH key from Library and pipeline preflight.
 
 ### Fix:
 
@@ -15,3 +16,4 @@
 - Announce a pending question once across pauses and reconnects, based on its
   dialog identity.
 - Reuse dialog identities between polls to keep large attention queues responsive.
+- Pass the configured Desktop environment to Git pipeline discovery and inspection.

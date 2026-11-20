@@ -15,6 +15,28 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
+test('SSH key prompt masks the passphrase and clears the field on submit or cancellation', async t => {
+  const replies = [];
+  let openKey;
+  const {w,get} = await openShell(t,twoProjects([]),{
+    onSSHKeyPrompt:callback=>{openKey=callback},
+    answerSSHKey:async (...reply)=>{replies.push(reply)},
+  });
+  const field = get('ssh-key-answer');
+  openKey({id:'first', key:'id_ed25519'});
+  assert.equal(field.type,'password');
+  assert.equal(w.document.activeElement,field);
+  field.value='test-only answer';
+  get('ssh-key-form').dispatchEvent(new w.Event('submit',{cancelable:true}));
+  assert.equal(field.value,'');
+  assert.deepEqual(replies,[['first','test-only answer']]);
+  openKey({id:'cancelled', key:'id_ed25519'});
+  field.value='unsent answer';
+  get('ssh-key-dialog').close();
+  assert.equal(field.value,'');
+  assert.deepEqual(replies.at(-1),['cancelled',null]);
+});
+
 test('a project can be removed from Home without opening it', async t => {
   const calls=[];
   const {w,d,native}=await openShell(t,twoProjects([]),{removeProject:async id=>{

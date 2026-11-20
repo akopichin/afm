@@ -75,6 +75,14 @@
   <form id="path-form"><label>Or enter a project path<input id="project-path" placeholder="~/work/my-project" required></label><label class="check"><input type="checkbox" id="path-git"> Git repository</label><div class="actions"><button class="primary">Open project</button></div></form>
 </dialog>
 <input type="file" id="folder" webkitdirectory multiple hidden>
+<dialog id="ssh-key-dialog" aria-labelledby="ssh-key-title">
+  <form id="ssh-key-form">
+    <div class="pane-head"><h2 id="ssh-key-title">Unlock SSH key</h2></div>
+    <p class="hint" id="ssh-key-name"></p>
+    <label>Key passphrase<input id="ssh-key-answer" type="password" autocomplete="off" maxlength="4096" required></label>
+    <div class="actions"><button type="button" id="ssh-key-cancel">Cancel</button><button class="primary">Unlock key</button></div>
+  </form>
+</dialog>
 <input type="file" id="source-folder" webkitdirectory multiple hidden>
 <script src="store.js"></script><script src="desktop.js"></script><script src="library.js"></script><script src="assistant.js"></script><script src="controls.js"></script><script src="attention.js"></script>
 <script src="inventory.js"></script><script src="native.js"></script><script src="select.js"></script>

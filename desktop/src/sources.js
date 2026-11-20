@@ -7,6 +7,7 @@ import { parse } from 'yaml';
 import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
 import { declaredWorktrees, flowWorktreePolicy, configFilesFor } from './git-mode.js';
 import { slug } from './serve-config.js';
+import { retryWithSSHKey } from './ssh-key.js';
 
 const run = promisify(execFile);
 const GIT_SOURCE = /^(https?:\/\/|ssh:\/\/|git@|file:\/\/)/;
@@ -18,10 +19,12 @@ export function pipelineId(name, source) {
 // Pipeline sources the user configured: local folders and Git packages. Project flows are discovered
 // per project. Pipelines are registered in serve.yaml because the host only starts what it lists.
 export class Sources {
-  constructor({ home, serveConfig, binary }) {
+  constructor({ home, serveConfig, binary, environment = () => process.env, unlockSSH }) {
     this.home = home;
     this.serveConfig = serveConfig;
     this.binary = binary;
+    this.environment = environment;
+    this.unlockSSH = unlockSSH;
     this.file = path.join(desktopDir(home), 'sources.json');
     this.lock = new Mutex();
   }
@@ -99,17 +102,28 @@ export class Sources {
   }
 
   async #inspectGit(source) {
-    const binary = await this.binary();
-    const options = { timeout: 120000, env: { ...process.env, HOME: this.home }, maxBuffer: 4 << 20 };
-    async function json(args) {
+    const [binary, env] = await Promise.all([this.binary(), this.environment()]);
+    const options = { timeout: 120000, env: { ...env, HOME: this.home }, maxBuffer: 4 << 20 };
+    let prompted = false;
+    const json = async args => {
       try {
-        const { stdout } = await run(binary, ['pipelines', ...args], options);
+        const { stdout } = await retryWithSSHKey(() => run(binary, ['pipelines', ...args], options), {
+          location: source.location, env: options.env,
+          unlock: !prompted && this.unlockSSH ? async request => {
+            prompted = true;
+            return this.unlockSSH(request);
+          } : null,
+        });
         return JSON.parse(stdout);
       } catch (error) {
+        if (!('stderr' in error) && prompted) throw error;
         const detail = error.stderr?.split(/\r?\n/).find(line => line.startsWith('Error:'));
-        throw Error(detail?.slice(6).trim() || 'Could not read the pipeline repository.');
+        const message = detail?.slice(6).trim() || 'Could not read the pipeline repository.';
+        const hint = /terminal prompts disabled/i.test(message)
+          ? ' Configure a Git credential helper for this host or use an authenticated SSH URL.' : '';
+        throw Error(message + hint);
       }
-    }
+    };
     const { source: git, commit, directories } = await json(['catalog', source.location]);
     const entries = [];
     for (const dir of directories) {

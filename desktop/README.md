@@ -46,6 +46,17 @@ found through the selected shell, such as Docker, remain available. Desktop stor
 only. Restart the AFM host from this tab to apply changes to new runs. Assistant
 requests use the updated settings without restarting Desktop.
 
+Library reads the same environment when adding or refreshing a Git source.
+For private HTTPS repositories, configure a Git credential helper that can
+authenticate without a terminal prompt. An authenticated SSH URL also works.
+Keep tokens out of repository URLs.
+
+When an SSH repository rejects the available keys, Desktop on macOS or Linux
+lets you select a private key and enter its passphrase. The local `ssh-add`
+unlocks the key in your current SSH agent, and Desktop retries the Git
+operation. Desktop does not store the passphrase. Verify previously unknown
+Git servers in your terminal before adding them to Library.
+
 AFM looks for secrets in the project's `.afm/secrets.env`, then
 `~/.afm/secrets.env`, then the host environment. An explicit AFM secrets file
 uses AFM's existing override behavior. The Start run button shows a spinner and Starting… while Desktop checks the

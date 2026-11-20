@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afmBinary } from '../src/binary.js';
+import { Desktop } from '../src/desktop.js';
+import { desktopEnvironment } from '../src/environment.js';
 import { ServeConfig } from '../src/serve-config.js';
 import { Sources, projectFlows } from '../src/sources.js';
 import { makeProject, tempHome } from './support.js';
@@ -69,6 +72,48 @@ test('a Git package is inspected through the AFM CLI', { timeout: 60000 }, async
   assert.equal(source.entries[0].name, 'from-git');
   assert.equal(source.entries[0].flowName, 'git-flow');
   assert.equal((await serveConfig.read()).pipelines[0].source, 'file://' + repo);
+});
+
+test('Git Library passes the configured environment to both catalog and inspect', async t => {
+  const { home } = await tempHome(t);
+  const snapshot = path.join(home, 'snapshot');
+  const binary = path.join(home, 'afm-probe');
+  const vars = path.join(home, 'library.env');
+  await writePackage(snapshot, 'private-package');
+  await writeFile(vars, 'SSH_AUTH_SOCK=/example/agent.sock\n');
+  await writeFile(binary, `#!/usr/bin/env node
+const expected = process.env.SSH_AUTH_SOCK === '/example/agent.sock';
+if (!expected) {
+  console.error("Error: could not read Username: terminal prompts disabled");
+  process.exit(1);
+}
+const location = 'https://git.example.test/team/workflows';
+const result = process.argv[3] === 'catalog'
+  ? {source:{location},commit:'abc',directories:['']}
+  : {snapshot:{dir:${JSON.stringify(snapshot)}},package:{name:'private-package',version:'1.0.0',entrypoint:'flow.yaml'}};
+console.log(JSON.stringify(result));
+`, { mode: 0o755 });
+  let loads = 0;
+  const desktop = new Desktop({ home, binary: async () => binary, environment: () => {
+    loads++;
+    return desktopEnvironment(desktop.prefs, home, {PATH:process.env.PATH, HOME:home, ZDOTDIR:home});
+  } });
+  const location = 'https://git.example.test/team/workflows';
+  const failed = await desktop.sources.add({location});
+  assert.match(failed.error, /Git credential helper/);
+  await desktop.prefs.updateEnvironment({ file: vars });
+  const inspected = await desktop.sources.refresh(failed.id);
+  assert.equal(inspected.error, null);
+  assert.equal(inspected.entries[0].name, 'private-package');
+  assert.equal(loads, 2, 'catalog and inspect share one environment load per refresh');
+  if (existsSync('/bin/zsh')) {
+    await writeFile(path.join(home, '.zshrc'), 'export SSH_AUTH_SOCK=/example/agent.sock\n');
+    await desktop.prefs.updateEnvironment({file:'', shell:'zsh'});
+    const fromShell = await desktop.sources.refresh(failed.id);
+    assert.equal(fromShell.error, null, fromShell.error);
+    assert.equal(fromShell.entries[0].name, 'private-package');
+    assert.equal(loads, 3);
+  }
 });
 
 test('a repository library discovers nested packages at the selected ref and registers launchable sources', async t => {

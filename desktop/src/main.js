@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell, session, WebContentsView } from 'electron';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import { realpath } from 'node:fs/promises';
@@ -18,6 +19,7 @@ import { registerAssistantIpc } from './assistant/ipc.js';
 import { StageBrowsers } from './stage-browser/broker.js';
 import { createInspector } from './stage-browser/bind.js';
 import { electronBackend } from './stage-browser/electron-page.js';
+import { unlockSSHKey } from './ssh-key.js';
 
 const home = os.homedir();
 const root = app.getAppPath();
@@ -40,14 +42,16 @@ function afmOrigins() {
   const runs = [...(workspace.snapshot?.projects ?? []).flatMap(project => project.runs), ...(workspace.snapshot?.unassigned ?? [])];
   return [desktop.host.state.endpoint, ...runs.map(run => run.apiUrl)].filter(Boolean);
 }
-const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined),
+const environment = () => desktopEnvironment(desktop.prefs, home);
+const unlockSSH = process.platform === 'win32' ? undefined : chooseSSHKey;
+const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined), environment,
+  unlockSSH,
   hostEnv: async () => {
     const env = await environment();
     if (!(await desktop.prefs.get()).stageBrowser) return env;
     return {...env, ...await stageBrowsers.hostEnv(env.PATH)};
   }});
-const environment = () => desktopEnvironment(desktop.prefs, home);
-const pipelineOptions = new PipelineOptions({home, environment, projects: desktop.projects, sources: desktop.sources,
+const pipelineOptions = new PipelineOptions({home, environment, unlockSSH, projects: desktop.projects, sources: desktop.sources,
   serveConfig: desktop.serveConfig, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined)});
 const entry = pathToFileURL(path.join(root, 'renderer/index.html')).href;
 const demo = process.argv.includes('--demo');
@@ -81,6 +85,47 @@ function handle(name, handler) {
     return handler(...args);
   });
 }
+let sshPrompt;
+let unlockingSSH = false;
+function askSSHKey(key) {
+  const owner = window;
+  if (!owner || owner.isDestroyed() || sshPrompt) return null;
+  return new Promise(resolve => {
+    const id = randomUUID();
+    const finish = value => {
+      clearTimeout(timer);
+      owner.removeListener('closed', cancel);
+      sshPrompt = undefined;
+      if (!owner.isDestroyed()) owner.webContents.send('ssh:closed', id);
+      resolve(value);
+    };
+    const cancel = () => finish(null);
+    const timer = setTimeout(cancel, 75000);
+    owner.once('closed', cancel);
+    sshPrompt = {id, finish};
+    owner.webContents.send('ssh:prompt', {id, key: path.basename(key)});
+  });
+}
+async function chooseSSHKey({ env }) {
+  if (!window) return false;
+  if (unlockingSSH) throw Error('An SSH key unlock is already in progress.');
+  unlockingSSH = true;
+  try {
+    const picked = await dialog.showOpenDialog(window, {
+      title: 'Choose your private SSH key',
+      defaultPath: path.join(home, '.ssh'),
+      properties: ['openFile', 'showHiddenFiles'],
+    });
+    if (picked.canceled || !picked.filePaths[0]) return false;
+    return await unlockSSHKey({key:picked.filePaths[0], env, ask:askSSHKey, launcher:{
+      node:process.execPath, script:path.join(root,'src/ssh-askpass-main.js'), env:{ELECTRON_RUN_AS_NODE:'1'},
+    }});
+  } finally { unlockingSSH = false; }
+}
+handle('ssh:reply', (id, answer) => {
+  if (sshPrompt?.id !== id) return;
+  sshPrompt.finish(typeof answer === 'string' && answer.length <= 4096 ? answer : null);
+});
 async function pickFolder() {
   const pick = await dialog.showOpenDialog(window, {properties:['openDirectory','createDirectory']});
   return pick.canceled ? null : realpath(pick.filePaths[0]);

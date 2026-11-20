@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
 import { Mutex, readText, writeAtomic } from './files.js';
+import { retryWithSSHKey } from './ssh-key.js';
 
 const exec = promisify(execFile);
 const emptyOptions = 'docker:\n  agents: {}\ncollaboration:\n  profiles: {}\n';
@@ -25,8 +26,8 @@ async function readExample(snapshot) {
 }
 
 export class PipelineOptions {
-  constructor({home, binary, projects, sources, serveConfig, environment}) {
-    Object.assign(this, {home, binary, projects, sources, serveConfig, environment});
+  constructor({home, binary, projects, sources, serveConfig, environment, unlockSSH}) {
+    Object.assign(this, {home, binary, projects, sources, serveConfig, environment, unlockSSH});
     this.lock = new Mutex();
   }
 
@@ -53,16 +54,17 @@ export class PipelineOptions {
       const source = commit && entry.source.includes('://') ? base + '@' + commit : entry.source;
       const args = ['--dir', project, 'pipelines', 'inspect', source, '--json'];
       if (options) args.push('--pipeline-options', options);
-      const {stdout} = await exec(await this.binary(), args, {
-        cwd: project, env: await this.environment(), timeout: 45000, maxBuffer: 4 << 20,
-      });
+      const [binary, env] = await Promise.all([this.binary(), this.environment()]);
+      const {stdout} = await retryWithSSHKey(() => exec(binary, args, {
+        cwd: project, env, timeout: 45000, maxBuffer: 4 << 20,
+      }), {location:entry.source, env, unlock:this.unlockSSH});
       const result = JSON.parse(stdout);
       return {example: includeExample ? await readExample(result.snapshot?.dir) : null,
         roles: (result.roles || []).map(({id, command, client, model, reasoning, profile, auth_from, command_layer}) =>
         ({id, command, client, model, reasoning, profile, auth_from, command_layer})),
       issues: (result.requirements || []).filter(check => check.status === 'missing').map(check => check.detail)};
     } catch (error) {
-      return {roles: [], issues: [], error: String(error.stderr || '').split(/\nUsage:/)[0].trim().slice(0, 1600)
+      return {roles: [], issues: [], error: String(error.stderr || error.message || '').split(/\nUsage:/)[0].trim().slice(0, 1600)
         || 'AFM could not inspect the pipeline. Check its source and your environment settings.'};
     }
   }

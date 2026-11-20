@@ -47,6 +47,27 @@ document.addEventListener('click',event=>{
   }
 });
 if(!isDemo){
+  const keyDialog=$('ssh-key-dialog'), keyField=$('ssh-key-answer');
+  let keyPrompt;
+  function closeKeyPrompt(answer, send = true){
+    const current=keyPrompt;
+    keyPrompt=null;
+    keyField.value='';
+    if(keyDialog.open)keyDialog.close();
+    if(current&&send)nativeAFM.answerSSHKey(current,answer).catch(() => {});
+  }
+  nativeAFM.onSSHKeyPrompt(({id,key})=>{
+    keyPrompt=id;
+    $('ssh-key-name').textContent=key;
+    keyField.value='';
+    keyDialog.showModal();
+    keyField.focus();
+  });
+  nativeAFM.onSSHKeyClosed(id=>{if(id===keyPrompt)closeKeyPrompt(null,false)});
+  keyDialog.addEventListener('cancel',e=>{e.preventDefault();closeKeyPrompt(null)});
+  keyDialog.addEventListener('close',()=>{if(keyPrompt&&!keyDialog.open)closeKeyPrompt(null)});
+  $('ssh-key-cancel').onclick=()=>closeKeyPrompt(null);
+  $('ssh-key-form').onsubmit=e=>{e.preventDefault();closeKeyPrompt(keyField.value)};
   nativeAFM.onDashboardEvent((key,message)=>{
     const frame=[...dashboards.values()].find(page=>page.dataset.runKey===key);
     if(frame)document.dispatchEvent(new CustomEvent('native-dashboard-message',{detail:{frame,message}}));

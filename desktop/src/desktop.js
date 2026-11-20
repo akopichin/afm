@@ -8,14 +8,14 @@ import { Sources, projectFlows } from './sources.js';
 
 // Everything the main process knows about AFM projects and runs, built from one home directory.
 export class Desktop {
-  constructor({ home, binary, env, hostEnv }) {
+  constructor({ home, binary, env, hostEnv, environment, unlockSSH }) {
     this.home = home;
     // The host's environment may be computed when the host is actually started.
     this.host = new Host(home, binary, hostEnv ? { env: async () => ({ ...(env ?? process.env), ...(await hostEnv()) }) } : env ? { env } : {});
     this.serveConfig = new ServeConfig(home);
     this.prefs = new Prefs(home);
     this.projects = new Projects({ home, serveConfig: this.serveConfig });
-    this.sources = new Sources({ home, serveConfig: this.serveConfig, binary });
+    this.sources = new Sources({ home, serveConfig: this.serveConfig, binary, environment, unlockSSH });
     this.runs = new Runs({ home, host: this.host, projects: this.projects, sources: this.sources, prefs: this.prefs, serveConfig: this.serveConfig });
   }
 
