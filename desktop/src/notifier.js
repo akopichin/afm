@@ -5,6 +5,7 @@ import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
 const SEEN_LIMIT = 500;
 // More new requests than this in one snapshot become a single summary banner.
 const BANNER_LIMIT = 5;
+const DOCK_KINDS = new Set(['question', 'approval', 'decision']);
 
 // Fixed text per kind: banners never carry question text, artifacts or secrets.
 const TEXT = {
@@ -17,14 +18,20 @@ const TEXT = {
 // Turns new attention items into one banner each. Pure main-process logic: Electron is injected as `show`.
 export class Notifier {
   // `visible(item)` tells whether the user already looks at that stage; `settings` is the notifications preference.
-  constructor({ home, show, visible = () => false, settings }) {
+  constructor({ home, show, visible = () => false, settings, dock }) {
     this.file = path.join(desktopDir(home), 'notified.json');
-    Object.assign(this, { show, visible, settings });
+    Object.assign(this, { show, visible, settings, dock });
     this.lock = new Mutex();
     this.seen = null;
+    this.dockPending = false;
   }
 
   get enabled() { return this.settings.enabled; }
+
+  setSettings(settings, attention = []) {
+    this.settings = settings;
+    this.#updateDock(attention);
+  }
 
   // Items of one kind and request are announced once, also across reconnects and restarts.
   #key(item) { return [item.runKey, item.stageId, item.kind, item.requestAt].join('|'); }
@@ -33,6 +40,7 @@ export class Notifier {
     // Without the host there is no real attention list, so nothing is new and nothing is seeded.
     if (snapshot.host.error || snapshot.host.state !== 'connected') return Promise.resolve();
     return this.lock.run(async () => {
+      this.#updateDock(snapshot.attention);
       const first = !this.seen;
       if (first) {
         const stored = await readJSON(this.file,{});
@@ -52,9 +60,18 @@ export class Notifier {
       // Questions already pending when Desktop starts are in the queue, not a burst of banners.
       if (first) return;
       const banners = fresh.filter(item => this.#wanted(item));
+      if (banners.some(item => DOCK_KINDS.has(item.kind))) this.dock?.bounce();
       for (const item of banners.slice(0, BANNER_LIMIT)) this.#announce(item, snapshot);
       if (banners.length > BANNER_LIMIT) this.show({ title: 'AFM needs you', body: `${banners.length - BANNER_LIMIT} more requests are waiting.` });
     });
+  }
+
+  #updateDock(attention) {
+    if (!this.dock) return;
+    const pending = this.enabled && attention.some(item => DOCK_KINDS.has(item.kind) && this.settings.kinds[item.kind]);
+    if (pending === this.dockPending) return;
+    this.dock.setPending(pending);
+    this.dockPending = pending;
   }
 
   #wanted(item) { return this.settings.enabled && this.settings.kinds[item.kind] && !this.visible(item); }

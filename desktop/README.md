@@ -92,6 +92,11 @@ Notifications work while Desktop is running, including with a minimized or
 closed window on macOS. The existing background loop checks at its slower
 hidden interval. Already pending requests stay in the queue on startup.
 
+On macOS, enabled questions, approvals, and decisions show an amber dot on the
+Dock icon until the last pending request resolves. A new batch makes the icon
+bounce briefly while the app is in the background. Requests already pending at
+startup show the dot immediately after discovery.
+
 ## Run the overnight development flow
 
 The pipeline package is [desktop/workflow](workflow/pipeline.yaml). Its stages are

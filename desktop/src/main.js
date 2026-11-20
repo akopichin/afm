@@ -61,9 +61,13 @@ let shownRun = null;
 // A banner that is not referenced can be garbage-collected before the user sees or clicks it.
 const banners = new Set();
 const notifier = new Notifier({ home, show: showBanner, settings: {enabled: false, kinds: {}},
-  visible: item => Boolean(window?.isFocused() && shownRun === item.runKey) });
+  visible: item => Boolean(window?.isFocused() && shownRun === item.runKey),
+  dock: app.dock && !demo ? {
+    setPending: pending => app.dock.setIcon(path.join(root, 'assets', pending ? 'afm-desktop-attention.png' : 'afm-desktop.png')),
+    bounce: () => { if (!window?.isFocused()) app.dock.bounce('informational'); },
+  } : undefined });
 const workspace = new Workspace({ desktop, stageBrowsers, watchHidden: () => notifier.enabled });
-const loadNotificationSettings = () => desktop.prefs.get().then(prefs => { notifier.settings = prefs.notifications; });
+const loadNotificationSettings = () => desktop.prefs.get().then(prefs => notifier.setSettings(prefs.notifications, workspace.snapshot?.attention));
 // A stage browser appearing or going away changes the Live tabs at once, not at the next poll.
 stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
 // A Finder-launched app lacks the login shell's PATH; it is read once, when the assistant first needs it.
@@ -289,7 +293,11 @@ function showBanner({ title, body, runKey, stageId }) {
   banner.show();
 }
 function openWindow(){
-  window=new BrowserWindow({width:1350,height:870,minWidth:480,minHeight:420,backgroundColor:'#0b111b',icon:path.join(root,'assets/afm-desktop.png'),
+  const frame = process.platform === 'darwin' ? {
+    titleBarStyle: 'hidden', titleBarOverlay: true, transparent: true,
+    vibrancy: 'titlebar', visualEffectState: 'active', backgroundColor: '#00000000',
+  } : { backgroundColor: '#0b111b' };
+  window=new BrowserWindow({width:1350,height:870,minWidth:480,minHeight:420,...frame,icon:path.join(root,'assets/afm-desktop.png'),
     webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,preload:path.join(root,'src/preload.cjs')}});
   dashboardViews = new DashboardViews(window, path.join(root, 'src/dashboard-keys.cjs'));
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
@@ -330,6 +338,17 @@ app.whenReady().then(async () => {
       return label && !label.hidden && label.textContent;
     })()`);
     if (versionLabel !== 'v' + app.getVersion()) throw Error('Packaged Desktop did not display its version.');
+    if (process.platform === 'darwin') {
+      const titlebar = await window.webContents.executeJavaScript(`(() => {
+        const bar = document.getElementById('window-titlebar');
+        const controls = navigator.windowControlsOverlay;
+        return controls?.visible && controls.getTitlebarAreaRect().x > 0 && !bar.hidden
+          && bar.getBoundingClientRect().height >= 30
+          && getComputedStyle(document.body).backgroundColor === 'rgba(0, 0, 0, 0)'
+          && getComputedStyle(document.querySelector('.app-body')).backgroundColor !== 'rgba(0, 0, 0, 0)';
+      })()`);
+      if (!titlebar) throw Error('Packaged Desktop failed its macOS title bar check.');
+    }
     const probe = app.commandLine.getSwitchValue('desktop-check-run');
     if (probe) {
       const deadline = Date.now() + 12000;

@@ -4,6 +4,9 @@
 
 ### Improvement:
 
+- Mark the macOS Dock icon while requests are pending and briefly bounce it
+  for new questions, approvals, or decisions in the background.
+- Use a translucent macOS title bar with native window controls.
 - Show native notifications for questions, approvals and decisions. Configure
   categories in Settings and click a banner to open its run and stage.
 - Delete a stopped Desktop run and remove its clean, dedicated worktree after

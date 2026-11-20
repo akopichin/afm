@@ -1,4 +1,15 @@
 body {display:flex;flex-direction:column;overflow:hidden;color:var(--text-primary)}
+html:has(#window-titlebar:not([hidden])),body:has(#window-titlebar:not([hidden])) {background:transparent}
+#window-titlebar:not([hidden]) {
+  display:flex;align-items:center;flex:none;min-height:30px;height:env(titlebar-area-height, 30px);
+  padding-inline:max(78px, calc(env(titlebar-area-x, 0px) + 8px)) 18px;
+  background:color-mix(in srgb, var(--surface-raised) 68%, transparent);color:var(--text-secondary);
+  font-size:13px;font-weight:600;user-select:none;app-region:drag;
+}
+#window-title {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (prefers-reduced-transparency: reduce) {
+  #window-titlebar:not([hidden]) {background:var(--surface-raised)}
+}
 button, select, input {font:inherit;color:inherit}
 button,.shell-link {cursor:pointer;background:none;border:0;text-align:left}
 button:focus-visible,a:focus-visible,input:focus-visible {outline:2px solid var(--focus-ring);outline-offset:3px}
@@ -35,7 +46,7 @@ body:has(#dashboard-host:not([hidden])) #screen {flex:none}
 #dashboard-host iframe,#dashboard-host [data-run-key] {display:block;width:100%;height:100%;border:0}
 #dashboard-host [hidden] {display:none}
 
-.app-body {display:flex;min-height:0;flex:1;position:relative}
+.app-body {display:flex;min-height:0;flex:1;position:relative;background:var(--bg)}
 .main-column {display:flex;flex-direction:column;min-width:0;flex:1}
 .shellbar {gap:10px}.shellbar .brand {margin-right:8px}.shellbar .switch {background:transparent}
 .icon {display:grid;place-items:center;width:32px;height:32px;border-radius:7px;color:var(--text-muted);font-size:19px}

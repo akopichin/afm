@@ -8,6 +8,12 @@ const active = r => ['running','review','question'].includes(r.state);
 const activeRuns = () => projects.flatMap(p=>p.runs.filter(active).map(r=>({p,r})));
 const remembered = new Map();
 const isMac = /Mac/i.test(navigator.platform);
+if (isMac && navigator.windowControlsOverlay) {
+  const overlay = navigator.windowControlsOverlay;
+  const updateTitlebar = () => { $('window-titlebar').hidden = !overlay.visible; };
+  overlay.addEventListener('geometrychange', updateTitlebar);
+  updateTitlebar();
+}
 // The accepted shortcut modifier is Command on Mac and Control elsewhere; the other one keeps its text-editing meaning.
 const primary = e => isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
 const MAX_DASHBOARDS = 8;
@@ -105,6 +111,7 @@ function render(){
   const wantFocus=focusDashboard;focusDashboard=false;
   document.dispatchEvent(new Event("workspace-change"));
   document.title=`${p?p.name:'Projects'} · AFM Desktop`;
+  $('window-title').textContent=document.title;
   $('crumb').innerHTML=p?`<div class="crumb">/ <button data-switch>${esc(p.name)} ⌄</button></div>`:'';
   for(const frame of dashboards.values()) frame.hidden=true;
   const stage = $('dashboard-host');

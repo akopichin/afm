@@ -15,6 +15,20 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
+test('the macOS title follows the project and the native controls overlay', async t => {
+  const {get,w} = await loadShell(t, {demo: false, native: fakeNative(twoProjects([])), windowControls: true});
+  await tick();
+  assert.equal(get('window-titlebar').hidden, false);
+  assert.equal(get('window-title').textContent, 'Projects · AFM Desktop');
+  w.document.querySelector('[data-project="a"]').click();
+  await tick();
+  assert.equal(get('window-title').textContent, 'a · AFM Desktop');
+  const overlay = w.navigator.windowControlsOverlay;
+  overlay.visible = false;
+  overlay.dispatchEvent(new w.Event('geometrychange'));
+  assert.equal(get('window-titlebar').hidden, true);
+});
+
 test('SSH key prompt masks the passphrase and clears the field on submit or cancellation', async t => {
   const replies = [];
   let openKey;

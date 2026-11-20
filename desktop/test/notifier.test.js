@@ -81,6 +81,44 @@ test('the run page already on screen gets no banner; another run does', async t 
   assert.deepEqual(shown.map(b => b.runKey), ['i2:r2']);
 });
 
+test('the Dock dot follows the pending queue and a new batch requests one bounce', async t => {
+  const dock = [];
+  const { notifier } = await setup(t, { dock: {
+    setPending: pending => dock.push(pending ? 'dot' : 'clear'),
+    bounce: () => dock.push('bounce'),
+  }});
+  const pending = item('pending');
+  const approval = item('approve', 'approval');
+  const decision = item('decide', 'decision');
+  await notifier.onSnapshot(snapshot([pending]));
+  await notifier.onSnapshot(snapshot([pending, approval, decision]));
+  await notifier.onSnapshot(snapshot([], { state: 'offline', error: { message: 'down' } }));
+  await notifier.onSnapshot(snapshot([approval, decision]));
+  await notifier.onSnapshot(snapshot([decision]));
+  assert.deepEqual(dock, ['dot', 'bounce']);
+  await notifier.onSnapshot(snapshot([]));
+  assert.deepEqual(dock, ['dot', 'bounce', 'clear']);
+});
+
+test('the Dock respects request preferences and ignores failures as attention requests', async t => {
+  const dock = [];
+  const { notifier } = await setup(t, { dock: {
+    setPending: pending => dock.push(pending ? 'dot' : 'clear'),
+    bounce: () => dock.push('bounce'),
+  }});
+  const failed = item('failed', 'failed');
+  const question = item('ask', 'question', null);
+  const attention = [failed, question];
+  const settings = { enabled: true, kinds: { ...ALL.kinds, failed: true } };
+  notifier.setSettings(settings);
+  await notifier.onSnapshot(snapshot([failed]));
+  await notifier.onSnapshot(snapshot(attention));
+  notifier.setSettings({ ...settings, kinds: { ...settings.kinds, question: false } }, attention);
+  notifier.setSettings(settings, attention);
+  notifier.setSettings({ ...settings, enabled: false }, attention);
+  assert.deepEqual(dock, ['dot', 'clear', 'dot', 'clear']);
+});
+
 test('a burst is capped with one summary, and pending requests survive the history limit across a reconnect', async t => {
   const { notifier, shown } = await setup(t);
   const burst = Array.from({ length: 600 }, (_, i) => item('s' + i));

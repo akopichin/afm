@@ -15,12 +15,13 @@ export const tick = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms))
 
 // The real shell page and scripts in jsdom. Demo mode loads the approved sample app; production
 // mode also loads the code that follows the main process snapshot, driven by the given nativeAFM.
-export async function loadShell(t, { demo = true, platform = 'MacIntel', native = {} } = {}) {
+export async function loadShell(t, { demo = true, platform = 'MacIntel', native = {}, windowControls = false } = {}) {
   const { virtualConsole, errors } = pageErrors();
   const dom = new JSDOM(await readFile(new URL('index.html', files), 'utf8'), { url: 'http://desktop.test/' + (demo ? '?demo=1' : ''), runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole });
   t.after(() => { dom.window.close(); assert.deepEqual(errors, [], 'the page threw while running'); });
   const w = dom.window;
   Object.defineProperty(w.navigator, 'platform', { value: platform, configurable: true });
+  if (windowControls) w.navigator.windowControlsOverlay = Object.assign(new w.EventTarget(), { visible: true });
   w.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
   w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), liveLayout: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, reportSelection: async () => {}, onSSHKeyPrompt: () => {}, onSSHKeyClosed: () => {}, ...native };
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
