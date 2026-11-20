@@ -102,5 +102,10 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 .source-list>div>span {min-width:0;flex:1;overflow-wrap:anywhere}
 
 #pipeline-options {width:min(720px, calc(100vw - 36px))}
-#pipeline-options textarea {width:100%;font-family:var(--font-mono);resize:vertical}
+#pipeline-options-editor {height:clamp(210px, 44vh, 440px);border:1px solid var(--separator-subtle);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:12px}
+#pipeline-options-status[data-state="error"] {color:var(--danger)}
+#pipeline-options-status[data-state="saved"] {color:var(--success)}
+#pipeline-options-status[data-state="busy"]::before {content:'';display:inline-block;width:.8em;height:.8em;margin-right:.55em;border:2px solid var(--separator-subtle);border-top-color:var(--accent-primary);border-radius:50%;vertical-align:middle;animation:options-spin .7s linear infinite}
+@keyframes options-spin {to {transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce) {#pipeline-options-status[data-state="busy"]::before {animation:none}}
 #pipeline-options-path,#pipeline-options-status {overflow-wrap:anywhere;white-space:pre-line}

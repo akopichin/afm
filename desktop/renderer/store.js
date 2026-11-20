@@ -24,6 +24,7 @@ function readStore(){
   catch {return seed}
 }
 const state = readStore();
+document.documentElement.dataset.theme=state.theme==='light'?'light':'dark';
 // Projects and library sources belong to the main process; only the demo keeps them in the page.
 if(!isDemo){state.projects=[];state.sources=[];state.chat=[]}
 // The real assistant's providers and conversation belong to the main process; these stay until it answers.

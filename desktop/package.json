@@ -29,6 +29,8 @@
     "@electron/asar": "4.3.2",
     "@electron/packager": "20.3.0",
     "electron": "45.4.1",
-    "jsdom": "26.1.0"
+    "esbuild": "0.28.2",
+    "jsdom": "26.1.0",
+    "monaco-editor": "0.57.0"
   }
 }

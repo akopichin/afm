@@ -226,6 +226,11 @@ test('a blocked pipeline launch opens options and saving leaves the launcher ava
     start: async () => ({status:'pipeline_options',options}),
     savePipelineOptions: async input => {saved=input;return {...options,text:input.text,issues:[]}},
   });
+  let draft;
+  w.AFMCodeEditor={createCodeEditor:(_surface,{text})=>{
+    draft=text;
+    return {getValue:()=>draft,setReadOnly(){},onChange(){},dispose(){}};
+  }};
   w.shell.openLauncher(w.shell.projects[0]);
   await tick(30);
   assert.equal(get('launch-options').hidden,false);
@@ -233,10 +238,11 @@ test('a blocked pipeline launch opens options and saving leaves the launcher ava
   await tick();
   assert.ok(get('pipeline-options').open);
   assert.match(get('pipeline-options-status').textContent,/Missing key/);
-  get('pipeline-options-yaml').value='collaboration: {}';
+  draft='collaboration: {}';
   get('pipeline-options-form').dispatchEvent(new w.Event('submit',{cancelable:true}));
   await tick();
   assert.equal(saved.text,'collaboration: {}');
-  assert.match(get('pipeline-options-status').textContent,/Saved/);
+  assert.match(get('pipeline-options-status').textContent,/Options saved/);
+  assert.equal(get('pipeline-options-save').textContent,'Saved');
   assert.ok(get('launch').open);
 });

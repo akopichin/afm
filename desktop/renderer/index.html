@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en" data-theme="dark">
 <head>
-  <meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com; frame-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*; object-src 'none'; base-uri 'none'"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com; frame-src 'self' http://127.0.0.1:* http://localhost:* http://[::1]:*; object-src 'none'; base-uri 'none'"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AFM Desktop · Projects</title>
   <link rel="icon" href="../.generated/dashboard/favicon.svg">
   <link rel="stylesheet" href="../.generated/dashboard/skins/graphite/index.css">
@@ -51,7 +51,8 @@
     <p id="pipeline-options-path" class="hint"></p>
     <p id="pipeline-options-status" class="hint" role="status"></p>
     <details id="pipeline-options-details"><summary>Effective roles</summary><ul id="pipeline-options-roles"></ul></details>
-    <label>Options YAML<textarea id="pipeline-options-yaml" rows="12" spellcheck="false" required></textarea></label>
+    <p id="pipeline-options-editor-label">Options YAML</p>
+    <div id="pipeline-options-editor" aria-labelledby="pipeline-options-editor-label" hidden></div>
     <div class="actions"><button class="primary" id="pipeline-options-save">Validate and save</button></div>
   </form>
 </dialog>

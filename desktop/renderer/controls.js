@@ -175,7 +175,7 @@ async function startNative(p,item){
     }
     if(started?.status==='pipeline_options'){
       launchStatus('Review pipeline options before starting.');
-      showPipelineOptions(started.options, projectId);
+      openPipelineOptions(started.options.id, projectId, started.options);
       return;
     }
     if(started?.state!=='pending')attempt={signature:'',id:''};
@@ -191,46 +191,107 @@ async function startNative(p,item){
   }catch(error){showNativeError(error);launchStatus(error.message)}
   finally{launching=false;$('launch-submit').disabled=false;if($('launch').open)updateGit()}
 }
-let editingPipeline=null;
-function showPipelineOptions(options, projectId){
-  editingPipeline={options,projectId};
+let editingPipeline=null, editorAssets;
+function loadCodeEditor(){
+  if(globalThis.AFMCodeEditor)return Promise.resolve(globalThis.AFMCodeEditor);
+  editorAssets??=Promise.all(['css','js'].map(extension=>new Promise((resolve,reject)=>{
+    const asset=document.createElement(extension==='js'?'script':'link');
+    const url='../.generated/editor/code-editor.'+extension;
+    if(extension==='js')asset.src=url;
+    else{asset.rel='stylesheet';asset.href=url}
+    asset.onload=resolve;
+    asset.onerror=()=>{asset.remove();reject(Error('Could not load the code editor.'))};
+    document.head.append(asset);
+  }))).then(()=>globalThis.AFMCodeEditor).catch(error=>{editorAssets=null;throw error});
+  return editorAssets;
+}
+function optionsStatus(state,message){
+  const status=$('pipeline-options-status');
+  status.dataset.state=state;
+  status.textContent=message;
+}
+function beginPipelineOptions(projectId){
+  editingPipeline?.editor?.dispose();
+  const editing={projectId};
+  editingPipeline=editing;
+  $('pipeline-options-title').textContent='Pipeline options';
+  $('pipeline-options-path').textContent='';
+  $('pipeline-options-details').hidden=true;
+  $('pipeline-options-editor').hidden=true;
+  $('pipeline-options-editor-label').hidden=true;
+  $('pipeline-options-save').disabled=true;
+  $('pipeline-options-save').textContent='Validate and save';
+  optionsStatus('busy','Loading pipeline options…');
+  if(!$('pipeline-options').open)$('pipeline-options').showModal();
+  return editing;
+}
+function describeOptions(options){
   $('pipeline-options-title').textContent=options.name+' · Pipeline options';
-  const sourcePath=options.previous && options.previous!==options.file ? 'Currently reading '+options.previous+'. Save to '+options.file : options.file;
-  $('pipeline-options-path').textContent=sourcePath;
-  $('pipeline-options-status').textContent=options.conflict?'Another source shares this name. Existing options are protected.':
-    [options.template ? 'Loaded '+options.template+' from the package. Edit it before saving.' : null, options.error, ...options.issues].filter(Boolean).join('\n');
+  $('pipeline-options-path').textContent=options.previous && options.previous!==options.file
+    ? 'Currently reading '+options.previous+'. Save to '+options.file : options.file;
   $('pipeline-options-roles').replaceChildren(...options.roles.map(role=>{
     const row=document.createElement('li');
-    row.textContent=[role.id, role.command, role.profile, role.client, role.model, role.reasoning, role.auth_from, role.command_layer].filter(Boolean).join(' · ');
+    row.textContent=[role.id,role.command,role.profile,role.client,role.model,role.reasoning,role.auth_from,role.command_layer].filter(Boolean).join(' · ');
     return row;
   }));
   $('pipeline-options-details').hidden=!options.roles.length;
-  $('pipeline-options-yaml').value=options.text;
-  $('pipeline-options-save').disabled=Boolean(options.conflict);
-  if(!$('pipeline-options').open)$('pipeline-options').showModal();
 }
-async function openPipelineOptions(id, projectId){
-  if(!id)return;
-  try{showPipelineOptions(await nativeAFM.pipelineOptions(id,projectId),projectId)}
-  catch(error){if($('launch').open)launchStatus(error.message);else{sourceMessage=error.message;drawSettings()}}
+async function openPipelineOptions(id,projectId,provided=null){
+  if(!id && !provided)return;
+  const editing=beginPipelineOptions(projectId);
+  try{
+    const [options,monaco]=await Promise.all([provided??nativeAFM.pipelineOptions(id,projectId),loadCodeEditor()]);
+    if(editingPipeline!==editing||!$('pipeline-options').open)return;
+    editing.options=options;
+    describeOptions(options);
+    const surface=$('pipeline-options-editor');
+    surface.hidden=false;
+    $('pipeline-options-editor-label').hidden=false;
+    editing.editor=monaco.createCodeEditor(surface,{text:options.text,language:'yaml',label:'Pipeline options YAML',readOnly:Boolean(options.conflict)});
+    const notes=[options.template ? 'Loaded '+options.template+' from the package. Edit it before saving.' : null,options.error,...options.issues].filter(Boolean);
+    optionsStatus(options.error||options.conflict||options.issues.length?'error':'',
+      options.conflict?'Another source shares this name. Existing options are protected.':notes.join('\n'));
+    const save=$('pipeline-options-save');
+    save.disabled=Boolean(options.conflict);
+    editing.editor.onChange(()=>{
+      if(editingPipeline!==editing||save.disabled)return;
+      if(save.textContent==='Saved'){
+        save.textContent='Validate and save';
+        optionsStatus('','Unsaved changes');
+      }
+    });
+  }catch(error){if(editingPipeline===editing&&$('pipeline-options').open)optionsStatus('error',error.message)}
 }
+$('pipeline-options').addEventListener('close',()=>{
+  editingPipeline?.editor?.dispose();
+  editingPipeline=null;
+});
 $('launch-options').onclick=()=>openPipelineOptions(matches[choice]?.path,targetProject()?.external?undefined:targetProject()?.id);
 $('pipeline-options-form').onsubmit=async event=>{
   event.preventDefault();
-  const editing=editingPipeline;
-  const save=$('pipeline-options-save');
-  if(!editing||save.disabled)return;
+  const editing=editingPipeline,save=$('pipeline-options-save');
+  if(!editing?.editor||save.disabled)return;
   save.disabled=true;
-  $('pipeline-options-status').textContent='Checking options…';
+  save.textContent='Saving…';
+  editing.editor.setReadOnly(true);
+  optionsStatus('busy','Validating and saving options…');
   try{
-    const {options,projectId}=editing;
-    const updated=await nativeAFM.savePipelineOptions({id:options.id,projectId,text:$('pipeline-options-yaml').value,revision:options.revision});
+    const {options,projectId,editor}=editing;
+    const updated=await nativeAFM.savePipelineOptions({id:options.id,projectId,text:editor.getValue(),revision:options.revision});
     if(editingPipeline!==editing||!$('pipeline-options').open)return;
-    showPipelineOptions(updated,projectId);
-    $('pipeline-options-status').textContent=['Saved.',...updated.issues].join('\n');
+    editing.options=updated;
+    describeOptions(updated);
+    optionsStatus('saved',['Options saved.',...updated.issues].join('\n'));
+    save.textContent='Saved';
     launchStatus('');
-  }catch(error){if(editingPipeline===editing)$('pipeline-options-status').textContent=error.message}
-  finally{if(editingPipeline===editing)save.disabled=false}
+  }catch(error){if(editingPipeline===editing)optionsStatus('error',error.message)}
+  finally{
+    if(editingPipeline===editing){
+      if(save.textContent==='Saving…')save.textContent='Validate and save';
+      save.disabled=false;
+      editing.editor.setReadOnly(false);
+    }
+  }
 };
 $('launch-submit').onclick=startRun;
 $('launch-project').onchange=()=>{choice=0;updateWorkflows();loadLaunchData()};
@@ -266,7 +327,7 @@ async function loadSettingsData(){
 const demoModelForm=`<form id="model-form" hidden><label>Provider or CLI<input name="name" required placeholder="Ollama, Gemini CLI…"></label><label>Model or deployment<input name="model" required placeholder="Model ID"></label><label>Credential source<select name="auth"><option>Existing CLI login</option><option>Environment variable</option><option>Config file</option><option>Local endpoint</option></select></label><label id="reference-label" hidden><span>Source</span><input name="reference"></label><div class="actions"><button class="primary">Add model</button></div></form>`;
 function drawSettings(){
   $('settings-title').textContent=onboarding?'Set up AFM Desktop':'Settings';
-  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],...(!isDemo?[['environment','Environment']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
+  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],['appearance','Appearance'],...(!isDemo?[['environment','Environment']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
   const body=$('settings-body');
   if(settingsTab==='models'){
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
@@ -312,6 +373,9 @@ function drawSettings(){
       try{addSource(await gitHubSource(name))}catch(err){sourceMessage=err.message}
       finally{remoteBusy=false;if(settingsTab==='library')drawSettings()}
     };
+  }else if(settingsTab==='appearance'){
+    body.innerHTML=tabs+`<label>Theme<select id="desktop-theme">${[['dark','Dark'],['light','Light']].map(([id,label])=>option(id,label,id===document.documentElement.dataset.theme)).join('')}</select></label>`;
+    $('desktop-theme').onchange=event=>{state.theme=event.target.value;document.documentElement.dataset.theme=state.theme;save()};
   }else if(settingsTab==='environment'){
     drawEnvironment(body,tabs);
   }else{

@@ -43,9 +43,15 @@ export class PipelineOptions {
       entries.some(item => item.name.toLowerCase() === entry.name.toLowerCase() && item.source !== entry.source)};
   }
 
-  async #inspect(entry, project, options, includeExample = false) {
+  async #inspect(entry, project, options, includeExample = false, useCachedCommit = false) {
     try {
-      const args = ['--dir', project, 'pipelines', 'inspect', entry.source, '--json'];
+      const commit = useCachedCommit && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(entry.commit) ? entry.commit : null;
+      const authorityEnd = entry.source.indexOf('/', entry.source.indexOf('://') + 3);
+      const repoPath = authorityEnd >= 0 ? entry.source.slice(authorityEnd) : '';
+      const suffix = repoPath.lastIndexOf('@');
+      const base = suffix < 0 ? entry.source : entry.source.slice(0, authorityEnd + suffix);
+      const source = commit && entry.source.includes('://') ? base + '@' + commit : entry.source;
+      const args = ['--dir', project, 'pipelines', 'inspect', source, '--json'];
       if (options) args.push('--pipeline-options', options);
       const {stdout} = await exec(await this.binary(), args, {
         cwd: project, env: await this.environment(), timeout: 45000, maxBuffer: 4 << 20,
@@ -66,7 +72,7 @@ export class PipelineOptions {
     const owner = await readText(spec.ownerFile);
     const conflict = spec.collision || Boolean(owner && owner.trim() !== spec.entry.source);
     const stored = !conflict || spec.previous !== spec.file ? await readText(spec.previous) : null;
-    const result = await this.#inspect(spec.entry, spec.project, stored === null ? null : spec.previous, stored === null && !conflict);
+    const result = await this.#inspect(spec.entry, spec.project, stored === null ? null : spec.previous, stored === null && !conflict, !forLaunch);
     if (conflict && spec.previous === spec.file) result.issues.push('Another pipeline source shares this options path.');
     if (forLaunch && stored !== null && spec.previous === spec.file && !result.error && !result.issues.length) {
       await this.serveConfig.setPipelineOptions(id, spec.entry.source, spec.file);

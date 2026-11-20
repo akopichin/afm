@@ -22,7 +22,10 @@ Press **Command+,** on macOS or **Ctrl+,** on Linux to open Settings. Choose
 **Pipeline options** next to a package in **Library**, or select a pipeline in
 **New run** and open the same editor there. Desktop opens the editor automatically
 when preflight finds a missing requirement. The editor shows effective roles and
-credential references, plus the options YAML. When there are no saved options,
+credential references, plus YAML syntax highlighting in a locally bundled Monaco
+editor. It follows the Desktop theme under **Settings → Appearance**. The editor
+shows progress while AFM inspects or validates the package and confirms when
+the file has been saved. When there are no saved options,
 Desktop pre-fills the editor from the package snapshot’s `options.example.yaml`
 if the package includes it as a resource. Review the example before saving.
 **Validate and save** checks the
