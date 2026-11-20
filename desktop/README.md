@@ -54,8 +54,11 @@ Missing environment variable names from preflight are shown in the launcher.
 
 The pipeline package is [desktop/workflow](workflow/pipeline.yaml), with its stage
 graph in [flow.yaml](workflow/flow.yaml). The stages are `plan → implement → doc → deliver`.
-The plan picks the relevant subsystems for the supplied task. Three required
-AFM helper profiles review the implementation before the documentation stage.
+The plan picks the relevant subsystems for the supplied task. Each stage can
+pause for a reply in the run dashboard. A fresh run reads the current package
+from the configured local folder. Resuming continues with its original snapshot.
+Three required AFM helper profiles review the implementation before the
+documentation stage.
 The `doc` stage updates this guide and
 [the Desktop spec](../specs/desktop/spec.md) from the implemented behavior and
 check results. Delivery builds the candidate and runs final verify.

@@ -17,6 +17,7 @@ stages:
   - id: plan
     name: Plan the Desktop change
     agents: [auto]
+    interactive: true
     command: desktop-dev-writer
     browser: false
     description: |
@@ -31,6 +32,7 @@ stages:
     depends_on: [plan]
     command: desktop-dev-writer
     agents: [auto]
+    interactive: true
     browser: false
     description: |
       Follow the plan in the sibling plan stage directory. Change the affected production paths,
@@ -57,6 +59,7 @@ stages:
     depends_on: [implement]
     command: desktop-dev-writer
     agents: [auto]
+    interactive: true
     browser: false
     description: |
       Use the implemented behavior and previous stage evidence to update desktop/README.md
@@ -74,6 +77,7 @@ stages:
     depends_on: [doc]
     command: desktop-dev-writer
     agents: [auto]
+    interactive: true
     browser: false
     description: |
       Build an unpacked platform application with AFM included. Check
