@@ -94,31 +94,33 @@ hidden interval. Already pending requests stay in the queue on startup.
 
 ## Run the overnight development flow
 
-The pipeline package is [desktop/workflow](workflow/pipeline.yaml), with its stage
-graph in [flow.yaml](workflow/flow.yaml). The stages are `plan → implement → doc → deliver`.
-The plan picks the relevant subsystems for the supplied task. Each stage can
-pause for a reply in the run dashboard. A fresh run reads the current package
-from the configured local folder. Resuming continues with its original snapshot.
-The implementation author spawns independent reviewers and owns their
-dispositions before the documentation stage. Repeated rejections use the
-bounded [review and escalation protocol](workflow/review.md).
-The `doc` stage updates this guide and
-[the Desktop spec](../specs/desktop/spec.md) from the implemented behavior and
-check results. The `deliver` stage builds the unpacked Electron app with the
-bundled AFM binary, runs checks, tests, performance workloads and package
-inspection, and submits the candidate to the final Codex verifier. It commits
-the candidate in the run’s worktree and records its full SHA, branch, bundle
-path, test results, and outstanding native checks in `execution_summary.md`.
+The pipeline package is [desktop/workflow](workflow/pipeline.yaml). Its stages are
+`plan → implement → live-run → doc → commit → merge`. Every stage can pause for a
+reply. A fresh run reads the current local package. An interrupted run resumes
+with its original snapshot.
 
-Once `deliver` passes, ask for the merge and Desktop release with the candidate
-and version bump. On the host, check the worktree and candidate SHA in the
-release handoff, complete any outstanding native checks, merge the candidate
-into `main`, and push it to `origin/main`. Check that the published main tip is
-the intended release commit, then run `make ds-release-patch`,
-`make ds-release-minor`, or `make ds-release-major` as requested. Wait for the
-`ds-v*` workflow to publish the release and update the Homebrew cask. The run’s
-completion leaves the candidate ready for this request. See the
-[Desktop release guide](../docs/releases.md#afm-desktop-releases).
+The plan divides larger changes into tasks with their own acceptance criteria.
+During implementation the author runs focused checks, spawns independent AFM
+review helpers for each task, and closes findings before starting the next.
+The package includes [the coordination and escalation skills](workflow/review.md).
+Codex Astra verifies implementation, packaged acceptance and the delivery commit.
+The writer remains Sonnet Medium.
+
+`live-run` uses npm and Node to build the unpacked Electron app, check the
+bundled AFM and exercise relevant code paths, including the Live tab transport.
+A container run records native acceptance as pending, with exact Mac smoke steps.
+The overnight Mac launcher runs the packaged window check on the host.
+`doc` updates this guide and the [Desktop spec](../specs/desktop/spec.md).
+`commit` commits the reviewed change in the run worktree. `merge` records the
+candidate SHA, base, check results, pending Mac checks and suggested release bump.
+It asks for approval in the AFM dashboard. A native Mac run can fast-forward the
+clean base checkout after acceptance. A Docker run hands off the approved merge.
+For an overnight build without a merge, choose to keep the worktree when asked.
+
+The merge and release require the owner's request. On the Mac, check the
+candidate and base, complete outstanding native checks and integrate the
+candidate into `main`. Push the intended release commit, then run the requested
+Desktop release command. See the [Desktop release guide](../docs/releases.md#afm-desktop-releases).
 
 From the primary AFM checkout, with the dedicated .worktrees/desktop checkout in place, Docker running, Node 22.12+ and AFM available on the Mac:
 
@@ -132,7 +134,7 @@ Keep the Mac awake and connected. The wrapper validates the package, starts a fr
 open ".worktrees/desktop/desktop/dist/AFM Desktop-darwin-arm64/AFM Desktop.app"
 ```
 
-For manual recovery, AFM supports resuming an interrupted pipeline with the same source and worktree, omitting the task flag. Run the following from the primary checkout, then use the native build commands below once delivery succeeds:
+For manual recovery, AFM supports resuming an interrupted pipeline with the same source and worktree, omitting the task flag. Run the following from the primary checkout, then use the native build commands below once all six stages finish:
 
 ```sh
 AFM_COLLABORATION=1 afm run --pipeline .worktrees/desktop/desktop/workflow --worktree desktop --exit-on-fail

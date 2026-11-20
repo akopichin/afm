@@ -61,8 +61,10 @@ async function main() {
   const created = (await runIds()).filter(id => !previous.has(id));
   if (created.length !== 1) throw Error('Could not identify the new Desktop run: ' + created.join(', '));
   const report = JSON.parse(run('afm', ['--dir', primary, 'report', created[0], '--format', 'json'], primary, true));
+  const deliveryStages = ['plan', 'implement', 'live-run', 'doc', 'commit', 'merge'];
+  const doneStages = new Set(report.stages.filter(stage => stage.status === 'done').map(stage => stage.id));
   if (report.run.id !== created[0] || report.run.status !== 'finished' ||
-      !report.stages.some(stage => stage.id === 'deliver') || report.stages.some(stage => stage.status !== 'done'))
+      !deliveryStages.every(stage => doneStages.has(stage)) || report.stages.some(stage => stage.status !== 'done'))
     throw Error('Desktop delivery is incomplete. Inspect run ' + created[0]);
   run('npm', ['ci', '--no-audit', '--no-fund'], desktop);
   // The sidecar is rebuilt natively from the final worktree, so the app never carries a stale or foreign AFM.

@@ -20,8 +20,8 @@ docker:
       reasoning: high
     desktop-dev-verify:
       type: codex
-      model: gpt-6.1-sol
-      reasoning: high
+      model: gpt-6-astra
+      reasoning: xhigh
     desktop-dev-escalation-architect:
       type: codex
       model: gpt-6-astra
@@ -48,6 +48,8 @@ collaboration:
       title: Desktop runtime and packaging review
       command: desktop-dev-review-runtime
       instructions: |
+        Read afm-review-work/SKILL.md and afm-check-evidence/SKILL.md under
+        $AFM_PIPELINE_DIR/skills before reviewing.
         Review DS-01,02,03,10 when affected by the implementation. Use the plan and acceptance evidence. Trace real run launch,
         process ownership, cleanup, sidecar pairing and packaged startup. Check failure
         recovery and platform limitations. Report concrete defects, reproduction
@@ -56,6 +58,8 @@ collaboration:
       title: Desktop interface and input review
       command: desktop-dev-review-interface
       instructions: |
+        Read afm-review-work/SKILL.md and afm-check-evidence/SKILL.md under
+        $AFM_PIPELINE_DIR/skills before reviewing.
         Review DS-04,05,06,09 when affected by the implementation, against the Graphite baseline. Trace shortcuts
         across shell, dashboard and Live, modal focus, resize and hidden view behavior.
         Check performance and keyboard evidence. Report actionable findings and test gaps.
@@ -64,6 +68,8 @@ collaboration:
       title: Desktop assistant and browser review
       command: desktop-dev-review-integrations
       instructions: |
+        Read afm-review-work/SKILL.md and afm-check-evidence/SKILL.md under
+        $AFM_PIPELINE_DIR/skills before reviewing.
         Review DS-07,08 when affected by the implementation. Trace provider settings and credentials, MCP permissions, stage
         browser ownership, reconnect, cancellation and cleanup. Check for fixture fallbacks
         and unsupported acceptance claims. Report reproducible issues and proposed checks.

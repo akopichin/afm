@@ -9,6 +9,8 @@
 - Delete a stopped Desktop run and remove its clean, dedicated worktree after
   confirmation.
 - Unlock a passphrase-protected SSH key from Library and pipeline preflight.
+- Review each Desktop development task through the AFM mesh, verify with Astra,
+  and ask for approval of the prepared merge candidate in the dashboard.
 
 ### Fix:
 

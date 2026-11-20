@@ -1,6 +1,7 @@
 name: desktop-dev
 description: Spec-driven development for AFM Desktop
 worktrees: true
+skills_dir: skills
 prompt: |
   Work in the current desktop worktree. Read the run task, specs/desktop/spec.md and desktop/README.md.
   Use the current renderer, Graphite baseline and Desktop spec when relevant to the task.
@@ -11,21 +12,24 @@ prompt: |
   Check previous stage summaries in sibling stage directories. Work on the current branch.
   Leave it available to the owner. Use npm and Node in desktop/. Build with the AFM binary
   available in the container. Keep Electron, external Chrome, and live UI acceptance on the host.
-  Keep merges to main and publication on the host, after the owner requests the release.
+  Keep merges to main and publication on the host, with the owner's approval for each.
   Do not change CI/Homebrew or send real prompts to paid providers during tests.
   Test adapters with deterministic transcripts and use real disposable AFM script runs.
 team:
   - id: rescue-architect
     title: Астра
     profile: desktop-dev-escalation-architect
+    skills: [afm-check-evidence, afm-dev-diagnosis, afm-dev-escalation]
     instruction: Diagnose only when the coordinator requests it under $AFM_PIPELINE_DIR/review.md. Keep product files read-only and return the reproduction, cause and correction.
   - id: opus
     title: Опус
     profile: desktop-dev-escalation-writer
+    skills: [afm-check-evidence, afm-dev-escalation]
     instruction: Take only a bounded rescue assignment under $AFM_PIPELINE_DIR/review.md. Confirm the previous writer stopped and edit only the granted files.
   - id: fabula
     title: Фабула
     profile: desktop-dev-escalation-verifier
+    skills: [afm-check-evidence, afm-review-work, afm-dev-escalation]
     instruction: Follow $AFM_PIPELINE_DIR/review.md. Stay idle until the repeated post-escalation rejection threshold. Verify independently and never approve your own edits.
 stages:
   - id: plan
@@ -39,6 +43,9 @@ stages:
       Desktop requirement IDs in scope and write plan.md in $AFM_STAGE_DIR. Record the
       requested behavior, affected files, requirement deltas, regression checks and any
       native acceptance left to the host. Use the subsystem guidance relevant to this task.
+      Split a larger change into ordered, independently reviewable tasks with stable IDs.
+      For each task record dependencies, allowed paths, affected review profiles,
+      acceptance criteria and focused checks. Keep one task when the scope is indivisible.
       Install Desktop dependencies with npm ci --prefix desktop. Keep product files unchanged.
     verify: "npm --prefix desktop run check"
   - id: implement
@@ -48,18 +55,73 @@ stages:
     agents: [auto]
     interactive: true
     browser: false
+    skills: &review_skills [afm-check-evidence, afm-dev-coordinator, afm-dev-escalation, afm-review-work]
     description: |
       Follow the plan in the sibling plan stage directory. Change the affected production paths,
       preserve their contracts, and add task-specific regressions. Use deterministic provider
       transcripts, disposable AFM runs or headless browser transport fixtures when relevant.
       If the task affects performance, measure the affected workload before and after the
-      change and record comparable results. Coordinate independent review and escalation under
-      $AFM_PIPELINE_DIR/review.md. Freeze the candidate during review and record evidence
-      and dispositions in execution_summary.md. Note requirement deltas for Docs.
-    verify: "npm --prefix desktop run check && npm --prefix desktop test"
+      change and record comparable results.
+      Work one planned task at a time. Before starting the next task, run the current
+      task’s focused checks, freeze its candidate and spawn independent AFM reviewers.
+      Collect their full results, resolve findings and get focused re-review of any
+      corrections. Record each accepted task ID, candidate, and helper outcomes in
+      review-ledger.md as work progresses. Recover the active task and pending waits
+      from team-progress.json and AFM on every resumed turn. Follow $AFM_PIPELINE_DIR/review.md
+      for review and escalation. In execution_summary.md, report the accepted task
+      IDs and requirement deltas for Docs.
+    verify:
+      max_failures: 2
+      steps:
+        - run: "npm --prefix desktop run check && npm --prefix desktop test"
+          timeout: 20m
+        - command: desktop-dev-verify
+          timeout: 20m
+          prompt: |
+            Verify the implementation against the plan, Desktop spec and changed behavior.
+            Read $AFM_PIPELINE_DIR/skills/afm-dev-escalation/SKILL.md.
+            Match every planned task ID to its frozen candidate, independent helper
+            outcomes and dispositions in review-ledger.md. Reject missing task-level
+            review or work that advanced while its previous task was pending.
+            Check regression evidence, performance when affected,
+            and delivery through ordinary application entry points. On repeated defects
+            carry the same logical invariant and evidence back to the coordinator.
+  - id: live-run
+    name: Exercise the packaged Electron candidate
+    depends_on: [implement]
+    command: desktop-dev-writer
+    agents: [auto]
+    interactive: true
+    browser: false
+    skills: *review_skills
+    description: |
+      Use the supplied AFM binary to build and inspect the unpacked application.
+      Exercise the affected production paths with disposable AFM runs and existing
+      headless Electron boundary tests. Use deterministic transcripts when a
+      path requires a provider. When applicable, exercise the in-app Live tab
+      route and CDP lifecycle with the existing browser transport fixtures.
+      Record source/build identity, scenario results and performance evidence.
+      On a native Mac use the built candidate and npm run smoke:mac, plus affected
+      UI scenarios from the plan. In Docker mark native checks pending and record
+      exact Mac steps, including opening Live in the same project tab if affected.
+      A headless result only verifies its named scenario. Send product findings
+      through the implementation review ledger and rerun affected checks.
+    verify:
+      max_failures: 2
+      steps:
+        - run: "npm --prefix desktop run perf && npm --prefix desktop run build && npm --prefix desktop run check:package"
+          timeout: 20m
+        - command: desktop-dev-verify
+          timeout: 20m
+          prompt: |
+            Audit the actual package and scenario evidence against the plan. Check the
+            bundled AFM, offline assets, production entry and relevant adapter paths.
+            Check the documented distinction between headless coverage and native
+            Electron, including the in-app Live tab when relevant. Require independent
+            review of product corrections made during live acceptance.
   - id: doc
     name: Update the Desktop README and spec
-    depends_on: [implement]
+    depends_on: [live-run]
     command: desktop-dev-writer
     agents: [auto]
     interactive: true
@@ -75,39 +137,58 @@ stages:
       unchanged, record that in execution_summary.md with the affected requirement IDs.
       Check relative links and command examples. Work on documentation only.
     verify: "test -s desktop/README.md && test -s specs/desktop/spec.md && git diff --check"
-  - id: deliver
-    name: Verify and prepare the Desktop release candidate
+  - id: commit
+    name: Validate and commit the Desktop change
     depends_on: [doc]
     command: desktop-dev-writer
     agents: [auto]
     interactive: true
     browser: false
     description: |
-      Build an unpacked platform application with AFM included. Check
-      production entry, offline app assets and dependency versions. Read the doc stage summary
-      and keep the README and spec synchronized if delivery corrections change behavior or evidence.
-      Read the reviewed implementation summary and confirm its findings have dispositions.
-      Commit the result locally in Russian. Record the git revision, artifact path, tests,
-      outstanding platform limitations and host smoke steps.
-      Add a "Release handoff" section to execution_summary.md with the full candidate SHA,
-      worktree path and branch, and any outstanding native checks. Include a recommended
-      Desktop bump (patch, minor or major). Identify the candidate as awaiting final verify
-      until this stage is done. Tell the owner they can request merge and release from the Mac
-      after verify passes. An approval or a bump recommendation is not a release request.
-      If asked to publish from this run, provide the handoff for the host operator.
+      Review the plan, implementation and live acceptance evidence, README and spec.
+      Review staged, unstaged and new paths. Commit only intended changes, in Russian,
+      on the current branch. Leave unrelated edits and local settings alone. A clean
+      candidate already committed needs no empty commit. Record its full SHA, branch,
+      worktree and check results. Repeat affected review and acceptance if behavior
+      changed after the reviewed live candidate.
     verify:
       max_failures: 2
       steps:
-        - run: "npm --prefix desktop run check && npm --prefix desktop test && npm --prefix desktop run perf && npm --prefix desktop run build && npm --prefix desktop run check:package"
+        - run: "git diff --check && git diff --cached --check && npm --prefix desktop run check && npm --prefix desktop test"
           timeout: 20m
         - command: desktop-dev-verify
           timeout: 20m
           prompt: |
-            Read the Desktop spec, run plan, README, doc summary, $AFM_PIPELINE_DIR/review.md
-            and the implementation review ledger. Confirm independent review and bounded escalation.
-            Check that the README and affected requirements reflect the delivered behavior.
-            Verify the normal entry point, AFM and provider adapters, actual packaged contents,
-            all keyboard contracts and evidence. Fail concrete missing behavior or production
-            fixture fallbacks. Distinguish headless evidence from manual native OS checks.
-            Check that the release handoff identifies the worktree and its current committed
-            SHA, and lists any outstanding native acceptance before publication.
+            Verify that the commit contains the reviewed Desktop change and spec/doc
+            updates. Check the stated revision and any acceptance re-run after changes
+            to the tested implementation. Report native checks still pending.
+  - id: merge
+    name: Prepare integration and hand off the optional Desktop release
+    depends_on: [commit]
+    command: desktop-dev-writer
+    agents: [auto]
+    interactive: true
+    browser: false
+    skills: *review_skills
+    description: |
+      Record the full candidate and base SHAs, branch and worktree, check evidence
+      and any required Mac smoke steps. Recommend a Desktop patch, minor, or major.
+      Prepare and validate the current local main in the feature worktree when needed.
+      Obtain focused independent review of material conflict resolutions and rerun
+      affected acceptance. Confirm both the candidate SHA and the clean base HEAD.
+      When the integration candidate is ready, run afm stage ask in Russian with
+      the options "Слить в main" and "Оставить ветку". Show the candidate and base
+      SHAs, checks, conflicts and any pending native acceptance in the question.
+      If Mac checks are pending, say that approval is conditional on them passing.
+      Save the question ID and use afm stage wait-answer with that ID, retrying on
+      exit 75. On decline, keep the candidate in the feature branch and report it.
+      After approval and passing native checks, a stage running on the Mac may
+      fast-forward main with git merge --ff-only from the clean base worktree.
+      Recheck the base SHA and cleanliness before attempting it. If the base or
+      candidate changed, prepare again and ask for approval of the new candidate.
+      In Docker, hand the approved candidate and remaining native checks to the
+      host operator. Leave the active worktree in place. Publication happens on
+      the host after the owner explicitly requests it.
+      Record the answer, candidate and base IDs, and actual versus pending
+      integration and publication in execution_summary.md.
+    verify: "git diff --check && git diff --cached --check"
