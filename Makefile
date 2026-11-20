@@ -5,7 +5,7 @@ export GO111MODULE=on
 GOENV:=GO111MODULE=on
 
 # version вшивается в бинарник через -ldflags. git describe → тег/SHA, иначе "dev".
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION := $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
 
 GOLANGCI_BIN=$(LOCAL_BIN)/golangci-lint
 GOLANGCI_TAG=v2.11.4

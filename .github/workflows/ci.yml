@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches: ['**']
+    tags-ignore: ['ds-v*']
   pull_request:
 
 permissions:
@@ -40,7 +42,7 @@ jobs:
         run: |
           python3 -m pip install PyYAML==6.0.3
           python3 -m unittest discover -s scripts -p test_afm_release.py -v
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/*.yml
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/*.yml
       - name: Public source boundary
         run: |
           python3 scripts/check-public-tree.py

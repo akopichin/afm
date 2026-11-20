@@ -83,6 +83,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertNotIn("permissions", self.jobs[name])
 
 
+class DesktopReleaseWorkflowTests(unittest.TestCase):
+    def test_only_desktop_tags_publish_after_all_native_builds(self):
+        root = pathlib.Path(__file__).parents[1]
+        wf = yaml.safe_load((root / ".github/workflows/desktop-release.yml").read_text())
+        self.assertEqual(wf[True]["push"], {"tags": ["ds-v*"]})
+        self.assertEqual(set(wf[True]), {"push", "workflow_dispatch"})
+        self.assertEqual(wf["permissions"], {"contents": "read"})
+        build = wf["jobs"]["build"]
+        self.assertNotIn("permissions", build)
+        self.assertEqual(set(build["strategy"]["matrix"]["os"]),
+                         {"macos-15", "macos-15-intel", "ubuntu-24.04", "ubuntu-24.04-arm"})
+        publish = wf["jobs"]["publish"]
+        self.assertEqual(publish["needs"], "build")
+        self.assertEqual(publish["if"], "github.event_name == 'push'")
+        self.assertEqual(publish["permissions"], {"contents": "write"})
+        self.assertNotIn("ENGINE_READ_TOKEN", json.dumps(publish))
+        self.assertIn("--latest=false", json.dumps(publish))
+
+
 class ProductWorkflowTests(unittest.TestCase):
     def setUp(self):
         root = pathlib.Path(__file__).parents[1]
@@ -91,7 +110,7 @@ class ProductWorkflowTests(unittest.TestCase):
         self.action = yaml.safe_load((root / ".github/actions/private-go/action.yml").read_text())
 
     def test_untrusted_prs_never_receive_private_module_credentials(self):
-        self.assertEqual(self.ci[True], {"push": None, "pull_request": None})
+        self.assertEqual(self.ci[True], {"push": {"branches": ["**"], "tags-ignore": ["ds-v*"]}, "pull_request": None})
         guard = self.ci["jobs"]["product"]["if"]
         self.assertIn("github.repository == 'akopichin/afm'", guard)
         self.assertIn("github.event_name == 'push'", guard)

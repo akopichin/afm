@@ -35,11 +35,34 @@ afm-alpha run
 
 The commands use the same project configuration and run directories as `afm`.
 
+## AFM Desktop releases
+
+Desktop has its own stable version sequence. To publish from the reviewed commit on
+`main`, push an annotated tag in the form `ds-vMAJOR.MINOR.PATCH`. For example:
+
+```sh
+git tag -a ds-v0.0.1 -m "AFM Desktop 0.0.1"
+git push origin refs/tags/ds-v0.0.1
+```
+
+The Desktop workflow builds the dashboard, the pinned AFM executable and Electron
+on macOS and Linux (arm64 and x64). It runs the Desktop tests, performance checks
+and package inspection on each runner, and opens the packaged app on macOS. After
+all four builds pass it publishes a GitHub Release named **AFM Desktop** with the
+version from the tag. Download the `afm-desktop-<version>-darwin-<arch>.zip` for
+Mac or `afm-desktop-<version>-linux-<arch>.tar.gz` for Linux and verify it with
+the accompanying `SHA256SUMS`. Extract the archive and open **AFM Desktop**.
+The macOS app uses an ad-hoc signature and may require manual approval.
+The repository’s Latest release continues to track the CLI. Desktop builds use
+the existing `ENGINE_READ_TOKEN` secret and publish with the workflow token.
+For a build-only rehearsal, run **AFM Desktop release** from the Actions tab with
+the intended version (for example `0.0.1`). This uploads the archives as workflow artifacts.
+
 ## AFM 3.x CI configuration
 
 AFM owns validation, archive builds, and publication. The private `afm-engine`
-repository has no active workflows. Public checks run for every push and pull
-request. Product checks also run for pushes and same-repository pull requests in
+repository has no active workflows. Public CLI checks run for branch pushes, non-Desktop tag pushes and pull
+requests. Product checks also run for pushes and same-repository pull requests in
 `akopichin/afm`; fork and Dependabot pull requests have no private module access.
 To validate an external contribution, review it and push the reviewed revision
 to a branch in AFM before merging.

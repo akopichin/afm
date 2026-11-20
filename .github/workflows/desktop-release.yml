@@ -1,0 +1,129 @@
+name: AFM Desktop release
+
+on:
+  push:
+    tags: ['ds-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Desktop version to validate without publishing
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || format('ds-v{0}', inputs.version) }}
+
+jobs:
+  build:
+    name: Test and archive on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    env:
+      GOPRIVATE: github.com/akopichin/afm-engine
+      GOWORK: 'off'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify desktop release tag
+        shell: bash
+        run: |
+          number='(0|[1-9][0-9]*)'
+          [[ "$RELEASE_TAG" =~ ^ds-v${number}\.${number}\.${number}$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the AFM dashboard and install Desktop
+        run: |
+          npm ci --prefix pkg/web/dashboard
+          npm run build --prefix pkg/web/dashboard
+          npm ci --prefix desktop
+          npm pkg set --prefix desktop "version=${RELEASE_TAG#ds-v}"
+      - uses: ./.github/actions/private-go
+        with:
+          token: ${{ secrets.ENGINE_READ_TOKEN }}
+      - name: Build the native AFM executable
+        run: npm run sidecar --prefix desktop
+      - name: Remove module credentials
+        if: always()
+        run: rm -f "$HOME/.netrc"
+      - name: Test and package Desktop
+        working-directory: desktop
+        run: |
+          export TMPDIR="$(cd -P "${TMPDIR:-/tmp}" && pwd -P)"
+          npm run check
+          npm test
+          npm run perf
+          npm run build
+          npm run check:package
+      - name: Open the packaged app and verify an AFM run
+        if: runner.os == 'macOS'
+        run: npm run smoke:mac --prefix desktop
+      - name: Archive application bundle
+        working-directory: desktop/dist
+        shell: bash
+        run: |
+          target=$(node -p 'process.platform + "-" + process.arch')
+          bundle="AFM Desktop-$target"
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            ditto -c -k --keepParent "$bundle/AFM Desktop.app" "$out/afm-desktop-${RELEASE_TAG#ds-v}-$target.zip"
+          else
+            tar -czf "$out/afm-desktop-${RELEASE_TAG#ds-v}-$target.tar.gz" "$bundle"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: afm-desktop-${{ matrix.os }}
+          path: ${{ runner.temp }}/release/afm-desktop-*
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: afm-desktop-*
+          merge-multiple: true
+          path: release
+      - name: Publish AFM Desktop archives
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          prefix="afm-desktop-${RELEASE_TAG#ds-v}"
+          archives=("$prefix"-darwin-{arm64,x64}.zip "$prefix"-linux-{arm64,x64}.tar.gz)
+          sha256sum "${archives[@]}" > SHA256SUMS
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft); then
+            if [[ "$draft" == false ]]; then
+              gh release download "$RELEASE_TAG" --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+              cmp SHA256SUMS "$RUNNER_TEMP/SHA256SUMS"
+              exit 0
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "AFM Desktop ${RELEASE_TAG#ds-v}" \
+              --notes "Download the archive for your OS and CPU. The macOS app is ad-hoc signed and has no Apple notarization."
+          fi
+          gh release upload "$RELEASE_TAG" "${archives[@]}" SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest=false

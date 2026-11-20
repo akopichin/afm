@@ -3,6 +3,12 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-20
+
+### Improvement:
+
+- Publish AFM Desktop for macOS and Linux (Apple Silicon/arm64 and x64) from separate `ds-vMAJOR.MINOR.PATCH` tags. Each release includes the bundled AFM executable and SHA-256 checksums. See `docs/releases.md`.
+
 ## 2026-11-19
 
 ### Improvement:
