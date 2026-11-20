@@ -21,15 +21,15 @@ export async function readRunStatus(run, request = fetch) {
   return status;
 }
 
-async function getJSON(origin, route, request) {
+async function getJSON(origin, route, request, missingIsEmpty = false) {
   const res = await request(origin + route, {redirect:'error', signal:AbortSignal.timeout(3000)});
+  if (missingIsEmpty && res.status === 404) return null;
   if (!res.ok) throw Error('Run unavailable.');
   return res.json();
 }
 
 export async function fetchAttention(run, request = fetch, previous = []) {
   const status = await readRunStatus(run, request);
-  const origin = localURL(run.apiUrl).origin;
   const notices = [];
   for (const stage of status.stages ?? []) {
     const notice = stageNotice(stage);
@@ -39,10 +39,13 @@ export async function fetchAttention(run, request = fetch, previous = []) {
     if (notice.kind === 'question') {
       const old = previous.find(item => item.stageId === stage.id && item.kind === 'question' && item.observedAt === observedAt);
       requestAt = old?.requestAt;
-      if (!requestAt) {
+      if (requestAt === undefined) {
         try {
-          const dialog = await getJSON(origin, '/api/stages/' + encodeURIComponent(stage.id) + '/dialog', request);
-          const question = dialog?.findLast(item => item.id && item.phase && item.answer == null);
+          const origin = localURL(run.apiUrl).origin;
+          const dialog = await getJSON(origin, '/api/stages/' + encodeURIComponent(stage.id) + '/dialog', request, true);
+          const question = Array.isArray(dialog) ? dialog.findLast(item => item.id && item.phase && item.answer == null) : null;
+          // A host without a dialog endpoint still shows its in-app notice.
+          if (!Array.isArray(dialog)) requestAt = null;
           if (question) requestAt = JSON.stringify([question.phase, question.id, question.ts ?? '']);
         } catch { /* Retry while the question remains actionable. */ }
       }

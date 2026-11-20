@@ -24,15 +24,19 @@ function fixture({ projects = 100, runs = 1000, flagged = 0 } = {}) {
 
 // A run API that always reports one stage waiting for an answer and tracks how many reads are in flight.
 function runApi() {
-  const stats = { requests: 0, inflight: 0, peak: 0 };
+  const stats = { requests: 0, dialogs: 0, inflight: 0, peak: 0 };
   const request = async url => {
     stats.requests++;
     stats.peak = Math.max(stats.peak, ++stats.inflight);
     await new Promise(resolve => setImmediate(resolve));
     stats.inflight--;
+    if (url.endsWith('/dialog')) {
+      stats.dialogs++;
+      return {ok:true,json:async()=>[{id:'q1',phase:'autonomous_execution',ts:'2026-01-01T00:00:00Z'}]};
+    }
     const port = Number(new URL(url).port) - 20000;
     const body = url.endsWith('/api/runtime') ? { run_id: String(port), instance_id: `instance-${port}` }
-      : { run_id: String(port), stages: [{ id: 's', name: 's', status: 'awaiting_user_input' }] };
+      : { run_id: String(port), stages: [{ id: 's', name: 's', status: 'awaiting_user_input', updated_at:'2026-01-01T00:00:01Z' }] };
     return { ok: true, json: async () => body };
   };
   return { request, stats };
@@ -88,6 +92,7 @@ async function attentionBurst() {
   }
   assert.ok(stats.peak <= 6, 'More than six run reads were in flight');
   assert.equal(stats.inflight, 0, 'Run reads were left outstanding');
+  assert.equal(stats.dialogs, 200, 'Unchanged requests fetched their dialogs again');
   workspace.close();
   report('attention-burst', { flagged_runs: 200, samples: samples.length, first_ms: first, repeat_p95_ms: percentile(samples, 0.95), peak_inflight_requests: stats.peak, outstanding_after: stats.inflight });
   assert.ok(percentile(samples, 0.95) < 100, 'Attention burst exceeded its 100 ms p95 budget');

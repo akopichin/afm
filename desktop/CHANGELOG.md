@@ -14,3 +14,4 @@
 - Preserve the destination of a clicked notification across AFM host outages.
 - Announce a pending question once across pauses and reconnects, based on its
   dialog identity.
+- Reuse dialog identities between polls to keep large attention queues responsive.
