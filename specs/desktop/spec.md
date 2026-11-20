@@ -36,7 +36,7 @@ The first delivery is a local macOS application. A person opens AFM Desktop.app,
 | Quick provider, model and reasoning chooser | Command M | Ctrl M |
 | Enter / leave dashboard stage focus | F / Escape | F / Escape |
 | Picker, launcher and theme selects | Arrow keys, Enter, Escape; tab restores normal focus traversal | Same |
-| Close report dialog, then navigate | Option H / J / K | Alt H / J / K |
+| Close report dialog, then navigate | Command H / J / K | Ctrl H / J / K |
 | Resize assistant at focused divider | Left / Right, Home / End; pointer drag from left edge | Same |
 
 ## Visual references

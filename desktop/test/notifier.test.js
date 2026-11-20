@@ -146,3 +146,15 @@ test('notification preferences default to questions, approvals and decisions and
   for (const bad of [true, { enabled: 'yes', kinds: ALL.kinds }, { enabled: true, kinds: { question: true } }])
     await assert.rejects(prefs.set({ notifications: bad }), /Invalid preference/);
 });
+
+test('a watch that claims a request owns the banner but the Dock still bounces', async t => {
+  const dock = [];
+  const { notifier, shown } = await setup(t, { claimed: () => true, dock: {
+    setPending: pending => dock.push(pending ? 'dot' : 'clear'),
+    bounce: () => dock.push('bounce'),
+  }});
+  await notifier.onSnapshot(snapshot([]));
+  await notifier.onSnapshot(snapshot([item('claimed')]));
+  assert.deepEqual(dock, ['dot', 'bounce']);
+  assert.equal(shown.length, 0);
+});

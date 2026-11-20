@@ -61,8 +61,10 @@ export class Notifier {
       await writeJSON(this.file, Object.fromEntries(this.seen));
       // Questions already pending when Desktop starts are in the queue, not a burst of banners.
       if (first) return;
-      const banners = fresh.filter(item => this.#wanted(item, snapshot));
-      if (banners.some(item => DOCK_KINDS.has(item.kind))) this.dock?.bounce();
+      const wanted = fresh.filter(item => this.#wanted(item));
+      // A watch owns the banner, not the Dock signal.
+      if (wanted.some(item => DOCK_KINDS.has(item.kind))) this.dock?.bounce();
+      const banners = wanted.filter(item => !this.claimed(item, snapshot));
       for (const item of banners.slice(0, BANNER_LIMIT)) this.#announce(item, snapshot);
       if (banners.length > BANNER_LIMIT) this.show({ title: 'AFM needs you', body: `${banners.length - BANNER_LIMIT} more requests are waiting.` });
     });
@@ -76,7 +78,7 @@ export class Notifier {
     this.dockPending = pending;
   }
 
-  #wanted(item, snapshot) { return this.settings.enabled && this.settings.kinds[item.kind] && !this.visible(item) && !this.claimed(item, snapshot); }
+  #wanted(item) { return this.settings.enabled && this.settings.kinds[item.kind] && !this.visible(item); }
 
   #announce(item, snapshot) {
     const runs = snapshot.projects.flatMap(project => project.runs.map(run => ({ project, run })));
