@@ -50,6 +50,9 @@ test('different launches racing on one request id never merge', fast, async t =>
   assert.equal(results[1].reason.code, 'request_conflict');
   const equal = await Promise.all([desktop.runs.start(request), desktop.runs.start({ ...request })]);
   assert.equal(equal[0].launch_id, equal[1].launch_id);
+  const ready = await desktop.runs.waitForLaunch(equal[0]);
+  assert.equal(ready.state, 'ready');
+  assert.ok(ready.run_id);
 });
 
 test('a retry of an accepted request sends what was accepted, whatever changed since', fast, async t => {
