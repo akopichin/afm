@@ -169,6 +169,10 @@ handle('runs:cancel', async (id, instanceId) => {
   instanceId ??= (await desktop.host.runs()).find(row=>row.run_id===id)?.instance_id;
   return desktop.runs.cancel(id, instanceId);
 });
+handle('runs:resume', async (id, instanceId, confirmHostRestart) => {
+  try { return await desktop.runs.resume(id, instanceId, confirmHostRestart === true); }
+  catch (error) { if (error.code === 'external_host') return {status:'external_host', message:error.message}; throw error; }
+});
 handle('runs:release', (id, instanceId) => desktop.runs.release(id, instanceId));
 handle('runs:attach', endpoint => desktop.runs.attach(endpoint));
 registerAssistantIpc(handle, assistant, event => window?.webContents.send('assistant:event', event));

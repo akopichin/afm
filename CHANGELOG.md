@@ -9,6 +9,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 - Publish AFM Desktop for macOS and Linux (Apple Silicon/arm64 and x64) from separate `ds-vMAJOR.MINOR.PATCH` tags. Each release includes the bundled AFM executable and SHA-256 checksums. See `docs/releases.md`.
 - Show the running AFM Desktop version next to Settings.
+- Continue an interrupted Desktop run in its existing worktree from the run tab.
 
 ### Fix:
 

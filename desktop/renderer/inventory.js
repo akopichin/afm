@@ -10,11 +10,11 @@ function uiRunState(run,kind){
   return kind==='approval'?'review':kind==='question'?'question':'running';
 }
 function runSignature(run,state,live){
-  return [run.key,run.name,run.origin,run.mode,run.state,state,run.can.open,run.can.cancel,run.can.release,live?.handle,live?.stageId,live?.url,live?.title].join('|');
+  return [run.key,run.name,run.origin,run.mode,run.state,run.status,state,run.can.open,run.can.cancel,run.can.release,run.can.resume,live?.handle,live?.stageId,live?.url,live?.title].join('|');
 }
 function toRun(run,state,signature,live){
   return {id:encodeURIComponent(run.key),key:run.key,rawId:run.runId,instance:run.instanceId,flow:run.name||run.runId,
-    source:run.origin==='desktop'?'Desktop':'Terminal',mode:run.mode,state,hostState:run.state,can:run.can,live:Boolean(live),liveStage:live||null,signature};
+    source:run.origin==='desktop'?'Desktop':'Terminal',mode:run.mode,state,status:run.status,hostState:run.state,can:run.can,live:Boolean(live),liveStage:live||null,signature};
 }
 // Runs whose folder is not on Home still show up, so nothing the host knows about is invisible.
 function externalProjects(runs){

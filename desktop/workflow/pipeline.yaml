@@ -1,14 +1,18 @@
 schema_version: 2
 name: desktop-dev
-version: 0.3.1
+version: 0.4.0
 description: Spec-driven Electron delivery in an existing Desktop worktree
 entrypoint: flow.yaml
 agents: agents.yaml
+resources: [review.md]
 roles:
   writer: {command: desktop-dev-writer}
   review_runtime: {command: desktop-dev-review-runtime, profile: desktop-dev-review-runtime}
   review_interface: {command: desktop-dev-review-interface, profile: desktop-dev-review-interface}
   review_integrations: {command: desktop-dev-review-integrations, profile: desktop-dev-review-integrations}
+  escalation_architect: {command: desktop-dev-escalation-architect, profile: desktop-dev-escalation-architect}
+  escalation_writer: {command: desktop-dev-escalation-writer, profile: desktop-dev-escalation-writer}
+  escalation_verifier: {command: desktop-dev-escalation-verifier, profile: desktop-dev-escalation-verifier}
   verifier: {command: desktop-dev-verify}
 requirements:
   collaboration: true

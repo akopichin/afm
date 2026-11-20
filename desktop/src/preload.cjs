@@ -15,6 +15,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   savePipelineOptions:input=>ipcRenderer.invoke('pipeline-options:save',input),
   start:args=>ipcRenderer.invoke('runs:start',args),
   cancel:(id,instance)=>ipcRenderer.invoke('runs:cancel',id,instance),
+  resume:(id,instance,confirm=false)=>ipcRenderer.invoke('runs:resume',id,instance,confirm),
   release:(id,instance)=>ipcRenderer.invoke('runs:release',id,instance),
   attach:endpoint=>ipcRenderer.invoke('runs:attach',endpoint),
   version:()=>ipcRenderer.invoke('app:version'),

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, writeFile, access, mkdir, realpath } from 'node:fs/promises';
+import { readFile, writeFile, access, mkdir, realpath, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -53,6 +53,49 @@ test('an empty folder becomes a project and one request id starts one run', fast
   const ended = await eventually(async () => (await desktop.runs.list()).find(r => r.key === run.key && r.state === 'finished'), { what: 'cancelled run' });
   assert.equal(ended.can.open, false);
   await assert.rejects(desktop.runs.open(run.runId, run.instanceId), /unavailable/);
+});
+
+test('Continue run reuses a saved worktree and pipeline snapshot after Desktop restarts', fast, async t => {
+  const ctx = await tempHome(t);
+  const root = await makeProject(ctx.home, 'repo', {git:true});
+  const library = path.join(ctx.home, 'library');
+  await mkdir(library);
+  await writeFile(path.join(library, 'pipeline.yaml'), 'schema_version: 2\nname: resume\nversion: 1.0.0\nentrypoint: flow.yaml\n');
+  await writeFile(path.join(library, 'flow.yaml'), sleepFlow('resume', 60));
+  const desktop = await open(t, ctx);
+  const project = await desktop.projects.add(root);
+  const source = await desktop.sources.add({location:library});
+  const worktree = 'desktop-resume-a1b2c';
+  await desktop.runs.start({requestId:'original', projectId:project.id, kind:'Pipeline', file:source.entries[0].id,
+    explicit:'worktree', worktree, task:'initial request'});
+  const first = await eventually(async () => (await active(desktop))[0], {what:'original run'});
+  await eventually(async () => {
+    const status = await fetch(new URL('/api/status', first.apiUrl)).then(response=>response.json()).catch(()=>null);
+    return status?.stages.some(stage=>stage.id === 'wait' && stage.status === 'running');
+  }, {what:'original stage running'});
+  const binding = path.join(root, '.afm', 'pipelines', 'runs', first.runId + '.json');
+  const snapshot = JSON.parse(await readFile(binding, 'utf8')).content_sha256;
+  await desktop.runs.cancel(first.runId, first.instanceId);
+  await eventually(async () => (await desktop.runs.forProject(project.id)).find(run=>run.can.resume), {what:'continuable run'});
+  await desktop.close();
+  await writeFile(path.join(library, 'flow.yaml'), sleepFlow('different-flow', 60).replace('id: wait', 'id: changed'));
+
+  const reopened = await open(t, ctx);
+  const pending = () => reopened.runs.resume(first.runId, first.instanceId);
+  const newer = path.join(root, '.afm', 'runs', worktree + '-29991231-235959-abcd');
+  await mkdir(newer);
+  await assert.rejects(pending(), {code:'run_changed'});
+  await rmdir(newer);
+  const [continued, repeated] = await Promise.all([pending(), pending()]);
+  assert.equal(continued.launch_id, repeated.launch_id);
+  assert.equal(continued.run_id, first.runId);
+  assert.notEqual(continued.instance_id, first.instanceId);
+  assert.equal(JSON.parse(await readFile(binding, 'utf8')).content_sha256, snapshot);
+  const runs = await reopened.runs.forProject(project.id);
+  assert.deepEqual(runs.map(run=>[run.runId, run.instanceId]), [[first.runId, continued.instance_id]]);
+  assert.equal(git(path.join(root, '.worktrees', worktree), 'branch', '--show-current'), worktree);
+  await reopened.runs.cancel(first.runId, continued.instance_id);
+  await eventually(async () => (await reopened.runs.forProject(project.id)).some(run=>run.can.resume), {what:'resumed process exit'});
 });
 
 test('a project registered after the host started restarts the host and keeps running runs', fast, async t => {

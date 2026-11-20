@@ -50,6 +50,12 @@ uses AFM's existing override behavior. The Start run button shows a spinner and 
 pipeline and waits for AFM to report readiness. The launcher offers the launch log when an early failure occurs.
 Missing environment variable names from preflight are shown in the launcher.
 
+To continue the latest interrupted or failed Desktop run in its saved worktree,
+open the run's tab and choose **Continue run**. Desktop reuses the saved launch
+source and worktree. A pipeline continues from its recorded snapshot, and the
+tab follows the new process instance of the same run. **New run** opens the
+launcher for a separate launch.
+
 ## Run the overnight development flow
 
 The pipeline package is [desktop/workflow](workflow/pipeline.yaml), with its stage
@@ -57,11 +63,26 @@ graph in [flow.yaml](workflow/flow.yaml). The stages are `plan → implement →
 The plan picks the relevant subsystems for the supplied task. Each stage can
 pause for a reply in the run dashboard. A fresh run reads the current package
 from the configured local folder. Resuming continues with its original snapshot.
-Three required AFM helper profiles review the implementation before the
-documentation stage.
+The implementation author spawns independent reviewers and owns their
+dispositions before the documentation stage. Repeated rejections use the
+bounded [review and escalation protocol](workflow/review.md).
 The `doc` stage updates this guide and
 [the Desktop spec](../specs/desktop/spec.md) from the implemented behavior and
-check results. Delivery builds the candidate and runs final verify.
+check results. The `deliver` stage builds the unpacked Electron app with the
+bundled AFM binary, runs checks, tests, performance workloads and package
+inspection, and submits the candidate to the final Codex verifier. It commits
+the candidate in the run’s worktree and records its full SHA, branch, bundle
+path, test results, and outstanding native checks in `execution_summary.md`.
+
+Once `deliver` passes, ask for the merge and Desktop release with the candidate
+and version bump. On the host, check the worktree and candidate SHA in the
+release handoff, complete any outstanding native checks, merge the candidate
+into `main`, and push it to `origin/main`. Check that the published main tip is
+the intended release commit, then run `make ds-release-patch`,
+`make ds-release-minor`, or `make ds-release-major` as requested. Wait for the
+`ds-v*` workflow to publish the release and update the Homebrew cask. The run’s
+completion leaves the candidate ready for this request. See the
+[Desktop release guide](../docs/releases.md#afm-desktop-releases).
 
 From the primary AFM checkout, with the dedicated .worktrees/desktop checkout in place, Docker running, Node 22.12+ and AFM available on the Mac:
 
