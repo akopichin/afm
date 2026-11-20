@@ -35,19 +35,23 @@ window.addEventListener('DOMContentLoaded', () => {
     else window.addEventListener('message', e => { if (e.source === parent) command(e.data); });
     sync();
   }
-  const actions=ipc?{KeyM:'model',KeyL:'live'}:{KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant',KeyL:'live'};
   document.addEventListener('keydown',e=>{
     if(e.isComposing||e.repeat||document.querySelector('dialog[open]'))return;
-    if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
-      const navigate=actions[e.code];
+    if(!ipc&&e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
+      const navigate={KeyA:'assistant',KeyL:'live'}[e.code];
       if(navigate){e.preventDefault();send({navigate})}
       return;
     }
     // Command on a Mac, Control elsewhere; the other key keeps its text-editing meaning.
     const primary=/Mac/i.test(navigator.platform)?e.metaKey&&!e.ctrlKey:e.ctrlKey&&!e.metaKey;
     if(!primary||e.altKey)return;
-    const key=e.key.toLowerCase();
-    if(!ipc&&!e.shiftKey&&key===','){e.preventDefault();send({navigate:'settings'});return}
-    if(e.shiftKey?key==='enter':!ipc&&key==='k'){e.preventDefault();send(key==='k'?'switch-project':'new-run')}
+    if(e.shiftKey){
+      const message=e.key==='Enter'?'new-run':!ipc&&e.code==='KeyK'?'switch-project':null;
+      if(message){e.preventDefault();send(message)}
+    }else if(!ipc){
+      const navigate={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model'}[e.code]
+        ?? (e.key===','?'settings':/^[1-9]$/.test(e.key)?Number(e.key):null);
+      if(navigate){e.preventDefault();send({navigate})}
+    }
   });
 });

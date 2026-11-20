@@ -82,14 +82,21 @@
   }
   document.addEventListener('keydown',e=>{
     if(e.isComposing||e.repeat||document.querySelector('dialog[open]'))return;
-    if(parent!==window&&e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
-      const navigate={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant'}[e.code];
+    if(parent===window)return;
+    if(e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
+      const navigate={KeyA:'assistant',KeyL:'live'}[e.code];
       if(navigate){e.preventDefault();parent.postMessage({navigate},'*')}
       return;
     }
     const primary=/Mac/i.test(navigator.platform)?e.metaKey&&!e.ctrlKey:e.ctrlKey&&!e.metaKey;
-    if(parent===window||!primary||e.altKey)return;
-    const key=e.key.toLowerCase();
-    if(e.shiftKey?key==='enter':key==='k'){e.preventDefault();parent.postMessage(key==='k'?'switch-project':'new-run','*')}
+    if(!primary||e.altKey)return;
+    if(e.shiftKey){
+      const message=e.key==='Enter'?'new-run':e.code==='KeyK'?'switch-project':null;
+      if(message){e.preventDefault();parent.postMessage(message,'*')}
+    }else{
+      const navigate={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model'}[e.code]
+        ?? (e.key===','?'settings':/^[1-9]$/.test(e.key)?Number(e.key):null);
+      if(navigate){e.preventDefault();parent.postMessage({navigate},'*')}
+    }
   });
 })();

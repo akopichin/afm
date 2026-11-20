@@ -105,7 +105,10 @@ export function electronBackend({ electron, window, shortcut, blocked = () => []
       page.on('closed', () => { pages.delete(page); window()?.contentView.removeChildView(view); });
       view.webContents.on('before-input-event', (event, input) => {
         const action = shortcutAction(input);
-        if (action) { event.preventDefault(); window()?.webContents.focus(); shortcut(action); }
+        if (!action) return;
+        event.preventDefault();
+        if (typeof action !== 'number') window()?.webContents.focus();
+        shortcut(action);
       });
       attach(page);
       // A fresh WebContentsView has an empty URL, which the pinned MCP excludes from its page list.

@@ -1,7 +1,9 @@
 'use strict';
 const altKey=/Mac/i.test(navigator.platform)?'⌥':'Alt+';
 $('assistant-toggle').title='AFM Assistant · '+altKey+'A';
-$('home').title='All projects · '+altKey+'H';
+$('home').title=`All projects · ${modKey} H`;
+$('home').setAttribute('aria-keyshortcuts',`${ariaModKey}+H`);
+$('next-notice').setAttribute('aria-keyshortcuts',`${ariaModKey}+J`);
 let cursorNotice=null;
 let focusedFrame=null;
 let pendingStage=null;
@@ -33,8 +35,8 @@ function paintQueue(){
   $('attention').hidden=!items.length;
   if(!items.length)closeQueue();
   $('notice-count').textContent=items.length+'';
-  $('next-notice').title='Next notification · '+altKey+'J';
-  $('notice-list').innerHTML=`<div class="queue-title"><strong>Notifications</strong><kbd>${altKey}J / K</kbd></div>`+items.map(({id,p,r,text,stageName})=>`<button data-notice="${esc(id)}"><span><strong>${esc(p.name)}</strong> / ${esc(r.flow)}</span><small>${esc(text)}${stageName?' · '+esc(stageName):''}</small></button>`).join('');
+  $('next-notice').title=`Next notification · ${modKey} J`;
+  $('notice-list').innerHTML=`<div class="queue-title"><strong>Notifications</strong><kbd>${modKey} J / K</kbd></div>`+items.map(({id,p,r,text,stageName})=>`<button data-notice="${esc(id)}"><span><strong>${esc(p.name)}</strong> / ${esc(r.flow)}</span><small>${esc(text)}${stageName?' · '+esc(stageName):''}</small></button>`).join('');
 }
 function closeFocus(){
   dashboardMessage(focusedFrame,'exit-stage-focus');
@@ -82,8 +84,17 @@ function stepNotice(direction){
   }
   jumpTo(target||(direction>0?items[0]:items.at(-1)));
 }
+function runTab(number){
+  const tabs=document.querySelectorAll('.run-tabs .tab[data-run]:not([data-view])');
+  return tabs.length>1?tabs[number-1]:undefined;
+}
 function navigateApp(command){
   if(document.querySelector('dialog[open]'))return;
+  if(Number.isInteger(command)){
+    const tab=runTab(command);
+    if(tab&&!tab.classList.contains('active')){closeQueue();closeFocus();tab.click()}
+    return;
+  }
   if(command==='assistant'){
     const open=$('assistant').hidden||Boolean(focusedFrame);
     closeQueue();closeFocus();toggleChat(open);return;
@@ -120,8 +131,14 @@ document.addEventListener('keydown',e=>{
   if(e.defaultPrevented||e.isComposing||e.repeat||document.querySelector('dialog[open]'))return;
   if(e.key==='Escape'&&!$('notice-list').hidden){closeQueue();$('all-notices').focus();return}
   if(e.altKey&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey){
-    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyA:'assistant',KeyL:'live'}[e.code];
+    const command={KeyA:'assistant',KeyL:'live'}[e.code];
     if(command){e.preventDefault();navigateApp(command)}return;
+  }
+  if(primary(e)&&!e.altKey&&!e.shiftKey){
+    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model'}[e.code]
+      ?? (/^[1-9]$/.test(e.key)&&runTab(Number(e.key))?Number(e.key):null);
+    if(command){e.preventDefault();navigateApp(command)}
+    return;
   }
   if(e.target.closest('input,textarea,select,[contenteditable="true"]')||e.ctrlKey||e.metaKey||e.shiftKey)return;
   const {r,tab}=selection(),frame=dashboards.get(r?.id);
@@ -152,7 +169,7 @@ onDashboardMessage((frame,msg)=>{
     document.body.classList.toggle('desktop-focus',Boolean(focusedFrame));
     if(focusedFrame)frame.focus();
   }
-  if(['home','next','previous','model','assistant','live','settings'].includes(msg?.navigate))navigateApp(msg.navigate);
+  if(Number.isInteger(msg?.navigate)||['home','next','previous','model','assistant','live','settings'].includes(msg?.navigate))navigateApp(msg.navigate);
   if(msg==='stage-ready')deliverStage();
   if(msg==='stage-opened')pendingStage=null;
 });

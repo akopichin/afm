@@ -2,21 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
-import { loadShell, primaryMods, tick } from './shell-support.js';
+import { fakeNative, loadShell, primaryMods, projectRow, runRow, snapshotOf, tick } from './shell-support.js';
 import { dashboardShortcutMessage } from '../src/shortcuts.js';
 
 const PLATFORMS = ['MacIntel', 'Linux x86_64'];
 
 test('Electron reserves only the Desktop navigation bindings from the run view', () => {
   const key = (input, platform = 'darwin') => dashboardShortcutMessage({type: 'keyDown', ...input}, platform);
-  for (const [code, name] of [['KeyH','home'], ['KeyJ','next'], ['KeyK','previous'], ['KeyA','assistant']]) {
-    assert.deepEqual(key({alt:true, code, key:'composed character'}), {navigate:name});
+  for (const [code, name] of [['KeyH','home'], ['KeyJ','next'], ['KeyK','previous'], ['KeyM','model']]) {
+    assert.deepEqual(key({meta:true, code}), {navigate:name});
   }
-  assert.equal(key({meta:true, key:'k'}), 'switch-project');
+  assert.deepEqual(key({alt:true, code:'KeyA'}), {navigate:'assistant'});
+  assert.deepEqual(key({meta:true, key:'3'}), {navigate:3});
+  assert.equal(key({meta:true, shift:true, code:'KeyK'}), 'switch-project');
   assert.deepEqual(key({meta:true, key:','}), {navigate:'settings'});
-  assert.equal(key({control:true, key:'k'}, 'linux'), 'switch-project');
-  for (const input of [{control:true,key:'k'}, {meta:true,key:'f'}, {alt:true,code:'KeyM'},
-    {meta:true,key:'k',isAutoRepeat:true}, {alt:true,code:'KeyH',isComposing:true}]) assert.equal(key(input), null);
+  assert.equal(key({control:true, shift:true, code:'KeyK'}, 'linux'), 'switch-project');
+  for (const input of [{control:true,code:'KeyK'}, {meta:true,key:'f'}, {alt:true,code:'KeyM'},
+    {meta:true,code:'KeyK',isAutoRepeat:true}, {meta:true,code:'KeyH',isComposing:true},
+    {meta:true,key:'0'}, {meta:true,key:'2',shift:true}]) assert.equal(key(input), null);
 });
 
 for (const platform of PLATFORMS) {
@@ -28,20 +31,67 @@ for (const platform of PLATFORMS) {
     key('Comma', ',', primary); assert.equal(get('settings').open,false);
     key('KeyA', 'a', { altKey: true }); assert.equal(d.activeElement.id, 'chat-input');
     key('KeyA', 'a', { altKey: true }); assert.equal(get('assistant').hidden, true);
-    key('KeyM', 'm', { altKey: true }); assert.ok(get('quick-model').open);
+    key('KeyM', 'm', primary); assert.ok(get('quick-model').open);
     get('quick-model').close();
-    key('KeyK', 'k', primary); assert.ok(get('picker').open);
-    key('KeyK', 'k', primary); assert.equal(get('picker').open, false, 'the picker shortcut toggles');
+    key('KeyK', 'k', { ...primary, shiftKey: true }); assert.ok(get('picker').open);
+    key('KeyK', 'k', { ...primary, shiftKey: true }); assert.equal(get('picker').open, false, 'the picker shortcut toggles');
     key('Enter', 'Enter', { ...primary, shiftKey: true }); assert.ok(get('launch').open); get('launch').close();
-    key('KeyJ', 'j', { altKey: true }); await tick(); assert.match(w.location.hash, /afm\/review/);
-    key('KeyJ', 'j', { altKey: true }); await tick(); assert.match(w.location.hash, /delivery-check/);
-    key('KeyK', 'k', { altKey: true }); await tick(); assert.match(w.location.hash, /afm\/review/);
+    key('KeyJ', 'j', primary); await tick(); assert.match(w.location.hash, /afm\/review/);
+    key('KeyJ', 'j', primary); await tick(); assert.match(w.location.hash, /delivery-check/);
+    key('KeyK', 'k', primary); await tick(); assert.match(w.location.hash, /afm\/review/);
     const frame = d.querySelector('#dashboard-host iframe:not([hidden])');
     const fromRun = data => w.dispatchEvent(new w.MessageEvent('message', { source: frame.contentWindow, data }));
     fromRun({ type: 'stage-focus', active: true }); assert.ok(d.body.classList.contains('desktop-focus'));
     fromRun({ navigate: 'assistant' }); assert.equal(get('assistant').hidden, false);
     assert.equal(d.body.classList.contains('desktop-focus'), false);
     fromRun({ navigate: 'home' }); await tick(); assert.equal(w.location.hash, '');
+  });
+
+  test(`numbered shortcuts select run tabs across views (${platform})`, async t => {
+    const first = runRow('first');
+    const live = { runKey: first.key, stageId: 'stage', handle: 'live-first' };
+    const native = fakeNative(snapshotOf([projectRow('a', [
+      first,
+      runRow('second'),
+      runRow('third'),
+    ])], [], { stageBrowsers: [live] }));
+    native.onLiveShortcut = listener => { native.emitLiveShortcut = listener; };
+    const { w, d, get, key } = await loadShell(t, { demo: false, platform, native });
+    const primary = primaryMods(platform);
+    get('finish-setup').click();
+    await tick();
+    assert.equal(key('Digit1', '1', primary).defaultPrevented, false, 'Home has no run tabs');
+    d.querySelector('#screen .tile').click();
+    await tick();
+    const tabs = [...d.querySelectorAll('.run-tabs button:not([data-view])')];
+    assert.deepEqual(tabs.map(tab => tab.getAttribute('aria-keyshortcuts')),
+      [1, 2, 3].map(number => `${platform.startsWith('Mac') ? 'Meta' : 'Control'}+${number}`));
+    const selected = () => d.querySelector('.run-tabs .active').textContent;
+    assert.equal(key('Digit1', '1', primary).defaultPrevented, true);
+    await tick();
+    assert.equal(selected(), 'flow-first');
+
+    native.emitDashboard(first.key, { navigate: 2 });
+    await tick();
+    assert.equal(selected(), 'flow-second');
+    native.emitDashboard(first.key, { navigate: 3 });
+    await tick();
+    assert.equal(selected(), 'flow-second', 'hidden dashboards cannot switch tabs');
+
+    d.querySelector('.run-tabs [data-view="live"]').click();
+    await tick();
+    native.emitLiveShortcut(3);
+    await tick();
+    assert.equal(selected(), 'flow-third');
+    assert.equal(key('Digit9', '9', primary).defaultPrevented, false);
+    assert.equal(key('Digit1', '1', { ...primary, repeat: true }).defaultPrevented, false);
+    assert.equal(key('Digit1', '1', { ...primary, isComposing: true }).defaultPrevented, false);
+    assert.equal(key('Digit1', '1', { ...primary, shiftKey: true }).defaultPrevented, false);
+    get('quick').click();
+    assert.equal(key('Digit1', '1', primary).defaultPrevented, false, 'a dialog owns the keyboard');
+    await tick();
+    assert.equal(selected(), 'flow-third');
+    assert.match(w.location.hash, /third/);
   });
 
   test(`shortcuts keep text editing, composition, modals and the other platform's keys intact (${platform})`, async t => {
@@ -51,7 +101,7 @@ for (const platform of PLATFORMS) {
     assert.equal(key('KeyK', 'k', other).defaultPrevented, false, 'the other platform modifier is not our shortcut');
     assert.equal(get('picker').open, false);
     assert.equal(key('Enter', 'Enter', { ...other, shiftKey: true }).defaultPrevented, false);
-    assert.equal(key('KeyK', 'k', { ...primary, shiftKey: true }).defaultPrevented, false);
+    assert.equal(key('KeyJ', 'j', { ...primary, shiftKey: true }).defaultPrevented, false);
     assert.equal(key('KeyJ', 'j', { altKey: true, shiftKey: true }).defaultPrevented, false);
     assert.equal(key('KeyA', 'a', { altKey: true, isComposing: true }).defaultPrevented, false);
     assert.equal(key('KeyA', 'a', { altKey: true, repeat: true }).defaultPrevented, false);
@@ -59,9 +109,9 @@ for (const platform of PLATFORMS) {
     const input = get('chat-input');
     assert.equal(key('KeyF', 'f', {}, input).defaultPrevented, false, 'typing F in a field is text');
     assert.equal(key('KeyK', 'k', other, input).defaultPrevented, false, 'Control-K keeps its meaning in a Mac text field');
-    key('KeyK', 'k', primary); assert.ok(get('picker').open);
+    key('KeyK', 'k', { ...primary, shiftKey: true }); assert.ok(get('picker').open);
     key('KeyA', 'a', { altKey: true }); assert.equal(get('assistant').hidden, false, 'a modal owns the keyboard');
-    key('KeyM', 'm', { altKey: true }); assert.equal(get('quick-model').open, false);
+    key('KeyM', 'm', primary); assert.equal(get('quick-model').open, false);
     get('picker').close();
   });
 }
@@ -90,20 +140,21 @@ for (const platform of PLATFORMS) {
   test(`shortcuts reach the shell from dashboard content (${platform})`, async t => {
     const { posted, press, top } = await loadFrame(t, platform);
     const primary = primaryMods(platform), other = platform.startsWith('Mac') ? { ctrlKey: true } : { metaKey: true };
-    for (const [code, name] of [['KeyH', 'home'], ['KeyJ', 'next'], ['KeyK', 'previous'], ['KeyA', 'assistant'], ['KeyM', 'model']]) {
-      assert.equal(press(code, code.slice(3).toLowerCase(), { altKey: true }).defaultPrevented, true);
+    for (const [code, name] of [['KeyH', 'home'], ['KeyJ', 'next'], ['KeyK', 'previous'], ['KeyM', 'model']]) {
+      assert.equal(press(code, code.slice(3).toLowerCase(), primary).defaultPrevented, true);
       await tick(5);
       assert.deepEqual(posted.pop(), { navigate: name });
     }
-    press('KeyK', 'k', primary); await tick(5); assert.equal(posted.pop(), 'switch-project');
+    press('Digit2', '2', primary); await tick(5); assert.deepEqual(posted.pop(), { navigate: 2 });
+    press('KeyK', 'k', { ...primary, shiftKey: true }); await tick(5); assert.equal(posted.pop(), 'switch-project');
     press('Enter', 'Enter', { ...primary, shiftKey: true }); await tick(5); assert.equal(posted.pop(), 'new-run');
-    for (const event of [press('KeyK', 'k', other), press('KeyK', 'k', { ...primary, shiftKey: true }), press('Enter', 'Enter', primary),
+    for (const event of [press('KeyK', 'k', other), press('KeyJ', 'j', { ...primary, shiftKey: true }), press('Enter', 'Enter', primary),
       press('KeyJ', 'j', { altKey: true, shiftKey: true }), press('KeyJ', 'j', { altKey: true, isComposing: true }), press('KeyJ', 'j', { altKey: true, repeat: true })])
       assert.equal(event.defaultPrevented, false);
     await tick(5);
     assert.deepEqual(posted, []);
     top.window.document.querySelector('iframe').contentDocument.body.insertAdjacentHTML('beforeend', '<dialog open></dialog>');
-    press('KeyJ', 'j', { altKey: true }); await tick(5);
+    press('KeyJ', 'j', primary); await tick(5);
     assert.deepEqual(posted, [], 'a dashboard modal owns the keyboard');
   });
 }

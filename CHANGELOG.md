@@ -3,6 +3,13 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-21
+
+### Improvement:
+
+- Use Command on macOS or Ctrl on Linux for Desktop Home, notification navigation,
+  the quick model chooser, and numbered run tabs. Open the project picker with Shift+K and the same modifier.
+
 ## 2026-11-20
 
 ### Improvement:

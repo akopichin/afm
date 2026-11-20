@@ -155,20 +155,21 @@ test('the Alt+L shortcut hands the keyboard to the native Live view, and native 
   assert.equal(calls.length, 1, 'without a Live tab there is nothing to focus');
 });
 
-test('dashboard shortcuts attach on a page without #root, and Command-K ignores auto-repeat', async t => {
+test('dashboard shortcuts attach on a page without #root, and Command-Shift-K ignores auto-repeat', async t => {
   const dom = new JSDOM('<body><p>error page</p></body>', { runScripts: 'outside-only', pretendToBeVisual: true });
   const messages = [];
   const w = dom.window;
   Object.defineProperty(w, 'parent', { value: { postMessage: m => messages.push(m) } });
+  Object.defineProperty(w.navigator, 'platform', { value: 'MacIntel' });
   w.eval(await readFile(new URL('../src/dashboard-keys.cjs', import.meta.url), 'utf8'));
   w.dispatchEvent(new w.Event('DOMContentLoaded'));
-  w.document.dispatchEvent(new w.KeyboardEvent('keydown', { code: 'KeyJ', altKey: true, bubbles: true }));
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown', { code: 'KeyJ', metaKey: true, bubbles: true }));
   assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ navigate: 'next' }]);
 
   const { d, get, key } = await loadShell(t, { platform: 'MacIntel' });
   get('finish-setup').click();
-  key('KeyK', 'k', { metaKey: true }); assert.ok(get('picker').open);
-  key('KeyK', 'k', { metaKey: true, repeat: true }); assert.ok(get('picker').open, 'a held key does not blink the picker');
+  key('KeyK', 'k', { metaKey: true, shiftKey: true }); assert.ok(get('picker').open);
+  key('KeyK', 'k', { metaKey: true, shiftKey: true, repeat: true }); assert.ok(get('picker').open, 'a held key does not blink the picker');
 });
 
 test('a snapshot that changes a project keeps the keyboard focus on the same control', async t => {

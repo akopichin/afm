@@ -115,7 +115,7 @@ test('notices lead to the exact project, run and stage, in a stable queue, which
   assert.equal(get('attention').hidden, false);
   assert.match(get('notice-list').textContent, /S1/);
   const visit = async code => {
-    key(code, code.slice(3).toLowerCase(), { altKey: true });
+    key(code, code.slice(3).toLowerCase(), { metaKey: true });
     await tick();
     const frame = d.querySelector('#dashboard-host [data-run-key]:not([hidden])');
     // The page announces itself; only then is the stage request delivered.
@@ -139,15 +139,15 @@ test('notices lead to the exact project, run and stage, in a stable queue, which
 
 test('a reply or an outside change updates the queue without duplicates or lost position', async t => {
   const { d, get, key, native } = await openShell(t, twoProjects(queue));
-  key('KeyJ', 'j', { altKey: true }); await tick();
-  key('KeyJ', 'j', { altKey: true }); await tick();
+  key('KeyJ', 'j', { metaKey: true }); await tick();
+  key('KeyJ', 'j', { metaKey: true }); await tick();
   const list = () => [...d.querySelectorAll('#notice-list [data-notice]')].map(el => el.dataset.notice);
   native.publish(twoProjects([queue[0], queue[2]]));
   assert.deepEqual(list(), [queue[0].id, queue[2].id]);
   assert.equal(get('notice-count').textContent, '2');
   native.publish(twoProjects([queue[0], queue[2]]));
   assert.equal(new Set(list()).size, list().length, 'a repeated snapshot duplicated a notice');
-  key('KeyJ', 'j', { altKey: true }); await tick();
+  key('KeyJ', 'j', { metaKey: true }); await tick();
   assert.match(decodeURIComponent(d.defaultView.location.hash), /^#b\//, 'the next stop follows the one that was answered');
   native.publish(twoProjects([]));
   assert.equal(get('attention').hidden, true);

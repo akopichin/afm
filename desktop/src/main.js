@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell, session, WebContentsView } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, session, WebContentsView } from 'electron';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
@@ -318,6 +318,18 @@ function openWindow(){
   return window.loadURL(entry+(demo?'?demo=1':''));
 }
 app.whenReady().then(async () => {
+  if (process.platform === 'darwin') {
+    // Keep the native menu actions available while leaving Command-H and Command-M to Desktop.
+    const macMenu = Menu.getApplicationMenu().items.map(menu => ({
+      label: menu.label,
+      submenu: menu.submenu.items.map(item => {
+        if (item.role === 'hide') return { role: 'hide', accelerator: 'Command+Shift+H' };
+        if (item.role === 'minimize') return { role: 'minimize', accelerator: 'Command+Shift+M' };
+        return item;
+      }),
+    }));
+    Menu.setApplicationMenu(Menu.buildFromTemplate(macMenu));
+  }
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, reply) => reply(false));
   session.defaultSession.webRequest.onBeforeRequest((details, reply) =>
     reply({ cancel: !allowRequest(details.url, { appRoot: path.resolve(root), origins, allowGitHub: demo }) }));
@@ -370,8 +382,9 @@ app.whenReady().then(async () => {
         });
         if (!document.getElementById('assistant').hidden) document.getElementById('close-chat').click();`);
       const shortcuts = [
-        [{code:'KeyJ', alt:true}, 'next'], [{code:'KeyK', alt:true}, 'previous'], [{code:'KeyA', alt:true}, 'assistant'],
-        [{key:'k', meta:true}, 'switch-project', 'picker'], [{key:',', meta:true}, 'settings', 'settings'], [{code:'KeyH', alt:true}, 'home'],
+        [{code:'KeyJ', meta:true}, 'next'], [{code:'KeyK', meta:true}, 'previous'], [{code:'KeyA', alt:true}, 'assistant'],
+        [{code:'KeyM', meta:true}, 'model', 'quick-model'],
+        [{code:'KeyK', meta:true, shift:true}, 'switch-project', 'picker'], [{key:',', meta:true}, 'settings', 'settings'], [{code:'KeyH', meta:true}, 'home'],
       ];
       const dispatch = input => {
         let prevented = false;

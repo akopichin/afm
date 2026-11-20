@@ -1,5 +1,4 @@
 'use strict';
-const modKey=/Mac/i.test(navigator.platform)?'⌘':'Ctrl';
 const gitModes={worktree:'New worktree',branch:'New branch',current:'Current checkout'};
 const option=(v,t,selected)=>`<option value="${esc(v)}"${selected?' selected':''}>${esc(t)}</option>`;
 const gitOptions=selected=>Object.entries(gitModes).map(([v,t])=>option(v,t,v===selected)).join('');
@@ -392,11 +391,13 @@ function drawSettings(){
     body.innerHTML=tabs+`<label>Default workspace for Git projects<select id="default-git">${gitOptions(state.gitDefault)}</select></label>
     <p class="muted">A flow’s workspace preference takes precedence. You can change it for an individual run in the launcher.</p>
     <div class="setting-row"><span>Settings</span><kbd>${modKey} ,</kbd></div>
-    <div class="setting-row"><span>All projects</span><kbd>Alt H</kbd></div>
-    <div class="setting-row"><span>Next / previous notification</span><kbd>Alt J / K</kbd></div>
+    <div class="setting-row"><span>All projects</span><kbd>${modKey} H</kbd></div>
+    <div class="setting-row"><span>Next / previous notification</span><kbd>${modKey} J / K</kbd></div>
+    <div class="setting-row"><span>Switch project</span><kbd>${modKey} Shift K</kbd></div>
+    <div class="setting-row"><span>Switch run tab</span><kbd>${modKey} 1–9</kbd></div>
     <div class="setting-row"><span>Stage focus</span><kbd>F · Esc</kbd></div>
     <div class="setting-row"><span>Open / close assistant</span><kbd>Alt A</kbd></div>
-    <div class="setting-row"><span>Assistant model</span><kbd>Alt M</kbd></div>
+    <div class="setting-row"><span>Assistant model</span><kbd>${modKey} M</kbd></div>
     <div class="setting-row"><span>Quick launch</span><kbd>${modKey} Shift Enter</kbd></div>`;
     $('default-git').onchange=e=>{
       state.gitDefault=e.target.value;save();
@@ -662,7 +663,8 @@ $('quick-model-form').onsubmit=e=>{
 };
 $('chat-model').onclick=()=>openSettings();
 $('quick-model-key').onclick=showQuickModel;
-$('quick-model-key').textContent=/Mac/i.test(navigator.platform)?'⌥M':'Alt+M';
+$('quick-model-key').textContent=`${modKey} M`;
+$('quick-model-key').setAttribute('aria-keyshortcuts',`${ariaModKey}+M`);
 if(!state.setup)openSettings(true);
 
 const grip=$('assistant-resizer');

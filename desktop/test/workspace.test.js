@@ -148,17 +148,17 @@ test('only the shell, inline data and opened dashboards are reachable', () => {
 
 test('native view shortcuts follow the platform and never fire during composition or repeat', () => {
   const key = (extra, platform = 'darwin') => shortcutAction({ type: 'keyDown', ...extra }, platform);
-  assert.deepEqual(['KeyH', 'KeyJ', 'KeyK', 'KeyA', 'KeyM'].map(code => key({ alt: true, code })), ['home', 'next', 'previous', 'assistant', 'model']);
-  assert.equal(key({ meta: true, key: 'k' }), 'picker');
+  assert.deepEqual(['KeyH', 'KeyJ', 'KeyK', 'KeyM'].map(code => key({ meta: true, code })), ['home', 'next', 'previous', 'model']);
+  assert.equal(key({ meta: true, shift: true, code: 'KeyK' }), 'picker');
   assert.equal(key({ meta: true, shift: true, key: 'Enter' }), 'launch');
   assert.equal(key({ control: true, key: 'k' }), null, 'Control-K is an editing key on a Mac');
-  assert.equal(key({ control: true, key: 'k' }, 'linux'), 'picker');
-  assert.equal(key({ meta: true, key: 'k' }, 'linux'), null);
+  assert.equal(key({ control: true, code: 'KeyK' }, 'linux'), 'previous');
+  assert.equal(key({ meta: true, code: 'KeyK' }, 'linux'), null);
   assert.equal(key({ control: true, shift: true, key: 'Enter' }, 'win32'), 'launch');
   assert.equal(key({ alt: true, shift: true, code: 'KeyJ' }), null);
   assert.equal(key({ meta: true, alt: true, key: 'k' }), null);
-  assert.equal(key({ alt: true, code: 'KeyJ', isAutoRepeat: true }), null);
-  assert.equal(key({ alt: true, code: 'KeyJ', isComposing: true }), null);
+  assert.equal(key({ meta: true, code: 'KeyJ', isAutoRepeat: true }), null);
+  assert.equal(key({ meta: true, code: 'KeyJ', isComposing: true }), null);
   assert.equal(key({ type: 'keyUp', alt: true, code: 'KeyJ' }), null);
 });
 

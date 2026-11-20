@@ -15,7 +15,10 @@ export class LiveView {
     wc.session.setPermissionRequestHandler((_wc,_permission,reply)=>reply(false));
     wc.on('before-input-event',(event,input)=>{
       const action=shortcutAction(input);
-      if(action){event.preventDefault();window.webContents.focus();shortcut(action)}
+      if (!action) return;
+      event.preventDefault();
+      if (typeof action !== 'number') window.webContents.focus();
+      shortcut(action);
     });
     this.ready=wc.loadFile(file);
     this.view.setVisible(false);

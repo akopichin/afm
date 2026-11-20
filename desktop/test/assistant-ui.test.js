@@ -146,9 +146,9 @@ test('settings show detected providers, supported modes only and the effective f
   assert.deepEqual([...get('profile-effort').options].map(o => o.value), ['default'], 'no reasoning levels without a way to set them');
 });
 
-test('the quick chooser (Alt M) applies provider, model and reasoning through the main process', async t => {
+test('the quick chooser (Command M) applies provider, model and reasoning through the main process', async t => {
   const { w, get, key, assistant } = await openShell(t);
-  key('KeyM', 'm', { altKey: true });
+  key('KeyM', 'm', { metaKey: true });
   await tick();
   get('quick-agent').value = 'codex';
   get('quick-agent').dispatchEvent(new w.Event('change'));
@@ -175,7 +175,7 @@ test('settings and the quick chooser offer the detected models, a default and cu
   await tick();
   assert.equal(assistant.calls.configure.at(-1).model,'sonnet');
   get('settings').close();
-  key('KeyM','m',{altKey:true});
+  key('KeyM','m',{metaKey:true});
   assert.equal(get('quick-model-list').value,'sonnet');
 });
 

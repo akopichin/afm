@@ -41,7 +41,7 @@ export class DashboardViews {
       const message = dashboardShortcutMessage(input);
       if (!message) return;
       event.preventDefault();
-      this.window.webContents.focus();
+      if (typeof message.navigate !== 'number') this.window.webContents.focus();
       this.window.webContents.send('dashboard:event', key, message);
     });
     wc.ipc.on('dashboard:event', (event, message) => {

@@ -16,6 +16,8 @@ if (isMac && navigator.windowControlsOverlay) {
 }
 // The accepted shortcut modifier is Command on Mac and Control elsewhere; the other one keeps its text-editing meaning.
 const primary = e => isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+const modKey = isMac ? '⌘' : 'Ctrl';
+const ariaModKey = isMac ? 'Meta' : 'Control';
 const MAX_DASHBOARDS = 8;
 // Pages are created when first shown; over the limit the oldest one not waiting for a person is closed.
 class DashboardPages extends Map {
@@ -119,7 +121,11 @@ function render(){
   if(!p){renderHome();return}
   const liveTab=r?.live&&tab==='live';
   if(r)remembered.set(p.id,{id:r.id,tab:liveTab?'live':'run'});
-  const tabs=p.runs.map(run=>`<button class="tab ${r===run&&!liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}">${esc(run.flow)}</button>${run.live?`<button class="tab ${r===run&&liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}" data-view="live">◉ Live · ${esc(run.liveStage?.stageId||'live-run')}</button>`:''}`).join('');
+  const tabs=p.runs.map((run,index)=>{
+    const shortcut=p.runs.length>1&&index<9
+      ?` aria-keyshortcuts="${ariaModKey}+${index+1}" title="${modKey} ${index+1}"`:'';
+    return `<button class="tab ${r===run&&!liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}"${shortcut}>${esc(run.flow)}</button>${run.live?`<button class="tab ${r===run&&liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}" data-view="live">◉ Live · ${esc(run.liveStage?.stageId||'live-run')}</button>`:''}`;
+  }).join('');
   const continuing=resumingRuns.has(r?.key);
   const deleting=deletingRuns.has(r?.key);
   const deleteButton=r?.can?.delete
@@ -188,8 +194,9 @@ $('query').onkeydown=e=>{
 };
 $('quick').onclick=showPicker;
 $('home').onclick=()=>{location.hash=''};
-document.querySelector('kbd').textContent=/Mac/i.test(navigator.platform)?'⌘ K':'Ctrl K';
-document.addEventListener('keydown',e=>{if(!e.repeat&&!e.isComposing&&primary(e)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='k'){e.preventDefault();if($('picker').open)$('picker').close();else showPicker()}});
+$('quick').querySelector('kbd').textContent=`${modKey} Shift K`;
+$('quick').setAttribute('aria-keyshortcuts',`${ariaModKey}+Shift+K`);
+document.addEventListener('keydown',e=>{if(!e.repeat&&!e.isComposing&&primary(e)&&e.shiftKey&&!e.altKey&&e.code==='KeyK'){e.preventDefault();if($('picker').open)$('picker').close();else showPicker()}});
 onDashboardMessage((frame,message)=>{
   const {p,r}=selection();
   if(!r||frame!==dashboards.get(r.id)||frame.hidden)return;
