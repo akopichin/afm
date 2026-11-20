@@ -1,6 +1,6 @@
 schema_version: 2
 name: desktop-dev
-version: 0.2.0
+version: 0.3.0
 description: Spec-driven Electron delivery in an existing Desktop worktree
 entrypoint: flow.yaml
 agents: agents.yaml

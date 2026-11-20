@@ -19,18 +19,20 @@ for archives, checksums and upgrades.
 ## Run the overnight development flow
 
 The pipeline package is [desktop/workflow](workflow/pipeline.yaml), with its stage
-graph in [flow.yaml](workflow/flow.yaml). The `doc` stage updates this guide and
+graph in [flow.yaml](workflow/flow.yaml). The stages are `plan → implement → doc → deliver`.
+The plan picks the relevant subsystems for the supplied task. Three required
+AFM helper profiles review the implementation before the documentation stage.
+The `doc` stage updates this guide and
 [the Desktop spec](../specs/desktop/spec.md) from the implemented behavior and
-check results. Three required AFM helper profiles review the delivery candidate
-before final verify. Their findings can send it back for correction.
+check results. Delivery builds the candidate and runs final verify.
 
 From the primary AFM checkout, with the dedicated .worktrees/desktop checkout in place, Docker running, Node 22.12+ and AFM available on the Mac:
 
 ```sh
-caffeinate -i node .worktrees/desktop/desktop/scripts/overnight.js
+caffeinate -i node .worktrees/desktop/desktop/scripts/overnight.js --task "Describe the Desktop change"
 ```
 
-Keep the Mac awake and connected. The wrapper validates the package, starts a fresh desktop-dev run on the existing desktop branch, enables AFM collaboration for the review helpers, prints the local dashboard URL and passes the plan as its initial task. It uses the primary checkout's AFM configuration, Claude OAuth reference and configured Codex login. After all stages finish successfully, it installs native dependencies on the Mac, reruns checks and builds the bundle from the final checkout. Build failures exit with a nonzero status. Run with `--inspect` to validate configuration without starting any agents.
+Keep the Mac awake and connected. The wrapper validates the package, starts a fresh desktop-dev run on the existing desktop branch, enables AFM collaboration for the review helpers, prints the local dashboard URL and passes the supplied text or `@path/to/task.md` as the initial task. It uses the primary checkout's AFM configuration, Claude OAuth reference and configured Codex login. After all stages finish successfully, it installs native dependencies on the Mac, reruns checks and builds the bundle from the final checkout. Build failures exit with a nonzero status. Run with `--inspect` to validate configuration without starting any agents.
 
 ```sh
 open ".worktrees/desktop/desktop/dist/AFM Desktop-darwin-arm64/AFM Desktop.app"

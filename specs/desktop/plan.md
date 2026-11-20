@@ -1,6 +1,6 @@
 # Deliver the first working AFM Desktop on macOS
 
-Use this file as the initial task for desktop/workflow. The behavioral contract is [spec.md](spec.md). Work on the existing desktop branch. Preserve the seed renderer, its screenshots and the shared AFM styles. Implement the real paths from the ordinary application entry point. Keep deterministic sample data behind the explicit demo switch.
+This is the initial task used for the first Desktop delivery. For new work, pass the current task to desktop/workflow. The behavioral contract is [spec.md](spec.md). Work on the existing desktop branch. Preserve the seed renderer, its screenshots and the shared AFM styles. Implement the real paths from the ordinary application entry point. Keep deterministic sample data behind the explicit demo switch.
 
 ## 0. Freeze the starting point
 
@@ -24,7 +24,7 @@ Trace the shipped AFM managed Chrome executable/pipe handshake, pinned chrome-de
 
 ## 5. Performance, independent review and native delivery (DS-09–10)
 
-Complete the performance stage with the explicit workloads and targets in the spec. Record measurements and verify bounded idle work and target reclamation. The three independent reviewers cover runtime/package, UI/shortcuts/performance and assistant/CDP. The dedicated doc stage updates the Desktop README and affected requirements and evidence in the spec. The reviewers are required pre-completion helpers on delivery. Report reproducible findings and keep the worktree read-only during review. The delivery writer resolves findings and keeps the guide and spec current. Run static checks, integration tests, perf, package build and artifact inspection. The final verifier is Codex gpt-6.1-sol. Keep tests headless in Docker. Validate the packaged entry on macOS.
+Measure performance with the explicit workloads and targets in the spec. Record measurements and verify bounded idle work and target reclamation. The three independent reviewers cover runtime/package, UI/shortcuts/performance and assistant/CDP. The reviewers are required pre-completion helpers on implementation. The following doc stage updates the Desktop README and affected requirements and evidence in the spec. Report reproducible findings and keep the worktree read-only during review. The delivery writer resolves findings and keeps the guide and spec current. Run static checks, integration tests, perf, package build and artifact inspection. The final verifier is Codex gpt-6.1-sol. Keep tests headless in Docker. Validate the packaged entry on macOS.
 
 Deliver an app with the same offline dashboard/theme assets and sidecar that tests used. The Mac wrapper reinstalls native dependencies and builds from the final worktree after a successful flow. When changes require a new sidecar, make the wrapper stage the correct native binary and verify its capability before packaging. Never bundle a Linux binary inside the Mac app. Keep CI, publishing and Homebrew setup for the next iteration.
 

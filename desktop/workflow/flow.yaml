@@ -1,9 +1,9 @@
 name: desktop-dev
-description: Deliver AFM Desktop from its accepted Graphite prototype and Desktop spec
+description: Spec-driven development for AFM Desktop
 worktrees: true
 prompt: |
-  Work in the current desktop worktree. Read specs/desktop/spec.md and specs/desktop/plan.md.
-  The accepted renderer and npm run demo are the visual and interaction contract.
+  Work in the current desktop worktree. Read the run task, specs/desktop/spec.md and desktop/README.md.
+  Use the current renderer, Graphite baseline and Desktop spec when relevant to the task.
   Communicate results in Russian. Keep product docs and spec deltas in English.
   Apply approved scope autonomously. Use one writer at a time. Review helpers report findings only.
   For every auto stage write execution_summary.md in $AFM_STAGE_DIR with changed files,
@@ -14,81 +14,47 @@ prompt: |
   change CI/Homebrew, publish, merge, or send real prompts to paid providers during tests.
   Test adapters with deterministic transcripts and use real disposable AFM script runs.
 stages:
-  - id: contract
-    name: Freeze Desktop acceptance
+  - id: plan
+    name: Plan the Desktop change
     agents: [auto]
     command: desktop-dev-writer
     browser: false
     description: |
-      Execute plan milestone 0. Map DS requirements to code/tests and identify preview-only paths.
-      Confirm current branch, runtime versions, available afm serve tools and provider CLI options.
-      Prepare a concise implementation checklist in the stage directory; preserve the accepted UI.
-      npm ci --prefix desktop on this platform. Fix recoverable bootstrap issues before proceeding.
+      Read the task and inspect the affected production paths and their tests. Identify the
+      Desktop requirement IDs in scope and write plan.md in $AFM_STAGE_DIR. Record the
+      requested behavior, affected files, requirement deltas, regression checks and any
+      native acceptance left to the host. Use the subsystem guidance relevant to this task.
+      Install Desktop dependencies with npm ci --prefix desktop. Keep product files unchanged.
     verify: "npm --prefix desktop run check"
-  - id: host
-    name: Real host, project catalog and operations
-    depends_on: [contract]
-    agents: [auto]
+  - id: implement
+    name: Implement and review the Desktop change
+    depends_on: [plan]
     command: desktop-dev-writer
+    agents: [auto]
     browser: false
     description: |
-      Implement milestone 1 (DS-01,02,03). Complete project registration/reconciliation,
-      start, attach, cancel, release, history, source resolution, flow/worktree precedence.
-      Observe real AFM subprocesses in temporary homes. Cover concurrency, restart and identity.
-    verify: "npm --prefix desktop test"
-  - id: workspace
-    name: Production workspace and shortcuts
-    depends_on: [host]
-    agents: [auto]
-    command: desktop-dev-writer
-    browser: false
-    description: |
-      Implement milestone 2 (DS-04,05,06,09). Reuse the approved renderer and dashboard.
-      Real attention targets, focus propagation, lazy tab lifecycle, project files, protocol
-      restrictions, native/external dashboard URL, all shortcuts in shell and child contents.
-      Add regression tests, including a bounded background-work test.
+      Follow the plan in the sibling plan stage directory. Change the affected production paths,
+      preserve their contracts, and add task-specific regressions. Use deterministic provider
+      transcripts, disposable AFM runs or headless browser transport fixtures when relevant.
+      If the task affects performance, measure the affected workload before and after the
+      change and record comparable results. Address actionable helper feedback and record
+      each disposition in execution_summary.md. Note requirement deltas for the doc stage.
+    pre_completion:
+      max_failures: 2
+    assistants:
+      - profile: desktop-dev-review-runtime
+        mode: required
+        trigger: pre_completion
+      - profile: desktop-dev-review-interface
+        mode: required
+        trigger: pre_completion
+      - profile: desktop-dev-review-integrations
+        mode: required
+        trigger: pre_completion
     verify: "npm --prefix desktop run check && npm --prefix desktop test"
-  - id: assistant
-    name: Desktop assistant
-    depends_on: [workspace]
-    agents: [auto]
-    command: desktop-dev-writer
-    browser: false
-    description: |
-      Implement milestone 3 (DS-07). Replace demo replies with actual streaming Codex and Claude
-      adapters, bind allowed MCP operations to desktop scope and configured permissions. Cover
-      reasoning, authentication references, cancel, concurrency, context and persisted settings.
-      Test normal interactive entry points with fake provider processes and progressively delivered output.
-    verify: "npm --prefix desktop test"
-  - id: browser
-    name: Stage browser inside the project
-    depends_on: [assistant]
-    agents: [auto]
-    command: desktop-dev-writer
-    browser: false
-    description: |
-      Implement milestone 4 (DS-08). The runtime feature is a real per-stage Chromium target
-      in a sibling Electron tab. Exercise routing with a headless CDP transport fixture. Read
-      contracts/browser/AGENTS.md first. Preserve standalone AFM behavior; add a minimal opt-in
-      native hook if required. Never give stage agents a desktop-wide debugging endpoint.
-      Demonstrate request, page creation, events, reconnect and teardown in automated tests.
-    verify: "npm --prefix desktop test"
-  - id: performance
-    name: Profile and remove Desktop bottlenecks
-    depends_on: [browser]
-    agents: [auto]
-    command: desktop-dev-writer
-    browser: false
-    description: |
-      Execute the dedicated DS-09 performance plan. Measure before changing code, profile the
-      slowest path, fix it and repeat on the same image. Record p50/p95, fixture sizes, Node/OS,
-      event/backpressure counts and resource ownership in the stage summary. Test idle inventory,
-      attention bursts, streamed chat updates, tab churn and subscriber cleanup. Preserve running
-      agents when hiding a view. Record native-only latency/RSS as pending native measurements.
-    verify: "npm --prefix desktop run perf && npm --prefix desktop test"
   - id: doc
     name: Update the Desktop README and spec
-    depends_on: [performance]
+    depends_on: [implement]
     command: desktop-dev-writer
     agents: [auto]
     browser: false
@@ -104,30 +70,18 @@ stages:
       Check relative links and command examples. Work on documentation only.
     verify: "test -s desktop/README.md && test -s specs/desktop/spec.md && git diff --check"
   - id: deliver
-    name: Resolve findings and package the candidate
+    name: Package and verify the candidate
     depends_on: [doc]
     command: desktop-dev-writer
     agents: [auto]
     browser: false
     description: |
-      Finish milestone 5. Build an unpacked platform application with AFM included. Check
+      Build an unpacked platform application with AFM included. Check
       production entry, offline app assets and dependency versions. Read the doc stage summary
-      and keep the README and spec synchronized if review corrections change behavior or evidence.
-      Address actionable helper feedback, add regression checks and record each disposition.
+      and keep the README and spec synchronized if delivery corrections change behavior or evidence.
+      Read the reviewed implementation summary and confirm its findings have dispositions.
       Commit the result locally in Russian. Record the git revision, artifact path, tests,
       outstanding platform limitations and host smoke steps.
-    pre_completion:
-      max_failures: 2
-    assistants:
-      - profile: desktop-dev-review-runtime
-        mode: required
-        trigger: pre_completion
-      - profile: desktop-dev-review-interface
-        mode: required
-        trigger: pre_completion
-      - profile: desktop-dev-review-integrations
-        mode: required
-        trigger: pre_completion
     verify:
       max_failures: 2
       steps:
@@ -136,7 +90,7 @@ stages:
         - command: desktop-dev-verify
           timeout: 20m
           prompt: |
-            Read the Desktop spec, plan, README, doc summary and review dispositions.
+            Read the Desktop spec, the run plan, README, doc summary and review dispositions.
             Check that the README and affected requirements reflect the delivered behavior.
             Verify the normal entry point, AFM and provider adapters, actual packaged contents,
             all keyboard contracts and evidence. Fail concrete missing behavior or production

@@ -10,7 +10,6 @@ const worktree = path.dirname(path.resolve(desktop));
 const primary = path.dirname(path.dirname(worktree));
 const runs = path.join(primary, '.afm', 'runs');
 const pipeline = path.join(desktop, 'workflow');
-const task = path.join(worktree, 'specs', 'desktop', 'plan.md');
 
 function run(command, args, cwd, capture = false) {
   const result = spawnSync(command, args, {
@@ -44,17 +43,21 @@ async function main() {
   const branch = run('git', ['branch', '--show-current'], worktree, true);
   if (process.platform !== 'darwin' || branch !== 'desktop' || path.basename(path.dirname(worktree)) !== '.worktrees')
     throw Error('Run the Mac launcher from the .worktrees/desktop checkout on branch desktop.');
-  if (process.argv.slice(2).some(arg => arg !== '--inspect')) throw Error('Usage: overnight.js [--inspect]');
+  const args = process.argv.slice(2);
+  const inspect = args.length === 1 && args[0] === '--inspect';
+  if (!inspect && (args.length !== 2 || args[0] !== '--task' || !args[1].trim() || args[1] === '@'))
+    throw Error('Usage: overnight.js --inspect | --task "Desktop change" | --task @/path/to/task.md');
   run('afm', ['--dir', primary, 'pipelines', 'inspect', pipeline], primary, true);
-  if (process.argv.includes('--inspect')) {
-    console.log('Validated desktop-dev for ' + worktree + '\nInitial task: ' + task);
+  if (inspect) {
+    console.log('Validated desktop-dev for ' + worktree);
     return;
   }
+  const task = args[1].startsWith('@') ? '@' + path.resolve(args[1].slice(1)) : args[1];
   const previous = new Set(await runIds());
   const port = await availablePort();
   console.log('Desktop development dashboard: http://127.0.0.1:' + port);
   run('afm', ['--dir', primary, 'run', '--pipeline', pipeline, '--worktree', 'desktop',
-    '--mode', 'dashboard', '--port', port, '--exit-on-fail', '--task', '@' + task], primary);
+    '--mode', 'dashboard', '--port', port, '--exit-on-fail', '--task', task], primary);
   const created = (await runIds()).filter(id => !previous.has(id));
   if (created.length !== 1) throw Error('Could not identify the new Desktop run: ' + created.join(', '));
   const report = JSON.parse(run('afm', ['--dir', primary, 'report', created[0], '--format', 'json'], primary, true));
