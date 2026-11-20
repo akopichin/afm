@@ -39,7 +39,8 @@ settings or `secrets.env` and use references in pipeline options.
 Use **Settings → Environment** to import exported variables from `.zshrc` or
 `.bashrc`, load an optional dotenv file, or set individual variables. Manual
 values take precedence over the file, then the shell, then the app's inherited
-environment. Desktop stores manual values locally and displays their names
+environment. The browser wrapper is prepended to the effective PATH so tools
+found through the selected shell, such as Docker, remain available. Desktop stores manual values locally and displays their names
 only. Restart the AFM host from this tab to apply changes to new runs. Assistant
 requests use the updated settings without restarting Desktop.
 

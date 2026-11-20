@@ -40,7 +40,11 @@ function afmOrigins() {
   return [desktop.host.state.endpoint, ...runs.map(run => run.apiUrl)].filter(Boolean);
 }
 const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined),
-  hostEnv: async () => ({...await environment(), ...((await desktop.prefs.get()).stageBrowser ? await stageBrowsers.hostEnv() : {})})});
+  hostEnv: async () => {
+    const env = await environment();
+    if (!(await desktop.prefs.get()).stageBrowser) return env;
+    return {...env, ...await stageBrowsers.hostEnv(env.PATH)};
+  }});
 const environment = () => desktopEnvironment(desktop.prefs, home);
 const pipelineOptions = new PipelineOptions({home, environment, projects: desktop.projects, sources: desktop.sources,
   serveConfig: desktop.serveConfig, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined)});

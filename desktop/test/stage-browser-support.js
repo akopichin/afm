@@ -46,7 +46,7 @@ export async function stageFixture(t, options = {}) {
   const inspected = [];
   const browsers = new StageBrowsers({
     home, graceMs: 150, helloMs: 400, product: 'Chrome/Fixture', ...options,
-    launcher: { node: process.execPath, script: new URL('../src/stage-browser/companion-main.js', import.meta.url).pathname },
+    launcher: { node: process.execPath, script: new URL('../src/stage-browser/companion-main.js', import.meta.url).pathname, mcp: options.mcp },
     createBackend: entry => { const backend = new FakeBackend(); backends.set(entry.key, backend); return backend; },
     inspect: async (entry, runs) => { inspected.push(entry.key); return options.inspect?.(entry, runs) ?? null; },
   });

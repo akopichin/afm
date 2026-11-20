@@ -49,8 +49,10 @@ async function attach(client) {
 }
 
 test('the host environment points runs at an executable wrapper and a private broker file', async t => {
-  const fixture = await stageFixture(t);
-  const env = await fixture.browsers.hostEnv();
+  const fixture = await stageFixture(t, {mcp: {node: process.execPath, script: 'unused-mcp.js'}});
+  const importedPath = path.join(fixture.home, 'imported-shell-bin');
+  const env = await fixture.browsers.hostEnv(importedPath);
+  assert.deepEqual(env.PATH.split(path.delimiter), [path.dirname(fixture.wrapper), importedPath]);
   assert.equal(env.AFM_CHROME_EXECUTABLE, fixture.wrapper);
   assert.ok((await stat(fixture.wrapper)).mode & 0o100, 'AFM preflight needs an executable file');
   assert.equal((await stat(brokerFile(fixture.home))).mode & 0o077, 0, 'the broker file holds the token');

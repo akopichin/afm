@@ -47,10 +47,10 @@ export class StageBrowsers extends EventEmitter {
   }
 
   // The environment that makes runs of the host Desktop starts use this broker for their browser stages.
-  async hostEnv() {
+  async hostEnv(basePath = process.env.PATH) {
     const chrome = await this.start();
     // The shipped chrome-devtools-mcp goes first on PATH so AFM finds it without any external install.
-    const searchPath = this.mcpWrapper ? { PATH: [path.dirname(this.mcpWrapper), process.env.PATH].filter(Boolean).join(path.delimiter) } : {};
+    const searchPath = this.mcpWrapper ? { PATH: [path.dirname(this.mcpWrapper), basePath].filter(Boolean).join(path.delimiter) } : {};
     return { AFM_CHROME_EXECUTABLE: chrome, ...searchPath };
   }
 
