@@ -176,7 +176,7 @@ func newRunCmdWith(deps runDeps) *cobra.Command {
 
 			// Before the pipeline or flow is read: a contradictory request must create nothing.
 			if noWorktree && worktreeName != "" {
-				return fmt.Errorf("--no-worktree and --worktree cannot be used together")
+				return errors.New("--no-worktree and --worktree cannot be used together")
 			}
 
 			var f *flow.Flow
