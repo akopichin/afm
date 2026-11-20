@@ -11,6 +11,8 @@ for (const platform of PLATFORMS) {
     const { w, d, get, key } = await loadShell(t, { platform });
     const primary = primaryMods(platform);
     get('finish-setup').click();
+    key('Comma', ',', primary); assert.ok(get('settings').open);
+    key('Comma', ',', primary); assert.equal(get('settings').open,false);
     key('KeyA', 'a', { altKey: true }); assert.equal(d.activeElement.id, 'chat-input');
     key('KeyA', 'a', { altKey: true }); assert.equal(get('assistant').hidden, true);
     key('KeyM', 'm', { altKey: true }); assert.ok(get('quick-model').open);

@@ -215,3 +215,28 @@ test('the launcher shows the effective Git mode before launch and repeats the sa
   assert.equal(starts[1].projectId, 'a');
   assert.equal(get('launch').open, false);
 });
+
+test('a blocked pipeline launch opens options and saving leaves the launcher available', async t => {
+  const entry = {name:'doc-flow',id:'doc-from-library'};
+  const options = {id:entry.id,name:entry.name,file:'/example/options.yaml',text:'docker: {}',revision:'old',roles:[],issues:['Missing key']};
+  let saved;
+  const {w,get} = await openShell(t,twoProjects([]),{
+    projectDetails: async () => ({git:{git:false},flows:[],sources:[{id:'library', location:'/library',entries:[entry]}]}),
+    preview: async () => ({git:{git:false},effective:{mode:'current',source:'folder'}}),
+    start: async () => ({status:'pipeline_options',options}),
+    savePipelineOptions: async input => {saved=input;return {...options,text:input.text,issues:[]}},
+  });
+  w.shell.openLauncher(w.shell.projects[0]);
+  await tick(30);
+  assert.equal(get('launch-options').hidden,false);
+  get('launch-submit').click();
+  await tick();
+  assert.ok(get('pipeline-options').open);
+  assert.match(get('pipeline-options-status').textContent,/Missing key/);
+  get('pipeline-options-yaml').value='collaboration: {}';
+  get('pipeline-options-form').dispatchEvent(new w.Event('submit',{cancelable:true}));
+  await tick();
+  assert.equal(saved.text,'collaboration: {}');
+  assert.match(get('pipeline-options-status').textContent,/Saved/);
+  assert.ok(get('launch').open);
+});
