@@ -69,6 +69,10 @@ test('Continue run reuses a saved worktree and pipeline snapshot after Desktop r
   await desktop.runs.start({requestId:'original', projectId:project.id, kind:'Pipeline', file:source.entries[0].id,
     explicit:'worktree', worktree, task:'initial request'});
   const first = await eventually(async () => (await active(desktop))[0], {what:'original run'});
+  await eventually(async () => {
+    const status = await fetch(new URL('/api/status', first.apiUrl)).then(response=>response.json()).catch(()=>null);
+    return status?.stages.some(stage=>stage.id === 'wait' && stage.status === 'running');
+  }, {what:'original stage running'});
   const binding = path.join(root, '.afm', 'pipelines', 'runs', first.runId + '.json');
   const snapshot = JSON.parse(await readFile(binding, 'utf8')).content_sha256;
   await desktop.runs.cancel(first.runId, first.instanceId);

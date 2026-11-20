@@ -13,7 +13,7 @@ const FINISHED = ['finished', 'failed', 'interrupted'];
 const REFUSALS = new Set(['external_host', 'invalid', 'conflict', 'limit_running', 'limit_starting', 'request_conflict']);
 
 function resumable(row, launch) {
-  return row.ownership === 'managed' && row.launch?.state === 'exited'
+  return row.ownership === 'managed' && ['exited', 'failed'].includes(row.launch?.state)
     && ['exited', undefined, ''].includes(row.liveness)
     && ['interrupted', 'failed'].includes(row.run_status) && validWorktreeName(launch?.hostArgs?.worktree);
 }
@@ -72,7 +72,7 @@ export class Runs {
     const [issued, rows] = await Promise.all([this.#issued(), this.host.runs()]);
     const replaced = new Set(rows.flatMap(row => {
       const launch = issued[row.launch?.launch_id];
-      return launch?.resumeRunId === row.run_id && launch.resumedFrom ? [launch.resumedFrom] : [];
+      return launch?.resumedFrom && launch.resumeRunId === row.run_id ? [launch.resumedFrom] : [];
     }));
     const visible = rows.filter(row => !replaced.has(row.launch?.launch_id));
     const missingProject = visible.some(row => !row.project_root && issued[row.launch?.launch_id]);
