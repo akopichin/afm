@@ -4,11 +4,18 @@
 set -e
 
 usage() {
-    echo "usage: $0 [--dry-run] {patch|minor|major} [alpha|beta] [--branch BRANCH]" >&2
+    echo "usage: $0 [--dry-run] [--desktop] {patch|minor|major} [alpha|beta] [--branch BRANCH]" >&2
     exit 2
 }
 
 if [ "${1:-}" = "--dry-run" ]; then dry=1; shift; else dry=0; fi
+prefix=v
+workflow=release.yml
+if [ "${1:-}" = "--desktop" ]; then
+    prefix=ds-v
+    workflow=desktop-release.yml
+    shift
+fi
 [ "$#" -ge 1 ] || usage
 level="$1"
 shift
@@ -27,6 +34,7 @@ if [ "${1:-}" = --branch ]; then
     shift 2
 fi
 [ "$#" -eq 0 ] || usage
+if [ "$prefix" = ds-v ] && { [ -n "$channel" ] || [ "$branch" != main ]; }; then usage; fi
 
 # Явная ветка релизится по запушенному SHA, независимо от checkout вызывающего.
 target=$(git rev-parse HEAD)
@@ -45,12 +53,12 @@ fi
 
 # Только стабильные SemVer-теги, достижимые из выбранного SHA: prerelease не меняет базу
 # следующего бампа.
-stable_tags=$(git tag --list --merged "$target" --sort=-version:refname)
-latest=$(printf '%s\n' "$stable_tags" | awk '
-    /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ { print; exit }
+stable_tags=$(git tag --list "$prefix*" --merged "$target" --sort=-version:refname)
+latest=$(printf '%s\n' "$stable_tags" | awk -v prefix="$prefix" '
+    substr($0, length(prefix)+1) ~ /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ { print; exit }
 ')
-[ -n "$latest" ] || latest=v0.0.0
-version=${latest#v}
+[ -n "$latest" ] || latest=${prefix}0.0.0
+version=${latest#"$prefix"}
 major=${version%%.*}
 minor_patch=${version#*.}
 minor=${minor_patch%%.*}
@@ -66,7 +74,7 @@ case "$level" in
     minor) minor=$((minor + 1)); patch=0 ;;
     patch) patch=$((patch + 1)) ;;
 esac
-next="v$major.$minor.$patch"
+next="$prefix$major.$minor.$patch"
 
 if [ -n "$channel" ]; then
     # Счётчик отдельный для каждой версии и канала. Учитываем и теги на других
@@ -100,5 +108,5 @@ fi
 
 echo "tagging $next (latest stable was $latest)"
 git tag -a "$next" "$target" -m "Release $next"
-git push origin "$next"
-echo "tagged and pushed $next — release.yml will build+publish it"
+git push origin "refs/tags/$next"
+echo "tagged and pushed $next — $workflow will build+publish it"

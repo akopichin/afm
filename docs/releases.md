@@ -42,13 +42,18 @@ When the tap is already installed, use `brew install --cask afm-desktop`.
 Update it with `brew upgrade --cask afm-desktop`. Homebrew selects the correct
 archive for the Mac's processor and checks its SHA-256 digest.
 
-Desktop has its own stable version sequence. To publish from the reviewed commit on
-`main`, push an annotated tag in the form `ds-vMAJOR.MINOR.PATCH`. For example:
+Desktop has its own stable version sequence. Once the intended commit is on
+`origin/main`, run one command from the repository:
 
-```sh
-git tag -a ds-v0.0.1 -m "AFM Desktop 0.0.1"
-git push origin refs/tags/ds-v0.0.1
-```
+| Change | Command | Next tag from ds-v0.0.1 |
+|---|---|---|
+| Patch | `make ds-release-patch` | `ds-v0.0.2` |
+| Minor | `make ds-release-minor` | `ds-v0.1.0` |
+| Major | `make ds-release-major` | `ds-v1.0.0` |
+
+Each target fetches `origin/main` and tags, calculates the version from stable
+Desktop tags, and pushes a single annotated tag for the published main commit.
+To preview it, use `./scripts/release.sh --dry-run --desktop patch --branch main`.
 
 The Desktop workflow builds the dashboard, the pinned AFM executable and Electron
 on macOS and Linux (arm64 and x64). It runs the Desktop tests, performance checks

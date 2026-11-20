@@ -113,6 +113,36 @@ func TestReleaseDryRun(t *testing.T) {
 	}
 }
 
+func TestDesktopReleaseTargets(t *testing.T) {
+	t.Parallel()
+	dir := releaseRepo(t)
+	origin := t.TempDir()
+	run(t, origin, "git", "init", "--bare")
+	run(t, dir, "git", "remote", "add", "origin", origin)
+	run(t, dir, "git", "tag", "v85.3.0")
+	run(t, dir, "git", "tag", "ds-v0.0.9")
+	run(t, dir, "git", "tag", "ds-v0.0.10")
+	run(t, dir, "git", "tag", "ds-v9.0.0-beta.1")
+	run(t, dir, "git", "push", "--tags", "origin", "main")
+	main := run(t, dir, "git", "rev-parse", "HEAD")
+	run(t, dir, "git", "checkout", "-b", "feature")
+	run(t, dir, "git", "commit", "--allow-empty", "-m", "Unpublished")
+	if err := releaseCommand(dir, "make", "ds-release-patch", "release-major").Run(); err == nil {
+		t.Fatal("mixed release command succeeded")
+	}
+	for _, tc := range []struct{ level, want string }{{"patch", "ds-v0.0.11"}, {"minor", "ds-v0.1.0"}, {"major", "ds-v1.0.0"}} {
+		before := strings.Fields(run(t, origin, "git", "tag", "--list"))
+		run(t, dir, "make", "ds-release-"+tc.level)
+		after := strings.Fields(run(t, origin, "git", "tag", "--list"))
+		if len(after) != len(before)+1 || !slices.Contains(after, tc.want) {
+			t.Fatalf("unexpected remote tags: %v", after)
+		}
+		if got := run(t, origin, "git", "rev-parse", tc.want+"^{commit}"); got != main {
+			t.Fatalf("wrong tagged commit %s", got)
+		}
+	}
+}
+
 func TestReleaseUnmergedTags(t *testing.T) {
 	t.Parallel()
 	dir := releaseRepo(t)

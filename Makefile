@@ -134,6 +134,17 @@ docker-run:
 RELEASE_TARGETS := $(addprefix release-,patch minor major \
 	patch-alpha minor-alpha major-alpha patch-beta minor-beta major-beta)
 
+DESKTOP_RELEASE_TARGETS := $(addprefix ds-release-,patch minor major)
+ifneq ($(filter $(DESKTOP_RELEASE_TARGETS),$(MAKECMDGOALS)),)
+ifneq ($(words $(MAKECMDGOALS)),1)
+$(error Specify exactly one Desktop release target)
+endif
+endif
+
+.PHONY: $(DESKTOP_RELEASE_TARGETS)
+$(DESKTOP_RELEASE_TARGETS):
+	./scripts/release.sh --desktop $(patsubst ds-release-%,%,$@) --branch main
+
 # Проверяем все цели до выполнения рецептов, чтобы опечатка ветки не выпустила HEAD.
 RELEASE_BRANCH := $(filter main v1.x v2.x,$(MAKECMDGOALS))
 ifneq ($(filter $(RELEASE_TARGETS),$(MAKECMDGOALS)),)
