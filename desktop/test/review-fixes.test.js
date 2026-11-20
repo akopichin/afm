@@ -123,7 +123,7 @@ test('the launcher asks before restarting a foreign host and repeats the same re
   get('launch-submit').click();
   await tick(30);
   assert.equal(starts.length, 1);
-  assert.match(get('native-error').textContent, /left as it is/);
+  assert.match(get('launch-status').textContent, /Run not started/);
   assert.equal(get('launch').open, true, 'declining keeps the launcher and changes nothing');
   get('launch-submit').click();
   await tick(30);

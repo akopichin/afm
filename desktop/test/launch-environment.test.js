@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { Prefs } from '../src/prefs.js';
 import { desktopEnvironment } from '../src/environment.js';
@@ -22,16 +23,19 @@ test('manual Desktop environment values override the file and values never appea
   assert.equal((await desktopEnvironment(prefs, home)).SETUP_TOKEN, 'from-file');
 });
 
-test('zsh import reads exported variables even when the startup file prints a banner', async t => {
-  if (process.platform === 'win32') return t.skip('Requires zsh');
-  const {home} = await tempHome(t);
-  const prefs = new Prefs(home);
-  await writeFile(path.join(home, '.zshrc'), 'echo banner\nexport ZSH_TEST=imported\nLOCAL_TEST=local\n');
-  await prefs.updateEnvironment({shell: 'zsh'});
-  const env = await desktopEnvironment(prefs, home, {...process.env, ZDOTDIR: home});
-  assert.equal(env.ZSH_TEST, 'imported');
-  assert.equal(env.LOCAL_TEST, undefined);
-});
+for (const shell of ['zsh', 'bash']) {
+  test(shell + ' import reads exported variables even when the startup file prints a banner', async t => {
+    const executable = '/bin/' + shell;
+    if (!await access(executable, constants.X_OK).then(() => true, () => false)) return t.skip('Requires ' + shell);
+    const {home} = await tempHome(t);
+    const prefs = new Prefs(home);
+    await writeFile(path.join(home, '.' + shell + 'rc'), 'echo banner\nexport AFM_SHELL_TEST=imported\nAFM_UNEXPORTED_TEST=local\n');
+    await prefs.updateEnvironment({shell});
+    const env = await desktopEnvironment(prefs, home, {PATH: '/usr/bin:/bin', SHELL: executable, HOME: home, ZDOTDIR: home});
+    assert.equal(env.AFM_SHELL_TEST, 'imported');
+    assert.equal(env.AFM_UNEXPORTED_TEST, undefined);
+  });
+}
 
 test('an accepted launch that fails before readiness exposes missing variable names without forwarding log content', async t => {
   const {home} = await tempHome(t);
