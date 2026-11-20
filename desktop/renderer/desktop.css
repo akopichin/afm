@@ -4,7 +4,7 @@ button,.shell-link {cursor:pointer;background:none;border:0;text-align:left}
 button:focus-visible,a:focus-visible,input:focus-visible {outline:2px solid var(--focus-ring);outline-offset:3px}
 .shellbar {height:56px;flex:none;display:flex;align-items:center;gap:20px;padding:0 26px;background:var(--surface-raised);border-bottom:1px solid var(--separator-subtle)}
 .brand,.switch,.action,.section-title,.row,.tabs,.cardfooter,.livebar,.heading,.actions,.crumb,.mini-state {display:flex;align-items:center}
-.brand {gap:9px}.brand b {font-size:22px;letter-spacing:-1.4px}.brand span {font-size:14px;color:var(--text-secondary)}
+.brand {gap:9px}.brand-name {display:flex;align-items:baseline;gap:4px;white-space:nowrap}.brand-name b {font-size:24px;letter-spacing:-1.25px;line-height:1.1}.brand-name small {font-size:12px;color:var(--text-secondary)}
 .brand svg {width:24px;stroke:var(--violet);fill:transparent;stroke-width:1.5}.brand circle {fill:var(--violet)}
 .spacer {flex:1}.switch,.action,.actions button,.shell-link {gap:8px;border:1px solid var(--separator-subtle);padding:6px 11px;border-radius:7px;background:var(--surface-overlay);color:var(--text-secondary);font-size:13px}
 .switch:hover,.action:hover,.actions button:hover,.shell-link:hover {border-color:var(--accent-primary);color:var(--text-primary);text-decoration:none}

@@ -41,6 +41,7 @@ const electronZipDir = await findElectronZip();
 const identity = process.env.AFM_DESKTOP_SIGN_IDENTITY;
 const dirs = await packager({
   dir: '.', name: 'AFM Desktop', out: 'dist', overwrite: true, asar: { unpackDir: 'node_modules/chrome-devtools-mcp' },
+  ...(process.platform === 'darwin' ? {icon: 'assets/afm-desktop.icns'} : {}),
   appBundleId: 'dev.afm.desktop', ...(electronZipDir ? { electronZipDir } : {}), osxSign: identity ? {identity, continueOnError: false} : undefined, extraResource: [resource],
   ignore: [/^\/\.generated\/resources/, /^\/(dist|test|scripts|workflow|homebrew)(\/|$)/]
 });

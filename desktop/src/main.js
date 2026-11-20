@@ -189,7 +189,7 @@ function pushWorkspace(snapshot){
 }
 workspace.onChange(pushWorkspace);
 function openWindow(){
-  window=new BrowserWindow({width:1350,height:870,minWidth:480,minHeight:420,backgroundColor:'#0b111b',
+  window=new BrowserWindow({width:1350,height:870,minWidth:480,minHeight:420,backgroundColor:'#0b111b',icon:path.join(root,'assets/afm-desktop.png'),
     webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,preload:path.join(root,'src/preload.cjs')}});
   dashboardViews = new DashboardViews(window, path.join(root, 'src/dashboard-keys.cjs'));
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));

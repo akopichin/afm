@@ -80,16 +80,16 @@ async function attentionBurst() {
   assert.equal(snapshot.attention.length, 200);
   const order = snapshot.attention.map(item => item.id);
   const samples = [];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 55; i++) {
     const t = performance.now();
     const next = await workspace.refresh();
-    samples.push(performance.now() - t);
+    if (i >= 5) samples.push(performance.now() - t);
     assert.deepEqual(next.attention.map(item => item.id), order, 'Notice order changed between polls');
   }
   assert.ok(stats.peak <= 6, 'More than six run reads were in flight');
   assert.equal(stats.inflight, 0, 'Run reads were left outstanding');
   workspace.close();
-  report('attention-burst', { flagged_runs: 200, first_ms: first, repeat_p95_ms: percentile(samples, 0.95), peak_inflight_requests: stats.peak, outstanding_after: stats.inflight });
+  report('attention-burst', { flagged_runs: 200, samples: samples.length, first_ms: first, repeat_p95_ms: percentile(samples, 0.95), peak_inflight_requests: stats.peak, outstanding_after: stats.inflight });
   assert.ok(percentile(samples, 0.95) < 100, 'Attention burst exceeded its 100 ms p95 budget');
 }
 

@@ -12,11 +12,17 @@ const bundle = path.resolve('dist', 'AFM Desktop-' + process.platform + '-' + pr
 const resources = process.platform === 'darwin' ? path.join(bundle, 'AFM Desktop.app/Contents/Resources') : path.join(bundle, 'resources');
 const binary = path.join(resources, process.platform === 'win32' ? 'afm.exe' : 'afm');
 const archive = path.join(resources, 'app.asar');
-for (const file of ['src/main.js', 'src/preload.cjs', 'src/dashboard-keys.cjs', 'src/workspace.js', 'src/protocol.js',
+for (const file of ['assets/afm-desktop.png', 'src/main.js', 'src/preload.cjs', 'src/dashboard-keys.cjs', 'src/workspace.js', 'src/protocol.js',
   'src/shortcuts.js', 'src/assistant/assistant.js', 'src/assistant/bridge.js', 'src/assistant/ipc.js', 'src/stage-browser/broker.js', 'src/stage-browser/companion-main.js', 'src/stage-browser/electron-page.js', 'renderer/assistant.js', 'renderer/index.html', 'renderer/inventory.js',
   'renderer/checkout.html', '.generated/editor/code-editor.js', '.generated/editor/code-editor.css', '.generated/run.html', '.generated/dashboard/skins/graphite/index.css',
   'node_modules/@modelcontextprotocol/sdk/package.json', 'node_modules/yaml/package.json']) {
   if (!statFile(archive, file).size) throw Error('Empty package entry: ' + file);
+}
+if (process.platform === 'darwin') {
+  const plist = path.join(bundle, 'AFM Desktop.app/Contents/Info.plist');
+  const icon = execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIconFile', plist], {encoding: 'utf8'}).trim();
+  const expected = await readFile('assets/afm-desktop.icns');
+  if (!expected.equals(await readFile(path.join(resources, icon)))) throw Error('The Mac package does not carry the AFM Desktop icon.');
 }
 // The executable inside the package, not the one the build chose, must carry the stage browser hook and fit this machine.
 const sidecar = await verifySidecar(binary);

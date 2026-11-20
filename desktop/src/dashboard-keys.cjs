@@ -1,7 +1,14 @@
 'use strict';
 window.addEventListener('DOMContentLoaded', () => {
-  const ipc = parent === window && typeof require === 'function' ? require('electron').ipcRenderer : null;
+  const electron = parent === window && typeof require === 'function' ? require('electron') : null;
+  const ipc = electron?.ipcRenderer;
   if (!ipc && parent === window) return;
+  if (electron?.webFrame) {
+    electron.webFrame.insertCSS(`
+      .global-header .gh-mark, .global-header .gh-wordmark { display: none; }
+      .global-header .gh-flow { margin-left: 0; padding-left: 0; border-left: 0; }
+    `).catch(() => {});
+  }
   const send = message => ipc ? ipc.send('dashboard:event', message) : parent.postMessage(message, '*');
   {
     let focus=false, ready=false;
