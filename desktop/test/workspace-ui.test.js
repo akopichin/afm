@@ -246,3 +246,30 @@ test('a blocked pipeline launch opens options and saving leaves the launcher ava
   assert.equal(get('pipeline-options-save').textContent,'Saved');
   assert.ok(get('launch').open);
 });
+
+test('Start run shows progress immediately and stays busy across a preview refresh', async t => {
+  let failLaunch;
+  const launch = new Promise((_, reject) => { failLaunch = reject; });
+  const {w,get} = await openShell(t,twoProjects([]),{
+    projectDetails: async () => ({git:{git:false},flows:[{name:'ship',file:'ship.yaml'}],sources:[]}),
+    preview: async () => ({git:{git:false},effective:{mode:'current',source:'folder'}}),
+    start: () => launch,
+  });
+  w.shell.openLauncher(w.shell.projects[0]);
+  await tick(30);
+  const button=get('launch-submit');
+  button.click();
+  assert.equal(button.textContent,'Starting…');
+  assert.equal(button.getAttribute('aria-busy'),'true');
+  assert.equal(button.disabled,true);
+
+  get('workflow-search').dispatchEvent(new w.Event('input'));
+  await tick();
+  assert.equal(button.disabled,true);
+  failLaunch(Error('The run could not start.'));
+  await tick();
+  assert.equal(button.textContent,'Start run');
+  assert.equal(button.hasAttribute('aria-busy'),false);
+  assert.equal(button.disabled,false);
+  assert.match(get('launch-status').textContent,/could not start/);
+});

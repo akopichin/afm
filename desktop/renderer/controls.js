@@ -125,7 +125,7 @@ async function showEffectiveMode(p){
   try{
     const {effective,git}=await nativeAFM.preview(launchRequest(p.id,item));
     if(serial!==previewSerial)return;
-    $('launch-submit').disabled=Boolean(effective.blocked);
+    $('launch-submit').disabled=launching||Boolean(effective.blocked);
     const names={current:'Current checkout'+(effective.branch?' · '+effective.branch:''),branch:'New branch · '+effective.branch,worktree:'New worktree · '+effective.worktree};
     $('git-hint').textContent=effective.blocked||`${modeSources[effective.source]} · ${names[effective.mode]}${git.dirty&&effective.mode==='branch'?' · uncommitted changes stay':''}`;
   }catch(error){if(serial===previewSerial){$('launch-submit').disabled=true;$('git-hint').textContent=error.message}}
@@ -137,7 +137,7 @@ function updateWorkflows(){
   matches=sources.flatMap(s=>s.items.map(item=>({...item,source:s.name}))).filter(item=>[item.name,item.kind,item.source,item.path].join(' ').toLowerCase().includes(query));
   choice=Math.max(0,Math.min(choice,matches.length-1));
   $('workflows').innerHTML=matches.map((item,i)=>`<button class="workflow ${i===choice?'chosen':''}" aria-pressed="${i===choice}" data-choice="${i}" title="${esc(item.path)}"><span class="glyph">${item.kind==='Flow'?'⑂':'▦'}</span><span><strong>${esc(item.name)}</strong><small>${esc(item.source)} · ${esc(item.kind)}</small></span><span class="tick">${i===choice?'✓':''}</span></button>`).join('')||'<p class="empty">No matching workflows. Add a source in Settings › Library.</p>';
-  $('launch-submit').disabled=!matches.length;updateGit();
+  $('launch-submit').disabled=launching||!matches.length;updateGit();
 }
 function startRun(){
   const p=targetProject(),item=matches[choice];
@@ -153,6 +153,14 @@ function startRun(){
   p.runs.push(r);save();$('launch').close();openProject(p,r,'run');
 }
 let launching=false;
+function setLaunching(busy){
+  launching=busy;
+  const button=$('launch-submit');
+  button.disabled=busy||!matches.length;
+  button.textContent=busy?'Starting…':'Start run';
+  if(busy)button.setAttribute('aria-busy','true');
+  else button.removeAttribute('aria-busy');
+}
 function launchStatus(message, id){
   const status=$('launch-status'),log=$('launch-log');
   status.hidden=!message;status.textContent=message;
@@ -161,8 +169,7 @@ function launchStatus(message, id){
 }
 async function startNative(p,item){
   if(launching)return;
-  launching=true;
-  $('launch-submit').disabled=true;
+  setLaunching(true);
   launchStatus('Starting AFM…');
   try{
     const projectId=p.external?(await nativeAFM.addProject(p.path)).id:p.id;
@@ -189,7 +196,7 @@ async function startNative(p,item){
     const opened=projects.find(project=>project.id===projectId)||projects.find(project=>project.path===p.path);
     if(opened)openProject(opened);
   }catch(error){showNativeError(error);launchStatus(error.message)}
-  finally{launching=false;$('launch-submit').disabled=false;if($('launch').open)updateGit()}
+  finally{setLaunching(false);if($('launch').open)updateGit()}
 }
 let editingPipeline=null, editorAssets;
 function loadCodeEditor(){

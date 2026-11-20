@@ -45,8 +45,8 @@ requests use the updated settings without restarting Desktop.
 
 AFM looks for secrets in the project's `.afm/secrets.env`, then
 `~/.afm/secrets.env`, then the host environment. An explicit AFM secrets file
-uses AFM's existing override behavior. The run launcher waits for AFM to
-report readiness and offers the launch log when an early failure occurs.
+uses AFM's existing override behavior. The Start run button shows a spinner and Starting… while Desktop checks the
+pipeline and waits for AFM to report readiness. The launcher offers the launch log when an early failure occurs.
 Missing environment variable names from preflight are shown in the launcher.
 
 ## Run the overnight development flow
