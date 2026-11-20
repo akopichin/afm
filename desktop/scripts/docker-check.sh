@@ -17,7 +17,7 @@ for zip in desktop/dist/electron-zip/electron-*-linux-"$arch".zip; do
   if [ -f "$zip" ]; then set -- "$@" "$zip"; fi
 done
 # Only the native sidecar and cached Electron zip cross the platform boundary.
-COPYFILE_DISABLE=1 tar -cf - "$@" desktop/package.json desktop/package-lock.json desktop/src desktop/renderer desktop/scripts desktop/test \
+COPYFILE_DISABLE=1 tar -cf - "$@" desktop/package.json desktop/package-lock.json desktop/assets desktop/src desktop/renderer desktop/scripts desktop/test \
   pkg/web/dashboard/skins/base pkg/web/dashboard/skins/graphite pkg/web/dashboard/assets \
   pkg/web/dashboard/index.html pkg/web/dashboard/favicon.svg pkg/web/dashboard/chat-composer.css pkg/web/dashboard/side-agent.css |
   docker run --rm --init -i --entrypoint sh "$image" -ec '
