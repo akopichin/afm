@@ -14,6 +14,19 @@ prompt: |
   Keep merges to main and publication on the host, after the owner requests the release.
   Do not change CI/Homebrew or send real prompts to paid providers during tests.
   Test adapters with deterministic transcripts and use real disposable AFM script runs.
+team:
+  - id: rescue-architect
+    title: Астра
+    profile: desktop-dev-escalation-architect
+    instruction: Diagnose only when the coordinator requests it under $AFM_PIPELINE_DIR/review.md. Keep product files read-only and return the reproduction, cause and correction.
+  - id: opus
+    title: Опус
+    profile: desktop-dev-escalation-writer
+    instruction: Take only a bounded rescue assignment under $AFM_PIPELINE_DIR/review.md. Confirm the previous writer stopped and edit only the granted files.
+  - id: fabula
+    title: Фабула
+    profile: desktop-dev-escalation-verifier
+    instruction: Follow $AFM_PIPELINE_DIR/review.md. Stay idle until the repeated post-escalation rejection threshold. Verify independently and never approve your own edits.
 stages:
   - id: plan
     name: Plan the Desktop change
@@ -40,20 +53,9 @@ stages:
       preserve their contracts, and add task-specific regressions. Use deterministic provider
       transcripts, disposable AFM runs or headless browser transport fixtures when relevant.
       If the task affects performance, measure the affected workload before and after the
-      change and record comparable results. Address actionable helper feedback and record
-      each disposition in execution_summary.md. Note requirement deltas for the doc stage.
-    pre_completion:
-      max_failures: 2
-    assistants:
-      - profile: desktop-dev-review-runtime
-        mode: required
-        trigger: pre_completion
-      - profile: desktop-dev-review-interface
-        mode: required
-        trigger: pre_completion
-      - profile: desktop-dev-review-integrations
-        mode: required
-        trigger: pre_completion
+      change and record comparable results. Coordinate independent review and escalation under
+      $AFM_PIPELINE_DIR/review.md. Freeze the candidate during review and record evidence
+      and dispositions in execution_summary.md. Note requirement deltas for Docs.
     verify: "npm --prefix desktop run check && npm --prefix desktop test"
   - id: doc
     name: Update the Desktop README and spec
@@ -101,7 +103,8 @@ stages:
         - command: desktop-dev-verify
           timeout: 20m
           prompt: |
-            Read the Desktop spec, the run plan, README, doc summary and review dispositions.
+            Read the Desktop spec, run plan, README, doc summary, $AFM_PIPELINE_DIR/review.md
+            and the implementation review ledger. Confirm independent review and bounded escalation.
             Check that the README and affected requirements reflect the delivered behavior.
             Verify the normal entry point, AFM and provider adapters, actual packaged contents,
             all keyboard contracts and evidence. Fail concrete missing behavior or production

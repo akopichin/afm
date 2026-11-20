@@ -63,8 +63,9 @@ graph in [flow.yaml](workflow/flow.yaml). The stages are `plan → implement →
 The plan picks the relevant subsystems for the supplied task. Each stage can
 pause for a reply in the run dashboard. A fresh run reads the current package
 from the configured local folder. Resuming continues with its original snapshot.
-Three required AFM helper profiles review the implementation before the
-documentation stage.
+The implementation author spawns independent reviewers and owns their
+dispositions before the documentation stage. Repeated rejections use the
+bounded [review and escalation protocol](workflow/review.md).
 The `doc` stage updates this guide and
 [the Desktop spec](../specs/desktop/spec.md) from the implemented behavior and
 check results. The `deliver` stage builds the unpacked Electron app with the

@@ -22,8 +22,28 @@ docker:
       type: codex
       model: gpt-6.1-sol
       reasoning: high
+    desktop-dev-escalation-architect:
+      type: codex
+      model: gpt-6-astra
+      reasoning: xhigh
+    desktop-dev-escalation-writer:
+      type: claude
+      model: claude-opus-5-5
+      reasoning: xhigh
+      auth: {from: "env:CLAUDE_CODE_OAUTH_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN"}
+    desktop-dev-escalation-verifier:
+      type: claude
+      model: claude-fable-5-1
+      reasoning: medium
+      auth: {from: "env:CLAUDE_CODE_OAUTH_TOKEN", to: "env:CLAUDE_CODE_OAUTH_TOKEN"}
 collaboration:
   profiles:
+    desktop-dev-escalation-architect:
+      command: desktop-dev-escalation-architect
+    desktop-dev-escalation-writer:
+      command: desktop-dev-escalation-writer
+    desktop-dev-escalation-verifier:
+      command: desktop-dev-escalation-verifier
     desktop-dev-review-runtime:
       title: Desktop runtime and packaging review
       command: desktop-dev-review-runtime
