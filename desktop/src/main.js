@@ -137,7 +137,7 @@ handle('runs:start', async request => {
   const worktree = request.worktree ?? undefined;
   try {
     if (request.kind === 'Pipeline' && !request.confirmHostRestart) {
-      const options = await pipelineOptions.get(request.file, projectId);
+      const options = await pipelineOptions.get(request.file, projectId, {forLaunch: true});
       if (options.error || options.issues.length) return {status: 'pipeline_options', options};
     }
     const launch = await desktop.runs.start({...request, projectId, explicit, worktree});

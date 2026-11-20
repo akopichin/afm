@@ -46,12 +46,16 @@ export class PipelineOptions {
     }
   }
 
-  async get(id, projectId) {
+  async get(id, projectId, {forLaunch = false} = {}) {
     const spec = await this.#entry(id, projectId);
     const owner = await readText(spec.ownerFile);
     const conflict = spec.collision || Boolean(owner && owner.trim() !== spec.entry.source);
     const stored = !conflict || spec.previous !== spec.file ? await readText(spec.previous) : null;
     const result = await this.#inspect(spec.entry, spec.project, stored === null ? null : spec.previous);
+    if (conflict && spec.previous === spec.file) result.issues.push('Another pipeline source shares this options path.');
+    if (forLaunch && stored !== null && spec.previous === spec.file && !result.error && !result.issues.length) {
+      await this.serveConfig.setPipelineOptions(id, spec.entry.source, spec.file);
+    }
     const text = stored ?? emptyOptions;
     return {id, name: spec.entry.name, file: spec.file, previous: spec.previous, text, revision: revisionOf(text),
       conflict, ...result};
