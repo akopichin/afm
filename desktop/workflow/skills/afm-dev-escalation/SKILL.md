@@ -50,7 +50,7 @@ against durable AFM replies and reports, rather than trusting a stale number.
 ## Required route: Astra diagnosis, Opus implementation
 
 The standing diagnosis agent is team ID `rescue-architect` (default GPT-6 Astra
-`xhigh`); the independent findings verifier is team ID `fabula` (Фабула, default
+`high`); the independent findings verifier is team ID `fabula` (Фабула, default
 Claude Fable 5.1 `medium`); the reserve writer is team ID `opus` (default Opus 5.5
 `xhigh`). Resolve participant IDs and actual model/command bindings from the run's roster and frozen
 configuration. The historical IDs are not model identities. Use the configured

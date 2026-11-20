@@ -20,6 +20,7 @@ test('Desktop workflows gate implementation, acceptance and commit before intera
 
   const verifier = manifest.roles.verifier.command;
   assert.equal(agents.docker.agents[verifier].model, 'gpt-6-astra');
+  assert.equal(agents.docker.agents[verifier].reasoning, 'high');
   for (const stageId of ['implement', 'live-run', 'commit']) {
     const stage = flow.stages.find(candidate => candidate.id === stageId);
     assert.ok(stage.verify.steps.some(step => step.command === verifier), stageId);
@@ -28,6 +29,9 @@ test('Desktop workflows gate implementation, acceptance and commit before intera
 });
 
 test('Desktop mesh review skills ship with the immutable pipeline snapshot', () => {
+  const architect = agents.docker.agents[manifest.roles.escalation_architect.command];
+  assert.equal(architect.model, 'gpt-6-astra');
+  assert.equal(architect.reasoning, 'high');
   assert.ok(manifest.resources.includes(flow.skills_dir));
   const implement = flow.stages.find(stage => stage.id === 'implement');
   assert.ok(implement.skills.includes('afm-dev-coordinator'));

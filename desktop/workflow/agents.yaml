@@ -21,11 +21,11 @@ docker:
     desktop-dev-verify:
       type: codex
       model: gpt-6-astra
-      reasoning: xhigh
+      reasoning: high
     desktop-dev-escalation-architect:
       type: codex
       model: gpt-6-astra
-      reasoning: xhigh
+      reasoning: high
     desktop-dev-escalation-writer:
       type: claude
       model: claude-opus-5-5
