@@ -10,7 +10,7 @@ cask "afm-desktop" do
   desc "Manage AFM projects and runs"
   homepage "https://github.com/akopichin/afm"
 
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "AFM Desktop.app"
 end
