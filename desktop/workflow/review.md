@@ -19,6 +19,9 @@ Select the most relevant `desktop-dev-review-runtime`,
 For each product task, spawn two independent helpers, and the third when its
 area is affected. Point their briefs to the task criteria and its diff from the
 last accepted candidate. Start review as soon as the task candidate is ready.
+In every helper brief include the exact path
+`$AFM_PIPELINE_DIR/skills/afm-review-work/SKILL.md` and require the reviewer
+to read it before applying its assigned perspective.
 For a docs-only task, use the relevant review profile.
 
 Keep task ownership, request IDs, recovered waits and repair counts in

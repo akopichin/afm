@@ -38,8 +38,9 @@ limitations. A ready wait or reply alone does not prove completed analysis. Save
 needed findings in the stage report and IDs/dispositions in its ledger; later
 stages consume those artifacts, not another stage's helper-result API.
 
-Require one final result under AFM's injected output contract, with all concrete
-findings and evidence. No acknowledgement/partial final replies. Helpers may not
+Require one final result under AFM's injected output contract, with findings admitted by
+`afm-review-work` and their evidence. Apply its threshold when merging results
+and deciding whether a repair or another review round is warranted. No acknowledgement/partial final replies. Helpers may not
 be able to write scratch files: let them return evidence in the result and have
 the coordinator save artifacts. A completed helper is one-shot. A later task or
 correction gets a new helper linked to the same work item and earlier findings;

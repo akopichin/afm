@@ -78,6 +78,7 @@ stages:
         - command: desktop-dev-verify
           timeout: 20m
           prompt: |
+            Read $AFM_PIPELINE_DIR/skills/afm-review-work/SKILL.md before reviewing.
             Verify the implementation against the plan, Desktop spec and changed behavior.
             Read $AFM_PIPELINE_DIR/skills/afm-dev-escalation/SKILL.md.
             Match every planned task ID to its frozen candidate, independent helper
@@ -114,6 +115,7 @@ stages:
         - command: desktop-dev-verify
           timeout: 20m
           prompt: |
+            Read $AFM_PIPELINE_DIR/skills/afm-review-work/SKILL.md before reviewing.
             Audit the actual package and scenario evidence against the plan. Check the
             bundled AFM, offline assets, production entry and relevant adapter paths.
             Check the documented distinction between headless coverage and native
@@ -159,6 +161,7 @@ stages:
         - command: desktop-dev-verify
           timeout: 20m
           prompt: |
+            Read $AFM_PIPELINE_DIR/skills/afm-review-work/SKILL.md before reviewing.
             Verify that the commit contains the reviewed Desktop change and spec/doc
             updates. Check the stated revision and any acceptance re-run after changes
             to the tested implementation. Report native checks still pending.

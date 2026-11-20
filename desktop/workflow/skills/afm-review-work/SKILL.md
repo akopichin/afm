@@ -17,18 +17,36 @@ lint, stress or mutation pass. When a concrete unresolved concern needs an
 experiment, use a bounded targeted reproduction within the granted scope. If a
 required check is missing, identify it rather than silently running every suite.
 
-Return all concrete findings together, with reproducible conditions, severity,
-file/location where relevant, supporting evidence and a minimal corrective
-direction. Explain counterevidence for dismissed findings. Correctness defects
-remain blockers; style preferences and hypothetical improvements do not. Do not
-claim a requirement was exercised from a check name, summary or green retry alone.
-Missing evidence and unavailable tools are explicit limitations.
+## Threshold for findings across perspectives
 
-Tie blocking conditions to supported product behavior and approved criteria. An
-unsupported locale, browser or hypothetical feature is not a new acceptance target.
-For scoped evidence inspect dependency completeness and changed inputs; do not demand
-another full suite or live matrix when unchanged observations remain valid. A repair
-review covers its delta and affected integration points, retaining earlier findings.
+On the first pass, inspect the assigned perspective across the approved scope.
+Report confirmed critical or major findings together. Critical means a reachable
+failure with severe consequences such as data loss, unauthorized access or an
+unusable product. Major means a supported scenario produces a materially wrong
+result, a required behavior is missing, or an explicit acceptance gate fails.
+For tests, identify the regression that would escape; for design, docs or UI,
+identify the supported task or contract that breaks. Apply the same threshold
+to baseline defects when they prevent acceptance of this candidate.
+
+For each blocker give the trigger, affected criterion or supported behavior,
+expected and observed consequence, and evidence at a concrete location. A traced
+execution path or a contradiction in the actual artifact can establish impact.
+Check callers, existing safeguards and approved design decisions first. A
+preference, hypothetical extension, naming nit or unrelated historical issue
+does not warrant a finding, repair or escalation. Enforce mandatory checks as
+specified; record missing required evidence as incomplete under the injected
+contract. A green check alone does not establish scenario coverage.
+
+For scoped check evidence, inspect changed inputs and their dependencies.
+Reuse unaffected observations; request a broader check only when the change
+can invalidate them or the approved acceptance contract requires it.
+
+Use the existing ledger. Merge reports of the same cause and impact across
+perspectives into one repair. On a correction pass, verify the original finding
+and affected integration paths; raise a new blocker only with evidence that the
+repair introduced or exposed a material defect there. Reopen a disposition only
+with new evidence. When required checks are satisfied and no blockers remain,
+return the successful outcome with an empty findings list and end the review.
 
 Stay read-only: no product edits, commits, native subagents, delegation, nested
 orchestration or process-name kills. Helpers and verify agents have no managed
