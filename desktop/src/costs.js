@@ -131,14 +131,15 @@ export async function readModels(run, request = fetch) {
   });
 }
 
-// Current time, tokens and money of every active run. It is fed by the Workspace loop, which already holds the
-// verified status reads, and keeps nothing for runs that left the inventory.
+// Workspace supplies verified live status. Finished reports are loaded only when the archive is requested.
 export class Costs {
   #demand = new AbortController();
 
-  constructor({ request = fetch, now = Date.now, hidePrices = false, history = null } = {}) {
-    Object.assign(this, { request, now, hidePrices, history });
+  constructor({ request = fetch, now = Date.now, hidePrices = false, history = null, readReport = null } = {}) {
+    Object.assign(this, { request, now, hidePrices, history, readReport });
     this.entries = new Map();
+    this.finished = new Map();
+    this.reports = new Map();
     this.seenAt = new Map();
     this.models = new Map();
     this.listeners = new Set();
@@ -183,6 +184,44 @@ export class Costs {
       seen.set(run.key, { run, projectId, readable: ['running', 'api-only'].includes(run.state) && Boolean(run.apiUrl) });
     }
     return [...seen.values()];
+  }
+
+  setFinished(snapshotRuns) {
+    const finished = new Map();
+    for (const item of snapshotRuns) {
+      if (item.run.state === 'finished' && !finished.has(item.run.key)) finished.set(item.run.key, item);
+    }
+    for (const key of this.reports.keys()) if (!finished.has(key)) this.reports.delete(key);
+    this.finished = finished;
+  }
+
+  async #finishedSubjects(from, to, growth, rewind, demand) {
+    const items = [...this.finished.values()];
+    const due = items.filter(({ run }) => run.can?.report && !this.reports.has(run.key));
+    for (let i = 0; this.readReport && !demand.aborted && i < due.length; i += FETCH_LIMIT) {
+      await Promise.all(due.slice(i, i + FETCH_LIMIT).map(async ({ run }) => {
+        if (!this.reports.has(run.key)) {
+          const report = Promise.resolve().then(() => this.readReport(run)).then(report => report?.run && finishedReport(report)).catch(() => null);
+          this.reports.set(run.key, report);
+          if (!await report && this.reports.get(run.key) === report) this.reports.delete(run.key);
+        } else await this.reports.get(run.key);
+      }));
+    }
+    const subjects = await Promise.all(items.map(async ({ run, projectId }) => {
+      const report = await this.reports.get(run.key);
+      if (!this.finished.has(run.key)) return null;
+      const saved = this.history.run(run.key);
+      const endedAt = report?.endedAt ?? null;
+      const lastSeen = saved?.samples.at(-1)?.t;
+      if (rewind && (endedAt === null || endedAt > to)) return null;
+      if (growth && (endedAt ?? lastSeen ?? -Infinity) < from) return null;
+      const startedAt = report?.startedAt ?? saved?.startedAt ?? null;
+      const name = run.name || run.runId;
+      const entry = report ? { ...report.entry, key: run.key, name, projectId, startedAt } : null;
+      const wholeRun = endedAt !== null && endedAt <= to && startedAt !== null && startedAt >= from;
+      return { key: run.key, entry, name, projectId, startedAt, endedAt, finished: true, status: report?.entry.runStatus ?? run.status ?? 'finished', wholeRun };
+    }));
+    return subjects.filter(Boolean);
   }
 
   // The host cannot be reached: nothing is dropped, every clock stops at its last good read.
@@ -249,9 +288,11 @@ export class Costs {
 
   // Growth of every run between `from` and `to`, the same sliced into `buckets` for the chart, and the since-start
   // figures as of `to`. Money is read only for runs whose prices Desktop may show; a figure with no readings is null.
-  async period(from, to, buckets = 0) {
+  async period(from, to, buckets = 0, options = {}) {
     if (!this.history || !(to > from)) return { available: false, runs: {}, series: null };
     await this.history.load();
+    const finished = options.finished === true;
+    const subjects = finished ? await this.#finishedSubjects(from, to, options.growth === true, options.rewind === true, this.demand) : this.#subjects(to);
     const show = !this.hidePrices;
     const fields = { elapsed: 'elapsedMs', idle: 'idleMs', work: 'workMs', tokens: 'tokens', usd: 'usd' };
     const period = [[from, to]];
@@ -259,13 +300,19 @@ export class Costs {
     const slices = Array.from({ length: buckets }, (_, i) => [from + i * step, from + (i + 1) * step]);
     const ranges = [...period, ...slices];
     const runs = {};
-    for (const subject of this.#subjects(to)) {
+    for (const subject of subjects) {
       // A finished run has no live price rule: what is stored was stored while its price was visible.
-      const priced = show && (!subject.entry || subject.entry.price === 'visible');
+      const priced = show && (finished || !subject.entry || subject.entry.price === 'visible');
       const readings = Object.fromEntries(Object.entries(fields).map(([name, field]) => [name,
         name === 'usd' && !priced ? ranges.map(() => null) : this.history.deltas(subject.key, field, name === 'idle' ? period : ranges)]));
       const run = runs[subject.key] = Object.fromEntries(Object.entries(readings).map(([name, [total]]) => [name, total]));
       run.meta = { name: subject.name, projectId: subject.projectId, startedAt: subject.startedAt, finished: subject.finished };
+      if (finished) {
+        run.meta.status = subject.status;
+        run.meta.wholeRun = subject.wholeRun;
+        run.meta.endedAt = subject.endedAt;
+        run.final = subject.entry;
+      }
       // Since-start figures at `to` and when they were really read: the slider position is not an observation time.
       run.asOf = { elapsed: this.history.valueAt(subject.key, 'elapsedMs', to), idle: this.history.valueAt(subject.key, 'idleMs', to),
         work: this.history.valueAt(subject.key, 'workMs', to), tokens: this.history.valueAt(subject.key, 'tokens', to),
@@ -302,4 +349,18 @@ export class Costs {
   }
 
   close() { this.closed = true; this.#updateDemand(); this.listeners.clear(); }
+}
+
+function finishedReport(report) {
+  const { run, cost, stage_time: stageTime, analytics } = report;
+  const stageUsage = new Map((cost?.stages ?? []).map(stage => [stage.stage_id, stage]));
+  const elapsed = Number.isFinite(run.elapsed_ms) ? anchored(run.elapsed_ms, null) : null;
+  const stageWork = Number.isFinite(stageTime?.working_ms) && !stageTime.incomplete_stages?.length ? anchored(stageTime.working_ms, null) : null;
+  const entry = { finished: true, runStatus: run.status,
+    stale: false, elapsed, idle: null, stageWork, tokens: cost?.total?.tokens?.total ?? null, price: 'unavailable',
+    stages: (report.stages ?? []).map(stage => ({ id: stage.id, name: stage.id, status: stage.status,
+      workMs: stage.timing?.work_ms ?? null, tokens: stageUsage.get(stage.id)?.tokens?.total ?? null })),
+    overhead: cost?.overhead ? { tokens: cost.overhead.tokens?.total ?? null } : null,
+    models: analytics?.models?.filter(row => !row.agent?.outside_run_total).map(row => ({ label: row.label, tokens: row.tokens?.counts?.total ?? null })) ?? null };
+  return { endedAt: parseTime(run.ended_at), startedAt: parseTime(run.started_at), entry };
 }

@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Switch between active and finished runs in Costs, with final report totals and recorded usage history for finished runs.
 - Schedule repeating Assistant prompts with a per-task model, result history, and optional Telegram delivery.
 - Show local timestamps in Assistant chat and status dots on run tabs.
 - Queue Assistant messages during a reply and paste images into the composer.

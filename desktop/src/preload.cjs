@@ -30,7 +30,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
     return ()=>ipcRenderer.removeListener('workspace:update',listener);
   },
   costs:()=>ipcRenderer.invoke('costs:get'),
-  costsPeriod:(from,to,buckets)=>ipcRenderer.invoke('costs:period',from,to,buckets),
+  costsPeriod:(from,to,buckets,options)=>ipcRenderer.invoke('costs:period',from,to,buckets,options),
   watchCosts:watched=>ipcRenderer.invoke('costs:watch',watched),
   onCosts:callback=>{
     const listener=(_event,view)=>callback(view);

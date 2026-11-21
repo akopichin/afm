@@ -623,6 +623,48 @@ test('Costs.period as of a past moment: finished runs appear while followed, lat
   assert.equal((await costs.period(T0 + 58000, T0 + 59000, 0)).runs[view.key].asOf.usd, null);
 });
 
+test('finished costs combine saved observations and final reports without synthesizing chart points', async t => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { CostsHistory } = await import('../src/costs-history.js');
+  const dir = await mkdtemp((await import('node:path')).join(tmpdir(), 'costs-finished-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = row(await fakeRun(t));
+  const unseen = { ...run, key: 'another:unseen', runId: 'unseen' };
+  let now = T0;
+  const reports = [];
+  const costs = new Costs({ now: () => now, history: new CostsHistory(dir), readReport: async run => {
+    reports.push(run.key);
+    return { run: { started_at: new Date(T0), ended_at: new Date(T0 + 120000), elapsed_ms: 120000, status: 'failed' },
+      cost: { total: { tokens: { total: 9000 } } }, stage_time: { working_ms: 50000 } };
+  } });
+  costs.setWatched(true);
+  costs.setVisible(true);
+  const observe = tokens => costs.observe(Costs.inventoryOf([{ run, projectId: 'p' }]), new Map([[run.key, statusBody({ run_cost: cost(2, tokens) })]]));
+  await observe(1000);
+  now += 60000;
+  await observe(4000);
+  now += 120000;
+  costs.setFinished([run, unseen, { ...run, key: 'stale' }].map(item => ({
+    run: { ...item, state: item.key === 'stale' ? 'offline' : 'finished', can: { report: true } }, projectId: 'p',
+  })));
+  await costs.observe([], new Map());
+  assert.deepEqual(Object.keys((await costs.period(T0, now, 3)).runs), []);
+  assert.deepEqual(reports, []);
+  const options = { finished: true, growth: true };
+  const { runs } = await costs.period(T0, now, 3, options);
+  assert.deepEqual(Object.keys(runs), [run.key, unseen.key]);
+  assert.equal(runs[run.key].tokens.value, 3000);
+  assert.equal(runs[run.key].final.tokens, 9000);
+  assert.equal(runs[unseen.key].final.tokens, 9000);
+  assert.equal(runs[unseen.key].meta.wholeRun, true);
+  assert.deepEqual(runs[unseen.key].buckets.tokens, [null, null, null]);
+  assert.deepEqual(Object.keys((await costs.period(T0, T0 + 60000, 0, { finished: true, rewind: true })).runs), []);
+  assert.deepEqual(reports, [run.key, unseen.key], 'final reports are reused across ranges');
+  costs.setHidePrices(true);
+  assert.equal((await costs.period(T0, now, 3, options)).runs[run.key].asOf.usd, null);
+});
+
 test('history observation reports a gap at a moment nobody observed', async t => {
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');

@@ -230,6 +230,43 @@ const buckets = (extra = {}) => ({ cost: Array.from({ length: 8 }, (_, i) => sli
 const periodOf = (runs, perRun = {}) => ({ available: true, from: 0, to: 1, series: { from: 0, to: 1, buckets: 8 },
   runs: Object.fromEntries(Object.entries(runs).map(([key, value]) => [key, { ...value, buckets: buckets(perRun[key] ?? perRun.all ?? {}) }])) });
 
+test('Finished changes the table, totals, and chart without mixing in active runs', async t => {
+  const shell = await openCosts(t, [entry('ra')]);
+  const final = entry('old', { finished: true, runStatus: 'finished', tokens: 300000 });
+  shell.native.periodResult = (_from, _to, _buckets, options) => options?.finished
+    ? periodOf({ [final.key]: { ...figures(220000), final, meta: { wholeRun: false } } })
+    : periodOf({ 'i-ra:ra': figures(500000) });
+  shell.d.querySelector('[data-cost-status="finished"]').click();
+  await tick();
+  assert.equal(shell.d.querySelector('[data-cost-status="finished"]').getAttribute('aria-pressed'), 'true');
+  assert.match(shell.get('cost-rows').textContent, /flow-old.*300k/s);
+  assert.doesNotMatch(shell.get('cost-rows').textContent, /flow-ra/);
+  assert.equal(shell.d.querySelectorAll('[data-clock]').length, 0);
+  shell.d.querySelector('[data-cost-range="24"]').click();
+  await tick();
+  assert.match(shell.get('cost-rows').textContent, /220k/);
+  assert.match(shell.d.querySelector('.cost-kpis').textContent, /220k/);
+  assert.equal(shell.d.querySelectorAll('.cost-point').length, 8);
+  shell.d.querySelector('[data-cost-status="active"]').click();
+  await tick();
+  assert.match(shell.get('cost-rows').textContent, /flow-ra.*500k/s);
+  assert.doesNotMatch(shell.get('cost-rows').textContent, /flow-old/);
+});
+
+test('Finished charts report totals by completion when no interval observations exist', async t => {
+  const shell = await openCosts(t, [], { hidePrices: true });
+  const final = entry('old', { finished: true, runStatus: 'finished' });
+  shell.native.periodResult = (from, to) => ({ ...periodOf({ [final.key]: { final, meta: { endedAt: to, wholeRun: true } } },
+    { all: { time: Array(8).fill(null), tokens: Array(8).fill(null), cost: null } }), from, to });
+  shell.d.querySelector('[data-cost-status="finished"]').click();
+  await tick();
+  shell.d.querySelector('[data-cost-range="24"]').click();
+  await tick();
+  assert.match(text(shell), /Elapsed time for runs that finished in each interval/);
+  assert.match(shell.d.querySelector('[data-cost-point]:last-child').ariaLabel, /1h 0m/);
+  assert.equal(shell.d.querySelectorAll('.cost-plot circle').length, 1);
+});
+
 test('a chosen period shows the growth inside it, asks the history once per change and stops ticking', async t => {
   const shell = await openCosts(t, [entry('ra', { elapsed: { ms: 0, since: Date.now() - 1000 } })]);
   shell.native.periodResult = (from, to) => periodOf({ 'i-ra:ra': figures(250000) }, { all: { tokens: Array.from({ length: 8 }, (_, i) => (i === 3 ? null : slice(1000))) } });

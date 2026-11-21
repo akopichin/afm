@@ -75,7 +75,7 @@ const notifier = new Notifier({ home, show: showBanner, settings: {enabled: fals
     bounce: () => { if (!window?.isFocused()) app.dock.bounce('informational'); },
   } : undefined,
   claimed: (item, snapshot) => watchTasks.covers(item.kind, item.runKey) });
-const costs = new Costs({ history: new CostsHistory(desktop.home) });
+const costs = new Costs({ history: new CostsHistory(desktop.home), readReport: run => desktop.runs.report(run.runId, run.instanceId) });
 // Background watch tasks keep the one hidden-window poll running while any of them is active.
 let publishWatch;
 const watchBanners = createWatchBanners({ show: banner => showBanner(banner), visible: result => Boolean(window?.isFocused() && shownRun === result.runKey) });
@@ -181,7 +181,7 @@ handle('app:version', () => app.getVersion());
 handle('workspace:get', () => workspace.get());
 handle('workspace:refresh', () => workspace.refresh());
 handle('costs:get', () => costs.view());
-handle('costs:period', (from, to, buckets) => costs.period(Number(from), Number(to), Math.min(48, Math.max(0, Number(buckets) || 0))));
+handle('costs:period', (from, to, buckets, options) => costs.period(Number(from), Number(to), Math.min(48, Math.max(0, Number(buckets) || 0)), options ?? {}));
 // Watching starts the extra status reads at once; the renderer stops it when Home and Costs are both off screen.
 handle('costs:watch', watched => { costs.setWatched(watched); if (costs.watched) workspace.refresh().catch(() => {}); });
 // A folder only a run knows about has no Home entry yet; its details are readable because the host listed it.

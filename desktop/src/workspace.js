@@ -129,9 +129,10 @@ export class Workspace {
     const statuses = overview.host.error ? new Map() : await this.#readStatuses(sets, overview, costs);
     const { attention, observed } = overview.host.error ? { attention: this.snapshot?.attention ?? [], observed: this.snapshot?.observed ?? NOTHING_OBSERVED }
       : await this.#read(sets, statuses);
+    if (!overview.host.error) this.costs?.setFinished(this.#costSubjects(overview));
     if (!costs.aborted) {
       if (overview.host.error) this.costs.markUnreachable();
-      else await this.costs.observe(this.#costInventory(overview), statuses, costs);
+      else await this.costs.observe(Costs.inventoryOf(this.#costSubjects(overview)), statuses, costs);
     }
     if (this.closed) return this.snapshot;
     await this.stageBrowsers?.reconcile(runs);
@@ -153,9 +154,9 @@ export class Workspace {
     return { flagged, watchable, watched: this.watchActive() ? watchable : [] };
   }
 
-  #costInventory(overview) {
-    return Costs.inventoryOf([...overview.projects.flatMap(project => project.runs.map(run => ({ run, projectId: project.id }))),
-      ...overview.unassigned.map(run => ({ run, projectId: null }))]);
+  #costSubjects(overview) {
+    return [...overview.projects.flatMap(project => project.runs.map(run => ({ run, projectId: project.id }))),
+      ...overview.unassigned.map(run => ({ run, projectId: null }))];
   }
 
   // One verified status read per run and cycle, shared by notices, watch tasks and Costs; null where the read failed.
@@ -164,7 +165,7 @@ export class Workspace {
     const reads = new Map([...flagged, ...watched].map(run => [run.key, { run, request: this.request }]));
     if (!costs.aborted) {
       const forCosts = cancellable(this.request, costs);
-      for (const { run, readable } of this.#costInventory(overview)) if (readable && !reads.has(run.key)) reads.set(run.key, { run, request: forCosts });
+      for (const { run, readable } of Costs.inventoryOf(this.#costSubjects(overview))) if (readable && !reads.has(run.key)) reads.set(run.key, { run, request: forCosts });
     }
     const statuses = new Map();
     const list = [...reads.values()];

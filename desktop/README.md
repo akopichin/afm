@@ -187,6 +187,13 @@ has active runs. The screen shows estimated spend, tokens, Elapsed, Idle and
 Stage work for the runs Desktop observes. AFM has no run-level "Running"
 time, so Desktop shows Stage work (the time stages were working) or a dash.
 
+- **Run status:** switch between *Active* and *Finished*. Finished runs use
+  AFM reports for final time and token totals, including runs Desktop did not
+  observe. In *24h* and *7d*, those final totals apply when the whole run fits
+  within the selected window. Charts use Desktop's saved observations. If
+  none exist for time or tokens, the chart shows final totals grouped by when
+  each run finished. Estimated prices use only saved observations. *As of* in
+  Finished shows runs with a recorded end by the selected time.
 - **Range:** *Since start*, *24h* or *7d*. Growth ranges come from Desktop's
   own history, so a run that started before Desktop watched it shows a note
   that history starts later. A gap, a counter reset or a figure that was
@@ -350,6 +357,15 @@ For the Docker check, run `./scripts/docker-check.sh` in the desktop directory. 
 Production run dashboards open in sandboxed top-level Electron views. Each view connects to the verified origin for its run and respects the AFM dashboard’s framing policy.
 
 The Mac launcher finishes with `npm run smoke:mac`. It opens the packaged production window in a temporary profile, checks first-run setup, assistant focus and a real stage row served by the bundled AFM host, then closes the window and cancels the temporary run. Successful package inspection alone does not pass this gate.
+
+`desktop/scripts/docker-check.sh` builds the Linux AFM sidecar on the host and
+passes it to Docker with the checkout files. If an existing Docker run cannot
+build AFM inside its container, a local Codex or Claude Code Assistant with
+workspace write and command access can build it in that run's mounted worktree.
+Use the container's architecture and put the executable at
+`desktop/dist/sidecars/linux-arm64/afm` or `desktop/dist/sidecars/linux-x64/afm`.
+Ask for the commit, path and SHA-256, then verify the executable inside the
+container. Start or retry the verify step separately from the chat request.
 
 On the development Mac, the first launch attempt was terminated during signature assessment. After retrying the packaged app, both Finder launch and the isolated production window check passed. The local build uses an ad-hoc signature. Set AFM_DESKTOP_SIGN_IDENTITY to use an available signing identity when building on a Mac that requires one.
 
