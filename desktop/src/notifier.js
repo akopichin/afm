@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
+import { stageKey, stillUnconfirmed, unconfirmedKeys } from './unconfirmed.js';
 
 // Bound on resolved history; requests still pending are always kept, so the set can exceed it.
 const SEEN_LIMIT = 500;
@@ -25,6 +26,8 @@ export class Notifier {
     Object.assign(this, { show, visible, claimed, settings, dock });
     this.lock = new Mutex();
     this.seen = null;
+    // Open stages whose request had no identity in the first snapshot; see unconfirmed.js.
+    this.unconfirmed = new Set();
     this.dockPending = false;
   }
 
@@ -49,9 +52,13 @@ export class Notifier {
         this.seen = new Map(stored && typeof stored === 'object' && !Array.isArray(stored) ? Object.entries(stored) : []);
       }
       const identified = snapshot.attention.filter(item => item.requestAt);
-      const fresh = identified.filter(item => !this.seen.has(this.#key(item)));
-      if (!fresh.length && !first) return;
-      for (const item of fresh) this.seen.set(this.#key(item), 1);
+      if (first) this.unconfirmed = unconfirmedKeys(snapshot.attention);
+      const unseen = identified.filter(item => !this.seen.has(this.#key(item)));
+      // The first identity of a question that was already open is remembered, not announced.
+      const fresh = unseen.filter(item => !this.unconfirmed.has(stageKey(item)));
+      this.unconfirmed = stillUnconfirmed(this.unconfirmed, snapshot.attention);
+      for (const item of unseen) this.seen.set(this.#key(item), 1);
+      if (!unseen.length && !first) return;
       // Only resolved history is evicted: a request still pending must not return as new after a reconnect.
       const pending = new Set(identified.map(found => this.#key(found)));
       for (const key of this.seen.keys()) {

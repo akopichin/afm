@@ -158,3 +158,27 @@ test('a watch that claims a request owns the banner but the Dock still bounces',
   assert.deepEqual(dock, ['dot', 'bounce']);
   assert.equal(shown.length, 0);
 });
+
+test('a question open at launch whose dialog was unreadable is seeded silently once it is identified', async t => {
+  const dock = [];
+  const { notifier, shown } = await setup(t, { dock: { setPending: () => {}, bounce: () => dock.push('bounce') } });
+  await notifier.onSnapshot(snapshot([item('ask', 'question', null)]));
+  await notifier.onSnapshot(snapshot([item('ask', 'question', 'q1')]));
+  await notifier.onSnapshot(snapshot([item('ask', 'question', 'q1')]));
+  assert.deepEqual([shown.length, dock], [0, []], 'the open question is only queued');
+  await notifier.onSnapshot(snapshot([item('ask', 'question', 'q2')]));
+  assert.deepEqual([shown.length, dock], [1, ['bounce']], 'a later question in the same stage is announced once');
+  await notifier.onSnapshot(snapshot([item('ask', 'question', 'q2')]));
+  assert.equal(shown.length, 1);
+});
+
+test('a question that appears unidentified after launch is announced when it is identified; one that went away is not remembered', async t => {
+  const { notifier, shown } = await setup(t);
+  await notifier.onSnapshot(snapshot([item('open', 'question', null)]));
+  await notifier.onSnapshot(snapshot([item('open', 'question', null), item('later', 'question', null)]));
+  await notifier.onSnapshot(snapshot([item('open', 'question', null), item('later', 'question', 'q1')]));
+  assert.deepEqual(shown.map(b => b.stageId), ['later']);
+  await notifier.onSnapshot(snapshot([]));
+  await notifier.onSnapshot(snapshot([item('open', 'question', 'q9')]));
+  assert.deepEqual(shown.map(b => b.stageId), ['later', 'open'], 'the old unconfirmed mark ended with its stage');
+});

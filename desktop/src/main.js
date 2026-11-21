@@ -465,8 +465,10 @@ let quitting=false;
 app.on('before-quit',event=>{
   if(quitting)return;
   event.preventDefault();quitting=true;
-  stopEnvironmentImports();stageBrowsers.close();workspace.close();costs.close();
-  const settled=Promise.allSettled([assistant.close(),desktop.close(),watchTasks.flush().catch(error=>console.error('Watch tasks were not saved on Quit:',error))]);
+  stopEnvironmentImports();const summariesClosed=summaries.close();stageBrowsers.close();workspace.close();costs.close();
+  // Cancelling the Assistant ends a running report; watch tasks are saved only after that report stored its last change.
+  const watchSaved=Promise.allSettled([assistant.close(),summariesClosed]).then(()=>watchTasks.flush()).catch(error=>console.error('Watch tasks were not saved on Quit:',error));
+  const settled=Promise.allSettled([watchSaved,desktop.close()]);
   Promise.race([settled,new Promise(resolve=>setTimeout(resolve,6000))]).finally(()=>app.quit());
 });
 app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit()});

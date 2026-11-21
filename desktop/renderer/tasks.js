@@ -94,6 +94,8 @@ function setAssistantView(view){
 function openRunLink(instance,runId,stage){
   const target=projects.flatMap(p=>p.runs.map(r=>({p,r}))).find(({r})=>r.rawId===runId&&r.instance===instance);
   if(!target){watchState.note='That run is no longer in the inventory.';drawTasks();return}
+  // The run opens either way; a stage that no longer waits is said so, since only the run can be shown.
+  watchState.note=stage&&!notices().some(n=>n.r.key===target.r.key&&n.stage===stage)?'That stage is no longer waiting; the run is shown instead.':'';
   openRun(target,stage||undefined);
 }
 async function changeTask(action,id){

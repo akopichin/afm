@@ -453,3 +453,30 @@ test('resolved questions follow the same horizon: within it a returning request 
   service.onSnapshot(snap({ projects, attention: asks(0, 1) }));
   assert.equal(results.length, 661, 'a request that returns after the horizon can be reported again (documented capacity)');
 });
+
+test('a question open at the baseline whose dialog was unreadable is seeded by its first identity; a later one is reported once', async t => {
+  const { service, results } = await setup(t);
+  const a = run('a');
+  const projects = [{ id: 'p', runs: [a] }];
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', null)] }));
+  service.create({});
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', null)] }));
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', 'q1')] }));
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', 'q1')] }));
+  assert.deepEqual(results, [], 'the open question is not a result');
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', 'q2')] }));
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', 'q2')] }));
+  assert.deepEqual(results.map(r => r.stageId), ['ask'], 'a new question in the same stage is reported once');
+  assert.equal(service.list()[0].unread, 1);
+});
+
+test('an unidentified question that appears after the baseline is reported when it is identified', async t => {
+  const { service, results } = await setup(t);
+  const a = run('a');
+  const projects = [{ id: 'p', runs: [a] }];
+  service.create({});
+  service.onSnapshot(snap({ projects }));
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', null)] }));
+  service.onSnapshot(snap({ projects, attention: [item(a, 'ask', 'question', 'q1')] }));
+  assert.deepEqual(results.map(r => r.stageId), ['ask']);
+});

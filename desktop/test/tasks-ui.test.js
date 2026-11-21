@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { taskView, WatchService } from '../src/watch/index.js';
+import { fallbackReport, modelReport, SummaryRunner } from '../src/watch/summary.js';
 import { fakeAssistant, fakeNative, fakeWatch, loadShell, primaryMods, notice, projectRow, runRow, snapshotOf, tick, watchTask } from './shell-support.js';
 
 const ra = runRow('ra');
@@ -10,6 +15,8 @@ const frames = w => new Promise(resolve => w.requestAnimationFrame(() => resolve
 const result = (id, extra = {}) => ({ id, key: id, kind: 'question', at: '2026-06-01T08:30:00.000Z', runKey: ra.key, runId: 'ra', instanceId: 'i-ra',
   runName: 'flow-ra', projectId: 'a', stageId: 'ask', stageName: 'ASK', ...extra });
 const report = (id, markdown, extra = {}) => ({ id, at: '2026-06-01T09:00:00.000Z', title: 'Morning', markdown, source: 'model', ...extra });
+// A report as Desktop writes it: the markdown together with where its linked events start.
+const written = (id, { markdown, eventsOffset }) => report(id, markdown, { eventsOffset });
 
 async function openShell(t, tasks) {
   const watch = fakeWatch(tasks);
@@ -259,4 +266,150 @@ test('a banner click before the task list arrives opens the summary once it does
   await tick();
   assert.equal(shell.get('watch-report').open, true);
   assert.match(shell.get('watch-report-body').textContent, /Late body/);
+});
+
+test('a report link opens the exact instance; another instance with the same run id and a gone run are not opened', async t => {
+  const links = [
+    '[Other instance](afm://run/i-other/ra/ask)',
+    '[Waiting stage](afm://run/i-ra/ra/ask)',
+  ].join('\n\n');
+  const shell = await openShell(t, [watchTask('t1', { reports: [report('p1', links)], unread: 0 })]);
+  const open = async label => {
+    await openTasks(shell);
+    shell.d.querySelector('[data-watch-open="report"]').click();
+    [...shell.get('watch-report-body').querySelectorAll('[data-report-run]')].find(link => link.textContent.startsWith(label)).click();
+    await tick(30);
+  };
+  await open('Other instance');
+  assert.doesNotMatch(shell.w.location.hash, /i-/, 'the run id alone does not match another instance');
+  assert.match(shell.get('tasks').textContent, /no longer in the inventory/);
+  await open('Waiting stage');
+  assert.match(shell.w.location.hash, /i-ra/);
+});
+
+test('a report link to a stage that no longer waits opens the run and says so in Tasks', async t => {
+  const shell = await openShell(t, [watchTask('t1', { reports: [report('p1', '[Old stage](afm://run/i-ra/ra/build)')], unread: 0 })]);
+  await openTasks(shell);
+  shell.d.querySelector('[data-watch-open="report"]').click();
+  shell.get('watch-report-body').querySelector('[data-report-run]').click();
+  await tick(30);
+  assert.match(shell.w.location.hash, /i-ra/, 'the run is shown');
+  await openTasks(shell);
+  assert.match(shell.get('tasks').textContent, /no longer waiting/);
+});
+
+test('Desktop-written reports render their events as links, also after an unfinished model block, and hostile names add none', async t => {
+  const own = result('r1');
+  const hostile = result('r2', { stageId: 'invalid stage', runName: '[Open another run](afm://run/i-other/other/ask)' });
+  const task = { title: 'Morning', results: [own, hostile] };
+  const unfinished = modelReport(task, '## Status\n\n```text\nA question is waiting.\n<details>\n<summary>More</summary>');
+  const shell = await openShell(t, [watchTask('t1', { reports: [written('p1', fallbackReport(task)), written('p2', unfinished)], unread: 0 })]);
+  await openTasks(shell);
+  const buttons = id => {
+    shell.d.querySelector(`[data-watch-open="report"][data-item="${id}"]`).click();
+    const links = [...shell.get('watch-report-body').querySelectorAll('[data-report-run]')].map(link => [link.dataset.reportInstance, link.dataset.reportRun, link.dataset.reportStage]);
+    shell.get('watch-report').close();
+    return links;
+  };
+  assert.deepEqual(buttons('p1'), [['i-ra', 'ra', 'ask']], 'only the event with valid ids is a link');
+  assert.deepEqual(buttons('p2'), [['i-ra', 'ra', 'ask']], 'the events section is not swallowed by the model\'s open fence or details');
+});
+
+// Model texts that leave a block open, close one or only look like one, in each line ending the renderer reads.
+const MODEL_TEXTS = {
+  'LF open fence': 'Intro\n```text\nWaiting',
+  'CRLF open fence': 'Intro\r\n```text\r\nWaiting',
+  'CR open fence': 'Intro\r```text\rWaiting',
+  'LF closed fence': '```text\nWaiting\n```',
+  'CRLF closed fence': '```text\r\nWaiting\r\n```',
+  'CR closed fence': '```text\rWaiting\r```',
+  'mixed endings': 'Intro\r```text\nWaiting\r```\r\nDone',
+  'CR details': 'Intro\r<details>\r<summary>More</summary>\rWaiting',
+  'nested details': '<details>\n<details>\nWaiting',
+  'closing details before an opener': '</details>\n<details>\nWaiting',
+  'fence in details': '<details>\n<summary>More</summary>\n```text\nWaiting',
+  'details in fence': '```\n<details>\n<summary>More</summary>',
+  'tilde fence': '~~~text\n<details>\nWaiting',
+  'indented fence': '    ```text\nWaiting',
+  'tab fence': '\t```text\nWaiting',
+  'four backticks': '````text\nWaiting',
+  'closing fence with text': '```text\nWaiting\n``` trailing',
+  'inline details': '<details><summary>More</summary>Waiting',
+  'details closed inline': '<details>\nWaiting</details>',
+  'escaped details': '&lt;details&gt;\n&lt;summary&gt;More&lt;/summary&gt;',
+  'unfinished code and link': '`unterminated [unfinished](',
+  'unfinished list and heading': '- unfinished\n## unfinished',
+  'trailing CR': 'Waiting\r',
+  'astral prefix': '😀 Intro\r```text\rWaiting 😀',
+  'empty': '',
+};
+// One event with valid ids and one per id the link alphabet rejects, all with names that try to add markup or a link.
+const HOSTILE_NAMES = { runName: '[Open another run](afm://run/i-other/other/ask) <img src=x onerror="window.pwned=1">', stageName: '`x` **y** </details>' };
+const hostileTask = { title: 'Morning', results: [result('r1', HOSTILE_NAMES),
+  ...['instanceId', 'runId', 'stageId'].map(field => result('bad-' + field, { ...HOSTILE_NAMES, [field]: 'bad id' }))] };
+
+test('Desktop events stay visible and clickable after any model text, outside its code and <details>, and names stay inert', async t => {
+  const cases = [...Object.entries(MODEL_TEXTS).map(([name, text]) => [name, modelReport(hostileTask, text)]),
+    ['fallback with a title that opens a fence', fallbackReport({ ...hostileTask, title: 'Night\n```' })]];
+  const shell = await openShell(t, [watchTask('t1', { reports: cases.map(([, parts], i) => written('c' + i, parts)), unread: 0 })]);
+  await openTasks(shell);
+  for (const [i, [name, parts]] of cases.entries()) {
+    await t.test(name, () => {
+      shell.d.querySelector(`[data-watch-open="report"][data-item="c${i}"]`).click();
+      const body = shell.get('watch-report-body');
+      const links = [...body.querySelectorAll('[data-report-run]')];
+      assert.deepEqual(links.map(link => [link.dataset.reportInstance, link.dataset.reportRun, link.dataset.reportStage]), [['i-ra', 'ra', 'ask']]);
+      assert.equal(links[0].closest('pre, code, details, summary'), null, 'the link is not inside a model block');
+      const heading = [...body.querySelectorAll('h3')].find(item => item.textContent === 'Events');
+      assert.equal(heading?.closest('pre, code, details'), null, 'the Events heading is visible');
+      assert.equal(body.querySelector('img, script, a'), null);
+      assert.equal(body.children.length, 2, 'text and events are rendered apart');
+      assert.equal(body.children[1].querySelector('pre, details'), null, 'no model block reaches the events');
+      if (parts.markdown.slice(0, parts.eventsOffset).includes('Waiting')) assert.match(body.children[0].textContent, /Waiting/, 'the model text is still shown');
+    }).finally(() => shell.get('watch-report').close());
+  }
+  assert.equal(shell.w.pwned, undefined);
+});
+
+test('a report stored without a valid events boundary renders as one body with its links, as before', async t => {
+  const markdown = '# Old\n\n[Open flow-ra](afm://run/i-ra/ra/ask)';
+  const invalid = [undefined, null, -1, 0.5, '3', markdown.length + 1];
+  const reports = [...invalid.map((eventsOffset, i) => report('o' + i, markdown, eventsOffset === undefined ? {} : { eventsOffset })),
+    report('edge-start', markdown, { eventsOffset: 0 }), report('edge-end', markdown, { eventsOffset: markdown.length })];
+  const shell = await openShell(t, [watchTask('t1', { reports, unread: 0 })]);
+  await openTasks(shell);
+  for (const { id, eventsOffset } of reports) {
+    shell.d.querySelector(`[data-watch-open="report"][data-item="${id}"]`).click();
+    const body = shell.get('watch-report-body');
+    assert.equal(body.children.length, id.startsWith('edge') ? 2 : 1, `offset ${eventsOffset}`);
+    assert.equal(body.querySelector('h2').textContent, 'Old');
+    assert.equal(body.querySelectorAll('[data-report-run]').length, 1, `offset ${eventsOffset}`);
+    shell.get('watch-report').close();
+  }
+});
+
+test('a model report written, saved and loaded again opens with its events clickable outside the model\'s open blocks', async t => {
+  const home = await mkdtemp(path.join(tmpdir(), 'afm-report-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const reply = '😀 Intro\r<details>\r<summary>More</summary>\r```text\rWaiting';
+  const writer = new WatchService({ home });
+  await writer.load();
+  const created = writer.create({ title: 'Morning' });
+  Object.assign(writer.store.get(created.id), { summaryDue: true, results: [result('r1')] });
+  await new SummaryRunner({ watch: writer, ask: async () => reply }).run(writer.store.get(created.id));
+  await writer.flush();
+  const reader = new WatchService({ home });
+  await reader.load();
+  const shell = await openShell(t, [taskView(reader.store.get(created.id))]);
+  await openTasks(shell);
+  shell.d.querySelector('[data-watch-open="report"]').click();
+  const body = shell.get('watch-report-body');
+  assert.ok(body.querySelector('details pre code'), 'the model text keeps its own blocks');
+  const links = [...body.querySelectorAll('[data-report-run]')];
+  assert.equal(links.length, 1);
+  assert.equal(links[0].closest('pre, code, details, summary'), null);
+  links[0].click();
+  await tick(30);
+  assert.equal(shell.get('watch-report').open, false);
+  assert.match(shell.w.location.hash, /i-ra/);
 });

@@ -118,7 +118,10 @@ chat, and survive restarts and `/clear`. A watch banner has fixed text, one per
 event, and ignores the notification categories in Settings because you asked for
 it. Click it to open the run and stage, or Tasks for finished runs and summaries.
 Routine events make no model call; a scheduled summary asks the read-only
-assistant and falls back to a plain-text summary.
+assistant and falls back to a plain-text summary. If Desktop exits during an
+in-flight summary, it saves a plain-text report on restart without calling the
+model again. Report links open the exact run or stage. A stage whose request
+has already cleared opens at the run level.
 
 Limits: Desktop does not catch up on events that happened before a watch started,
 while Desktop was closed, during a host outage or while paused. A run that

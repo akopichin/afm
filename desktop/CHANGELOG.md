@@ -2,6 +2,11 @@
 
 ## 2026-11-21
 
+### Fix:
+
+- Avoid late banners for questions already open when observation starts.
+- Preserve interrupted watch summaries and link their events to the exact run.
+
 ### Improvement:
 
 - Use Command on macOS or Ctrl on Linux for Desktop Home, notification navigation,

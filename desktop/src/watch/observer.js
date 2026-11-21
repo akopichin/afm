@@ -1,4 +1,5 @@
 import { MAX_RESULTS } from './store.js';
+import { stageKey, stillUnconfirmed, unconfirmedKeys } from '../unconfirmed.js';
 
 const TERMINAL = ['finished', 'failed', 'interrupted'];
 export const EVENT_KINDS = ['question', 'approval', 'decision', 'failed', 'finished'];
@@ -35,6 +36,12 @@ function outcomeOf(run, observed) {
   const status = run.state === 'finished' ? run.status : observed?.status?.[run.key];
   if (!run.runId || !TERMINAL.includes(status)) return null;
   return status === 'failed' ? 'failed' : 'finished';
+}
+
+// Attention and notice items of the runs in scope.
+function itemsOf(snapshot, scope) {
+  const keys = new Set(runsOf(snapshot, scope).map(entry => entry.run.key));
+  return [...snapshot.attention, ...(snapshot.observed?.notices ?? [])].filter(item => keys.has(item.runKey));
 }
 
 // Events visible in one snapshot, each once, with a stable key so a repeat or a reconnect is not a new event.
@@ -82,7 +89,10 @@ export class WatchObserver {
     if (!isLive(snapshot)) return false;
     const events = eventsOf(snapshot, task.scope);
     const unavailable = new Set(snapshot.observed?.unavailable ?? []);
-    this.live.set(task, { unknown: new Set(runsOf(snapshot, task.scope).map(entry => entry.run.key).filter(key => unavailable.has(key))) });
+    this.live.set(task, {
+      unknown: new Set(runsOf(snapshot, task.scope).map(entry => entry.run.key).filter(key => unavailable.has(key))),
+      unconfirmed: unconfirmedKeys(itemsOf(snapshot, task.scope)),
+    });
     return this.#advance(task, events);
   }
 
@@ -109,10 +119,13 @@ export class WatchObserver {
     if (!task.cursor.baselined || !this.live.has(task)) return this.baseline(task, snapshot);
     const events = eventsOf(snapshot, task.scope);
     const known = new Set(task.cursor.seen);
-    const { unknown } = this.live.get(task);
+    const live = this.live.get(task);
+    const { unknown } = live;
     for (const event of events) {
-      if (!known.has(event.key) && !unknown.has(event.entry.run.key) && task.events.includes(event.kind)) this.#record(task, event);
+      const reported = !unknown.has(event.entry.run.key) && !live.unconfirmed.has(stageKey({ runKey: event.entry.run.key, stageId: event.stageId, kind: event.kind }));
+      if (!known.has(event.key) && reported && task.events.includes(event.kind)) this.#record(task, event);
     }
+    live.unconfirmed = stillUnconfirmed(live.unconfirmed, itemsOf(snapshot, task.scope));
     const unavailable = new Set(snapshot.observed?.unavailable ?? []);
     for (const key of unknown) if (!unavailable.has(key)) unknown.delete(key);
     return this.#advance(task, events);

@@ -86,9 +86,31 @@ export class WatchService {
     return this.#changed(task);
   }
 
+  // Stores the planned report id and a "started" mark before the provider is called. False means a report was already
+  // started (Desktop quit during the reply) or the mark could not be stored: the plain report is written, never a second reply.
+  async beginSummary(id) {
+    const task = this.#need(id);
+    if (task.summaryStarted) return false;
+    task.summaryStarted = true;
+    task.summaryId ??= randomUUID();
+    try { await this.store.save(); } catch { return false; }
+    return true;
+  }
+
+  // Takes back the started mark of a summary that stopped before the provider was asked, so a restart asks it normally.
+  // The planned id stays. A failed write rejects and leaves the mark on disk: after a restart the plain report is written.
+  async cancelSummary(id) {
+    const task = this.store.get(id);
+    if (!task || task.summaryDone || !task.summaryStarted) return;
+    task.summaryStarted = false;
+    await this.store.save();
+  }
+
   // The scheduled report. It counts as unread like a result, and the summary is not asked for again.
+  // A report id that is already stored changes nothing, so a repeated write cannot add a second unread.
   addReport(id, report) {
     const task = this.#need(id);
+    if (task.reports?.some(item => item.id === report.id)) return structuredClone(task);
     task.reports = [...(task.reports ?? []), report].slice(-MAX_REPORTS);
     task.unread += 1;
     task.summaryDue = false;

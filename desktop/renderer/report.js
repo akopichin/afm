@@ -44,6 +44,17 @@ function renderMarkdown(source){
   return out.join('\n')+'</details>'.repeat(Math.max(0,opened));
 }
 
+// The report text and the events Desktop added at `eventsOffset`, cut before line endings are cleaned up so the cut lands
+// where it was stored. A report without a valid offset, as older ones are, stays one part.
+function reportParts({markdown,eventsOffset}){
+  const valid=typeof markdown==='string'&&Number.isInteger(eventsOffset)&&eventsOffset>=0&&eventsOffset<=markdown.length;
+  return valid?[markdown.slice(0,eventsOffset),markdown.slice(eventsOffset)]:[markdown];
+}
+// Each part is parsed into an element of its own, so a block the model text left open cannot hide the event links.
+function renderReport(report){
+  return reportParts(report).map(part=>{const block=document.createElement('div');block.innerHTML=renderMarkdown(part);return block});
+}
+
 let reportOpener=null,reportNavigating=false;
 const reportDialog=()=>$('watch-report');
 // Opens a stored report. The opener gets the focus back when the dialog closes, unless the user navigated away.
@@ -60,7 +71,7 @@ function openReport(task,report){
   $('watch-report-scope').textContent='Watch · '+watchScopeText(task);
   $('watch-report-title').textContent=report.title||task.title;
   $('watch-report-time').textContent=new Date(report.at).toLocaleString();
-  $('watch-report-body').innerHTML=renderMarkdown(report.markdown);
+  $('watch-report-body').replaceChildren(...renderReport(report));
   reportNavigating=false;
   dialog.showModal();
   dialog.addEventListener('close',restoreReportFocus,{once:true});
