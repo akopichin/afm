@@ -383,13 +383,19 @@ app.whenReady().then(async () => {
     })()`);
     if (versionLabel !== 'v' + app.getVersion()) throw Error('Packaged Desktop did not display its version.');
     if (process.platform === 'darwin') {
-      const titlebar = await window.webContents.executeJavaScript(`(() => {
+      const titlebar = await window.webContents.executeJavaScript(`(async () => {
         const bar = document.getElementById('window-titlebar');
         const controls = navigator.windowControlsOverlay;
-        return controls?.visible && controls.getTitlebarAreaRect().x > 0 && !bar.hidden
-          && bar.getBoundingClientRect().height >= 30
-          && getComputedStyle(document.body).backgroundColor === 'rgba(0, 0, 0, 0)'
-          && getComputedStyle(document.querySelector('.app-body')).backgroundColor !== 'rgba(0, 0, 0, 0)';
+        // The overlay geometry can arrive after the renderer has loaded.
+        const deadline = Date.now() + 3000;
+        do {
+          if (controls?.visible && controls.getTitlebarAreaRect().x > 0 && !bar.hidden
+            && bar.getBoundingClientRect().height >= 30
+            && getComputedStyle(document.body).backgroundColor === 'rgba(0, 0, 0, 0)'
+            && getComputedStyle(document.querySelector('.app-body')).backgroundColor !== 'rgba(0, 0, 0, 0)') return true;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } while (Date.now() < deadline);
+        return false;
       })()`);
       if (!titlebar) throw Error('Packaged Desktop failed its macOS title bar check.');
     }

@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { WatchService } from '../src/watch/index.js';
 import { MAX_RESULTS } from '../src/watch/store.js';
 import { Workspace } from '../src/workspace.js';
+import { eventually } from './support.js';
 
 const NOW = Date.parse('2026-06-01T08:00:00Z');
 const run = (runId, extra = {}) => ({ key: `i1:${runId}`, runId, instanceId: 'i1', name: `flow-${runId}`, state: 'running', ...extra });
@@ -223,10 +224,10 @@ test('a hidden window with an active task keeps exactly one loop; with nothing t
   assert.ok(timer, 'an active task starts the loop');
   workspace.wake();
   assert.equal(workspace.timer, timer, 'waking again does not add a second timer');
-  await delay(60);
-  assert.ok(desktop.calls.overview >= 2 && polls.length === desktop.calls.overview, 'every poll reaches the observer, even when nothing changed');
+  await eventually(() => polls.length >= 2, { timeout: 3000, what: 'two hidden window polls' });
+  assert.equal(polls.length, desktop.calls.overview, 'every poll reaches the observer, even when nothing changed');
   service.pause(task.id);
-  await delay(40);
+  await eventually(() => workspace.timer === null && !workspace.inflight, { timeout: 3000, what: 'the hidden window poll loop to go idle' });
   const settled = desktop.calls.overview;
   await delay(40);
   assert.equal(desktop.calls.overview, settled, 'a paused task lets the loop go idle');
