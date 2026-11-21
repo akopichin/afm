@@ -65,9 +65,10 @@ Each target fetches `origin/main` and tags, calculates the version from stable
 Desktop tags, and pushes a single annotated tag for the published main commit.
 To preview it, use `./scripts/release.sh --dry-run --desktop patch --branch main`.
 
-The Desktop workflow builds the dashboard, the pinned AFM executable and Electron
-on macOS and Linux (arm64 and x64). It runs the Desktop tests, performance checks
-and package inspection on each runner, and opens the packaged app on macOS. After
+The Desktop workflow selects the latest stable AFM CLI release once per run.
+Each macOS and Linux build (arm64 or x64) verifies and bundles the corresponding
+CLI executable from that release. It still builds the Desktop assets, runs tests,
+performance checks and package inspection, and opens the packaged app on macOS. After
 all four builds pass it publishes a GitHub Release named **AFM Desktop** with the
 version from the tag. Download the `afm-desktop-<version>-darwin-<arch>.zip` for
 Mac or `afm-desktop-<version>-linux-<arch>.tar.gz` for Linux and verify it with
@@ -78,8 +79,8 @@ Settings → Models or the quick model picker (Command+M on macOS, Ctrl+M on Lin
 choose a provider default, a listed model, or **Custom model…** to enter an ID.
 Codex suggestions come from the installed client's account-specific model list.
 The macOS app uses an ad-hoc signature and may require manual approval.
-The repository’s Latest release continues to track the CLI. Desktop builds use
-the existing `ENGINE_READ_TOKEN` secret. The `afm-release` environment publishes
+The repository’s Latest release continues to track the CLI. Release any new AFM
+capabilities Desktop depends on before tagging Desktop. The `afm-release` environment publishes
 the GitHub Release with the workflow token and updates the Desktop cask with `RELEASE_TOKEN`.
 For a build-only rehearsal, run **AFM Desktop release** from the Actions tab with
 the intended version (for example `0.0.1`). This uploads the archives as workflow artifacts.

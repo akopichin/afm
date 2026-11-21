@@ -21,17 +21,31 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || format('ds-v{0}', inputs.version) }}
 
 jobs:
+  afm-release:
+    name: Select the published AFM version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Resolve the latest stable CLI release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease \
+            --jq 'select(.isDraft == false and .isPrerelease == false) | .tagName')
+          [[ "$tag" =~ ^v([3-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]]
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
   build:
     name: Test and archive on ${{ matrix.os }}
+    needs: afm-release
     strategy:
       fail-fast: false
       matrix:
         os: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
-    env:
-      GOPRIVATE: github.com/akopichin/afm-engine
-      GOWORK: 'off'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,14 +68,30 @@ jobs:
           npm run build --prefix pkg/web/dashboard
           npm ci --prefix desktop
           npm pkg set --prefix desktop "version=${RELEASE_TAG#ds-v}"
-      - uses: ./.github/actions/private-go
-        with:
-          token: ${{ secrets.ENGINE_READ_TOKEN }}
-      - name: Build the native AFM executable
-        run: npm run sidecar --prefix desktop
-      - name: Remove module credentials
-        if: always()
-        run: rm -f "$HOME/.netrc"
+      - name: Download and verify the AFM release binary
+        shell: bash
+        env:
+          AFM_TAG: ${{ needs.afm-release.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$RUNNER_OS" in
+            macOS) platform=darwin ;;
+            Linux) platform=linux ;;
+            *) exit 1 ;;
+          esac
+          case "$RUNNER_ARCH" in
+            X64) arch=amd64; node_arch=x64 ;;
+            ARM64) arch=arm64; node_arch=arm64 ;;
+            *) exit 1 ;;
+          esac
+          archives="$RUNNER_TEMP/afm-release"
+          binary="desktop/dist/sidecars/$platform-$node_arch/afm"
+          gh release download "$AFM_TAG" --repo "$GITHUB_REPOSITORY" --dir "$archives" \
+            --pattern "afm_${platform}_${arch}.tar.gz" --pattern build-manifest.json
+          python3 scripts/stage-afm-release-binary.py "$archives" "$platform" "$arch" "$binary"
+          if [[ "$platform" == darwin ]]; then codesign --force --sign - "$binary"; fi
+          test "$("$binary" --version)" = "afm version ${AFM_TAG#v}"
+          echo "Bundling AFM $AFM_TAG for $platform/$arch"
       - name: Test and package Desktop
         working-directory: desktop
         run: |

@@ -147,6 +147,25 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("ENGINE_READ_TOKEN", json.dumps(publish))
         self.assertIn("--latest=false", json.dumps(publish))
 
+    def test_all_desktop_targets_use_one_published_afm_release(self):
+        path = pathlib.Path(__file__).parents[1] / ".github/workflows/desktop-release.yml"
+        jobs = yaml.safe_load(path.read_text())["jobs"]
+        resolve = jobs["afm-release"]
+        self.assertEqual(resolve["outputs"]["tag"], "${{ steps.release.outputs.tag }}")
+        self.assertIn("gh release view", resolve["steps"][0]["run"])
+        build = jobs["build"]
+        self.assertEqual(build["needs"], "afm-release")
+        steps = build["steps"]
+        download = next(step for step in steps if step.get("name") == "Download and verify the AFM release binary")
+        self.assertEqual(download["env"]["AFM_TAG"], "${{ needs.afm-release.outputs.tag }}")
+        for content in ('gh release download "$AFM_TAG"', '"afm_${platform}_${arch}.tar.gz"',
+                        'build-manifest.json', 'scripts/stage-afm-release-binary.py'):
+            self.assertIn(content, download["run"])
+        package = next(step for step in steps if step.get("name") == "Test and package Desktop")
+        self.assertLess(steps.index(download), steps.index(package))
+        for dependency in ("ENGINE_READ_TOKEN", "private-go", "npm run sidecar", "setup-go"):
+            self.assertNotIn(dependency, json.dumps(build))
+
 
     def test_desktop_cask_matches_both_mac_archives(self):
         script = pathlib.Path(__file__).parents[1] / "scripts/publish-cask.py"
