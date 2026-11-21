@@ -6,6 +6,10 @@
 
 - Use Command on macOS or Ctrl on Linux for Desktop Home, notification navigation,
   the quick model chooser, and numbered run tabs. Open the project picker with Shift+K and the same modifier.
+- Add a Costs screen with spend, tokens, Elapsed, Idle and Stage work for
+  observed runs, 24h and 7d ranges, an As of slider for the last seven days,
+  Compare runs, and Hide prices.
+- Show a cumulative 24-hour cost line per active run on Home project tiles.
 
 ## 2026-11-20
 

@@ -126,6 +126,39 @@ disappears from the host loses its history. Codex scheduled summaries always use
 the plain-text fallback. Quitting Desktop does not finish an in-flight summary;
 it runs again after restart. At most 50 watches are kept.
 
+## Costs
+
+Open **Costs** next to the logo, or the **Costs** link on a project tile that
+has active runs. The screen shows estimated spend, tokens, Elapsed, Idle and
+Stage work for the runs Desktop observes. AFM has no run-level "Running"
+time, so Desktop shows Stage work (the time stages were working) or a dash.
+
+- **Range:** *Since start*, *24h* or *7d*. Growth ranges come from Desktop's
+  own history, so a run that started before Desktop watched it shows a note
+  that history starts later. A gap, a counter reset or a figure that was
+  unavailable is labelled and never counted as zero.
+- **As of:** drag the slider up to seven days back. The label shows the local
+  date, time and zone; each row also shows when its figures were really read.
+  *Back to now* returns. Past moments show recorded totals only: stage rows,
+  overhead and estimate coverage are not stored, so no percentage is shown
+  across recorded estimates.
+- **Compare runs:** pick two runs and read Elapsed, Stage work, Idle, tokens
+  and estimated cost with deltas, plus stages and overhead side by side.
+- **Hide prices:** removes every price from the page and from stored history.
+  Runs whose prices AFM hides are never shown with money.
+- **Home tiles:** one cumulative 24-hour line per active run and the
+  since-start total; without prices the tiles show Stage work.
+
+Desktop collects costs only while Home or Costs is shown and the window is
+visible, so background polling is unchanged. While the live range is open,
+Costs and the Home tiles re-read the recorded history about every 15 seconds;
+a fixed As of moment is not refreshed. History is kept in
+`~/.afm/desktop/costs-history.json`: at most 50 runs and seven days, thinned
+to 30-second steps for the last hour and 10-minute steps before that. The
+file can reach about 10 MB when 50 runs are fully retained. Followed runs
+keep their history; when more than 50 are active, the extra ones are not
+recorded until a finished, vanished or offline run frees a place.
+
 ## Run the overnight development flow
 
 The pipeline package is [desktop/workflow](workflow/pipeline.yaml). Its stages are

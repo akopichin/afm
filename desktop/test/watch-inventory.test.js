@@ -4,6 +4,7 @@ import http from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Costs } from '../src/costs.js';
 import { Workspace } from '../src/workspace.js';
 import { runView } from '../src/runs.js';
 import { WatchService } from '../src/watch/index.js';
@@ -12,10 +13,11 @@ import { Notifier } from '../src/notifier.js';
 // A run's own HTTP API: identity, run status with its stages, and the dialog of a stage.
 async function fakeRun(t, { runId = 'r1', instanceId = 'i1', stages = [], runStatus = 'running' } = {}) {
   // `hold` is a promise the server awaits before answering, so a slow run can be imitated exactly.
-  const state = { runId, instanceId, stages, runStatus, fail: false, hold: null, hits: [], dialogs: {} };
+  const state = { runId, instanceId, stages, runStatus, fail: false, hold: null, dialogDelay: 0, hits: [], dialogs: {} };
   const server = http.createServer(async (req, res) => {
     state.hits.push(req.url);
     await state.hold;
+    if (state.dialogDelay && req.url.endsWith('/dialog')) await new Promise(resolve => setTimeout(resolve, state.dialogDelay));
     res.setHeader('Content-Type', 'application/json');
     if (state.fail) { res.statusCode = 500; res.end('{}'); return; }
     if (req.url === '/api/runtime') res.end(JSON.stringify({ run_id: state.runId, instance_id: state.instanceId, mode: 'dashboard', ready: true }));
@@ -142,4 +144,41 @@ test('without a watch task no discovered run is read: zero requests, and a slow 
   release();
   await pending;
   assert.deepEqual(slow.hits, ['/api/runtime', '/api/status']);
+});
+
+test('watch tasks and Costs share one status read per run and cycle without changing either result', async t => {
+  const terminal = await fakeRun(t, { runId: 'term' });
+  const dashboard = await fakeRun(t, { runId: 'dash' });
+  const { service, results, workspace } = await setup(t, () => [discovered(terminal), attached(dashboard)]);
+  const costs = new Costs();
+  costs.setWatched(true);
+  const shared = new Workspace({ desktop: { overview: () => workspace.desktop.overview() }, watchActive: () => service.active, costs });
+  shared.onPoll(snapshot => service.onSnapshot(snapshot));
+  t.after(() => { shared.close(); costs.close(); });
+  service.create({});
+  shared.setVisible(true);
+  await shared.refresh();
+  question(terminal, 'ask', 'q1');
+  question(dashboard, 'ask', 'q2');
+  for (const run of [terminal, dashboard]) run.hits.length = 0;
+  const snapshot = await shared.refresh();
+  for (const run of [terminal, dashboard]) assert.equal(run.hits.filter(url => url === '/api/status').length, 1, 'one status read per run');
+  assert.deepEqual(snapshot.attention.map(item => item.runKey), ['i1:dash']);
+  assert.deepEqual(results.map(r => [r.runId, r.stageId]).sort(), [['dash', 'ask'], ['term', 'ask']]);
+  assert.deepEqual(costs.view().runs.map(run => run.key).sort(), ['i1:dash', 'i1:term']);
+});
+
+test('slow dialog reads of many questions run in bounded batches, not one after another', async t => {
+  const runs = [];
+  for (let i = 0; i < 6; i++) {
+    const run = await fakeRun(t, { runId: 'slow' + i });
+    run.dialogDelay = 400;
+    question(run, 'ask', 'q' + i);
+    runs.push(run);
+  }
+  const { workspace } = await setup(t, () => runs.map(run => attached(run)));
+  const started = Date.now();
+  const snapshot = await workspace.refresh();
+  assert.equal(snapshot.attention.length, 6);
+  assert.ok(Date.now() - started < 1600, 'six 400 ms dialog reads took ' + (Date.now() - started) + ' ms');
 });

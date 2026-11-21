@@ -9,6 +9,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 - Use Command on macOS or Ctrl on Linux for Desktop Home, notification navigation,
   the quick model chooser, and numbered run tabs. Open the project picker with Shift+K and the same modifier.
+- Add Costs to AFM Desktop: spend and time across observed runs, 24h and 7d ranges, an As of slider, Compare runs, Hide prices and Home tile charts. See [Desktop changelog](desktop/CHANGELOG.md).
 
 ## 2026-11-20
 

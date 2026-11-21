@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="desktop.css">
 <link rel="stylesheet" href="select.css">
 <link rel="stylesheet" href="watch.css">
+<link rel="stylesheet" href="costs.css">
 </head>
 <body>
 <div id="window-titlebar" hidden aria-hidden="true"><span id="window-title">Projects · AFM Desktop</span></div>
@@ -23,6 +24,7 @@
   </div>
   <div id="crumb"></div>
   <div class="spacer"></div>
+  <button class="switch" id="costs-nav" aria-label="Costs" aria-current="false"><span aria-hidden="true">$</span> Costs</button>
   <button class="switch" id="quick"><span aria-hidden="true">⌕</span> <span class="switch-label">Switch project</span><kbd></kbd></button>
   <button class="switch assistant-toggle" id="assistant-toggle" aria-keyshortcuts="Alt+A" aria-label="AFM Assistant" aria-controls="assistant" aria-expanded="false"><span aria-hidden="true">✧</span> Assistant</button>
   <button class="icon" id="settings-toggle" title="Settings" aria-label="Settings">⚙</button>
@@ -83,6 +85,17 @@
   <small id="watch-report-time" class="watch-report-time"></small>
   <article id="watch-report-body" class="watch-report"></article>
 </dialog>
+<dialog id="run-cost" aria-labelledby="run-cost-name">
+  <header class="cost-card-head"><div><div id="run-cost-project" class="cost-detail-project"></div><h2 id="run-cost-name"></h2></div>
+    <button class="icon cost-close" id="close-cost" aria-label="Close run cost">×</button></header>
+  <div id="run-cost-body" class="cost-detail-body"></div>
+</dialog>
+<dialog id="run-compare" aria-labelledby="compare-title">
+  <header class="cost-card-head"><div><div class="cost-detail-project">Costs</div><h2 id="compare-title">Compare runs</h2></div>
+    <button class="icon cost-close" id="close-compare" aria-label="Close comparison">×</button></header>
+  <div class="cost-compare-controls"><label>First run<select id="compare-a"></select></label><label>Second run<select id="compare-b"></select></label></div>
+  <div id="compare-body" class="cost-detail-body" aria-live="polite"></div>
+</dialog>
 <input type="file" id="folder" webkitdirectory multiple hidden>
 <dialog id="ssh-key-dialog" aria-labelledby="ssh-key-title">
   <form id="ssh-key-form">
@@ -94,5 +107,5 @@
 </dialog>
 <input type="file" id="source-folder" webkitdirectory multiple hidden>
 <script src="store.js"></script><script src="desktop.js"></script><script src="library.js"></script><script src="assistant.js"></script><script src="tasks.js"></script><script src="report.js"></script><script src="controls.js"></script><script src="attention.js"></script>
-<script src="inventory.js"></script><script src="native.js"></script><script src="select.js"></script>
+<script src="inventory.js"></script><script src="costs.js"></script><script src="native.js"></script><script src="select.js"></script>
 </body></html>

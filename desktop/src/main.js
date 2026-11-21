@@ -10,6 +10,8 @@ import { Desktop } from './desktop.js';
 import { LiveView } from './live-view.js';
 import { afmBinary } from './binary.js';
 import { DashboardViews } from './dashboard-views.js';
+import { Costs } from './costs.js';
+import { CostsHistory } from './costs-history.js';
 import { Workspace } from './workspace.js';
 import { Notifier } from './notifier.js';
 import { WatchService } from './watch/index.js';
@@ -71,12 +73,14 @@ const notifier = new Notifier({ home, show: showBanner, settings: {enabled: fals
     bounce: () => { if (!window?.isFocused()) app.dock.bounce('informational'); },
   } : undefined,
   claimed: (item, snapshot) => watchTasks.covers(item.kind, item.runKey) });
+const costs = new Costs({ history: new CostsHistory(desktop.home) });
 // Background watch tasks keep the one hidden-window poll running while any of them is active.
 let publishWatch;
 const watchBanners = createWatchBanners({ show: banner => showBanner(banner), visible: result => Boolean(window?.isFocused() && shownRun === result.runKey) });
 const watchTasks = new WatchService({ home, onActiveChange: () => workspace.wake(), onChange: () => publishWatch?.(), onResult: (task, result) => watchBanners.result(task, result), onSummaryDue: task => summaries.run(task).catch(error => console.error('Watch report:', error)), onError: error => console.error('Watch tasks were not saved:', error) });
-const workspace = new Workspace({ desktop, stageBrowsers, watchHidden: () => notifier.enabled || watchTasks.active, watchActive: () => watchTasks.active });
+const workspace = new Workspace({ desktop, stageBrowsers, costs, watchHidden: () => notifier.enabled || watchTasks.active, watchActive: () => watchTasks.active });
 watchTasks.load().then(() => workspace.wake()).catch(error => console.error('Watch tasks:', error));
+desktop.prefs.get().then(prefs => costs.setHidePrices(prefs.hidePrices)).catch(() => {});
 const loadNotificationSettings = () => desktop.prefs.get().then(prefs => notifier.setSettings(prefs.notifications, workspace.snapshot?.attention));
 // A stage browser appearing or going away changes the Live tabs at once, not at the next poll.
 stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
@@ -159,6 +163,10 @@ handle('projects:overview', () => desktop.overview());
 handle('app:version', () => app.getVersion());
 handle('workspace:get', () => workspace.get());
 handle('workspace:refresh', () => workspace.refresh());
+handle('costs:get', () => costs.view());
+handle('costs:period', (from, to, buckets) => costs.period(Number(from), Number(to), Math.min(48, Math.max(0, Number(buckets) || 0))));
+// Watching starts the extra status reads at once; the renderer stops it when Home and Costs are both off screen.
+handle('costs:watch', watched => { costs.setWatched(watched); if (costs.watched) workspace.refresh().catch(() => {}); });
 // A folder only a run knows about has no Home entry yet; its details are readable because the host listed it.
 handle('projects:details', async (id, folder) => {
   try { return await desktop.projectDetails(id); }
@@ -189,7 +197,7 @@ handle('prefs:environment-refresh', async () => {
   await environment();
   return true;
 });
-handle('prefs:set', async changes => { await desktop.prefs.set(changes); await loadNotificationSettings(); return desktop.prefs.view(); });
+handle('prefs:set', async changes => { const prefs = await desktop.prefs.set(changes); costs.setHidePrices(prefs.hidePrices); await loadNotificationSettings(); return desktop.prefs.view(); });
 handle('notify:selection', runKey => { shownRun = typeof runKey === 'string' ? runKey : null; });
 handle('host:status', () => desktop.host.state);
 handle('host:restart', confirm => desktop.host.restart({confirmExternal: confirm === true}));
@@ -287,6 +295,7 @@ function pushWorkspace(snapshot){
   window?.webContents.send('workspace:update',snapshot);
 }
 workspace.onChange(pushWorkspace);
+costs.onChange(view => window?.webContents.send('costs:update', view));
 workspace.onChange(snapshot => notifier.onSnapshot(snapshot).catch(error => console.error('Notifications:', error)));
 workspace.onPoll(snapshot => watchTasks.onSnapshot(snapshot));
 // The renderer registers its banner listener while loading, so every opener waits for the same load.
@@ -332,7 +341,7 @@ function openWindow(){
   window.webContents.on('will-frame-navigate',guard);
   window.webContents.on('will-redirect',guard);
   window.on('close',()=>{dashboardViews.close();sampleView?.close();sampleView=null;stageBrowsers.place(null,null)});
-  window.on('closed',()=>{window=null;workspace.setVisible(false)});
+  window.on('closed',()=>{window=null;costs.setWatched(false);workspace.setVisible(false)});
   // The sample app never talks to the real host.
   const watch=visible=>{if(!demo)workspace.setVisible(visible)};
   for(const [event,visible] of [['show',true],['restore',true],['hide',false],['minimize',false]])
@@ -450,7 +459,7 @@ let quitting=false;
 app.on('before-quit',event=>{
   if(quitting)return;
   event.preventDefault();quitting=true;
-  stopEnvironmentImports();stageBrowsers.close();workspace.close();
+  stopEnvironmentImports();stageBrowsers.close();workspace.close();costs.close();
   const settled=Promise.allSettled([assistant.close(),desktop.close(),watchTasks.flush().catch(error=>console.error('Watch tasks were not saved on Quit:',error))]);
   Promise.race([settled,new Promise(resolve=>setTimeout(resolve,6000))]).finally(()=>app.quit());
 });

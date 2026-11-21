@@ -102,8 +102,9 @@ function stageLabel(r){
 function renderHome(){
   const runs=activeRuns();
   $('screen').innerHTML=`<div class="home"><div class="heading"><div><h1>Projects</h1><p class="summary">${projects.length} recent projects · ${runs.length} active runs</p></div><div class="heading-actions"><button class="action" data-folder>Open folder…</button><button class="action primary" data-start>＋ New run</button></div></div>
-  <section><div class="section-title"><h2>Recent projects</h2></div><div class="tiles">${projects.map((p,i)=>`<div class="project-tile"><button class="tile" data-project="${p.id}" style="--tone:${p.tone}">${artwork(i)}<div class="tile-body"><h3>${esc(p.name)}</h3><p class="path">${esc(p.path)}</p></div><div class="cardfooter"><i class="dot"></i>${p.runs.some(active)?p.runs.filter(active).length+' active run'+(p.runs.filter(active).length===1?'':'s'):'No active runs'}</div></button><button class="forget-project icon" data-forget="${esc(p.id)}" aria-label="Remove ${esc(p.name)} from recent projects" title="Remove from recent projects">×</button></div>`).join('')}</div></section>
-  <section><div class="section-title"><h2>Active runs</h2><span class="total">${runs.length}</span></div><div class="active-list">${runs.map(({p,r})=>`<button class="row" data-project="${p.id}" data-run="${r.id}" style="--tone:${p.tone}"><span class="r-icon">${r.source==='Terminal'?'›_':'▷'}</span><span class="r-name"><strong>${esc(r.flow)}</strong><small>${esc(p.name)}${stageLabel(r)}</small></span><span class="origin">${r.source}</span><span class="mini-state"><i class="dot"></i>${label(r)}</span><span class="chev">→</span></button>`).join('')||'<p class="empty">No active runs</p>'}</div></section></div>`;
+  <section><div class="section-title"><h2>Recent projects</h2></div><div class="tiles">${projects.map((p,i)=>`<div class="project-tile"><button class="tile" data-project="${p.id}" style="--tone:${p.tone}">${artwork(i)}<div class="art project-cost-art" data-cost-project="${esc(p.id)}" hidden></div><div class="tile-body"><h3>${esc(p.name)}</h3><p class="path">${esc(p.path)}</p></div><div class="cardfooter"><i class="dot"></i>${p.runs.some(active)?p.runs.filter(active).length+' active run'+(p.runs.filter(active).length===1?'':'s'):'No active runs'}</div></button><button class="tile-cost-link action" data-cost-link="${esc(p.id)}" aria-label="Costs for ${esc(p.name)}" hidden>Costs ↗</button><button class="forget-project icon" data-forget="${esc(p.id)}" aria-label="Remove ${esc(p.name)} from recent projects" title="Remove from recent projects">×</button></div>`).join('')}</div></section>
+  <section><div class="section-title"><h2>Active runs</h2><span class="total">${runs.length}</span></div><div class="active-list">${runs.map(({p,r})=>`<button class="row" data-project="${p.id}" data-run="${r.id}" style="--tone:${p.tone}"><span class="r-icon">${r.source==='Terminal'?'›_':'▷'}</span><span class="r-name"><strong>${esc(r.flow)}</strong><small>${esc(p.name)}${stageLabel(r)}</small></span><span class="origin">${r.source}</span><span class="mini-state"><i class="dot"></i>${label(r)}</span><small class="row-cost" data-cost-run-key="${esc(r.key||'')}"></small><span class="chev">→</span></button>`).join('')||'<p class="empty">No active runs</p>'}</div></section></div>`;
+  if(typeof paintHomeCosts==='function')paintHomeCosts();
 }
 function runURL(p,r){
   return '../.generated/run.html?'+new URLSearchParams({flow:r.flow,project:p.name,state:r.state,source:r.source,id:r.id,answer:r.answer||'',scenario:r.scenario||'',workspace:r.workspace||'',agent:r.agent||"codex",kind:r.kind||"",live:r.live?"yes":"no"});
@@ -112,12 +113,15 @@ function render(){
   const {p,r,tab}=selection();
   const wantFocus=focusDashboard;focusDashboard=false;
   document.dispatchEvent(new Event("workspace-change"));
-  document.title=`${p?p.name:'Projects'} · AFM Desktop`;
+  const onCosts=location.hash==='#costs';
+  document.title=`${onCosts?'Costs':p?p.name:'Projects'} · AFM Desktop`;
+  $('costs-nav').setAttribute('aria-current',onCosts?'page':'false');
   $('window-title').textContent=document.title;
   $('crumb').innerHTML=p?`<div class="crumb">/ <button data-switch>${esc(p.name)} ⌄</button></div>`:'';
   for(const frame of dashboards.values()) frame.hidden=true;
   const stage = $('dashboard-host');
   stage.hidden=true;
+  if(onCosts){renderCosts();return}
   if(!p){renderHome();return}
   const liveTab=r?.live&&tab==='live';
   if(r)remembered.set(p.id,{id:r.id,tab:liveTab?'live':'run'});

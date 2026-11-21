@@ -27,6 +27,14 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
     ipcRenderer.on('workspace:update',listener);
     return ()=>ipcRenderer.removeListener('workspace:update',listener);
   },
+  costs:()=>ipcRenderer.invoke('costs:get'),
+  costsPeriod:(from,to,buckets)=>ipcRenderer.invoke('costs:period',from,to,buckets),
+  watchCosts:watched=>ipcRenderer.invoke('costs:watch',watched),
+  onCosts:callback=>{
+    const listener=(_event,view)=>callback(view);
+    ipcRenderer.on('costs:update',listener);
+    return ()=>ipcRenderer.removeListener('costs:update',listener);
+  },
   projectDetails:(id,folder)=>ipcRenderer.invoke('projects:details',id,folder),
   addProject:folder=>ipcRenderer.invoke('projects:add',folder),
   overview:()=>ipcRenderer.invoke('projects:overview'),

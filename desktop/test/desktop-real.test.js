@@ -296,33 +296,38 @@ test('the workspace snapshot follows a real run, verifies its stage list and for
   const folder = await makeProject(ctx.home, 'live', { flows: { 'w.yaml': sleepFlow('w') } });
   const desktop = await open(t, ctx);
   const workspace = new Workspace({ desktop, interval: 200 });
-  t.after(() => workspace.close());
-  const project = await desktop.projects.add(folder);
-  const updates = [];
-  workspace.onChange(snapshot => updates.push(snapshot));
-  await workspace.refresh();
-  assert.deepEqual(updates[0].projects[0].runs, []);
+  // The home is removed by an earlier hook, so the poll must be over before the body returns.
+  try {
+    const project = await desktop.projects.add(folder);
+    const updates = [];
+    workspace.onChange(snapshot => updates.push(snapshot));
+    await workspace.refresh();
+    assert.deepEqual(updates[0].projects[0].runs, []);
 
-  await desktop.runs.start({ requestId: 'ws-1', projectId: project.id, kind: 'Flow', file: 'w.yaml' });
-  workspace.setVisible(true);
-  const snapshot = await eventually(async () => workspace.snapshot.projects[0].runs.find(run => run.launchState === 'ready'), { what: 'ready run in snapshot' });
-  assert.equal(snapshot.origin, 'desktop');
-  // The real run's own API answers identity and stage list the way the notice reader expects.
-  assert.deepEqual(await fetchAttention(snapshot), []);
-  assert.deepEqual(workspace.snapshot.attention, []);
-  await assert.rejects(fetchAttention({ ...snapshot, instanceId: 'someone-else' }), /Run changed/);
+    await desktop.runs.start({ requestId: 'ws-1', projectId: project.id, kind: 'Flow', file: 'w.yaml' });
+    workspace.setVisible(true);
+    const snapshot = await eventually(async () => workspace.snapshot.projects[0].runs.find(run => run.launchState === 'ready'), { what: 'ready run in snapshot' });
+    assert.equal(snapshot.origin, 'desktop');
+    // The real run's own API answers identity and stage list the way the notice reader expects.
+    assert.deepEqual(await fetchAttention(snapshot), []);
+    assert.deepEqual(workspace.snapshot.attention, []);
+    await assert.rejects(fetchAttention({ ...snapshot, instanceId: 'someone-else' }), /Run changed/);
 
-  const seen = updates.length;
-  await delay(700);
-  assert.equal(updates.length, seen, 'an idle run produced snapshot updates');
+    const seen = updates.length;
+    await delay(700);
+    assert.equal(updates.length, seen, 'an idle run produced snapshot updates');
 
-  await desktop.runs.cancel(snapshot.runId, snapshot.instanceId);
-  // The host may list the ended run once as finished or stop listing it at all; it must never stay running.
-  await eventually(async () => !workspace.snapshot.projects[0].runs.some(run => run.key === snapshot.key && run.state === 'running'), { what: 'ended run' });
-  const origins = new DashboardOrigins();
-  origins.add(new URL(snapshot.apiUrl).origin, snapshot.key);
-  origins.retain(new Set());
-  assert.equal(origins.size, 0);
+    await desktop.runs.cancel(snapshot.runId, snapshot.instanceId);
+    // The host may list the ended run once as finished or stop listing it at all; it must never stay running.
+    await eventually(async () => !workspace.snapshot.projects[0].runs.some(run => run.key === snapshot.key && run.state === 'running'), { what: 'ended run' });
+    const origins = new DashboardOrigins();
+    origins.add(new URL(snapshot.apiUrl).origin, snapshot.key);
+    origins.retain(new Set());
+    assert.equal(origins.size, 0);
+  } finally {
+    workspace.close();
+    await workspace.inflight?.catch(() => {});
+  }
 });
 
 test('an explicit current or branch launch of a worktrees: true flow really runs in the checkout', fast, async t => {

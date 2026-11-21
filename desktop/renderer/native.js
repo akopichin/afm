@@ -8,7 +8,9 @@ function showNativeError(error) {
 // A snapshot that changes nothing the page shows touches nothing.
 let attentionSignature='[]';
 let inventoryAvailable=false;
+let lastSnapshot=null;
 function applyWorkspace(snapshot){
+  lastSnapshot=snapshot;
   const {changed,reordered}=reconcileInventory(projects,snapshot);
   const attention=JSON.stringify(snapshot.attention),noticesChanged=attention!==attentionSignature;
   attentionSignature=attention;attentionItems=snapshot.attention;

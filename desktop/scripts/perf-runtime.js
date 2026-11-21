@@ -1,7 +1,7 @@
 // Main-process workloads of DS-09: idle inventory, attention bursts, streamed chat and subscriber churn.
 // Each prints one JSON line; budgets are asserted so a regression fails `npm run perf`.
 import assert from 'node:assert/strict';
-import { constants } from 'node:fs';
+import { constants, statSync } from 'node:fs';
 import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,9 @@ import { Assistant } from '../src/assistant/assistant.js';
 import { desktopEnvironment, refreshEnvironment } from '../src/environment.js';
 import { Prefs } from '../src/prefs.js';
 import { Workspace } from '../src/workspace.js';
+import { Costs } from '../src/costs.js';
+import { CostsHistory } from '../src/costs-history.js';
+import { runView } from '../src/runs.js';
 
 const fake = fileURLToPath(new URL('../test/fake-provider.js', import.meta.url));
 const percentile = (samples, p) => [...samples].sort((a, b) => a - b)[Math.ceil(p * samples.length) - 1];
@@ -123,6 +126,106 @@ async function subscriberChurn() {
   report('subscriber-churn', { switches: 100, elapsed_ms: performance.now() - start, subscribers_after: listeners, overview_calls: callsAfterHide, polls_while_hidden: 0, outstanding_requests: stats.inflight });
 }
 
+
+// 1,000 observed runs through the Costs collector and its history: per-poll cost, bounded file, and no work while closed.
+async function costsHistoryLoad() {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'perf-costs-'));
+  try {
+    const iso = ms => new Date(ms).toISOString();
+    const start = Date.parse('2026-11-20T10:00:00Z');
+    const money = (usd, tokens) => ({ display_cost: '$' + usd, coverage: 'full', estimated_cost_usd: usd, total_tokens: tokens, unpriced: 0, unmetered: 0 });
+    const status = (i, tick) => ({ run_id: String(i), run_status: 'running', started_at: iso(start), elapsed_accumulated_ms: tick * 3000, elapsed_since: null, idle_accumulated_ms: 0, idle_since: null,
+      accounting: { health: 'ok', has_data: true, show_money: true }, run_cost: money(tick, tick * 100), run_overhead_cost: money(0, 0),
+      stages: [{ id: 's', name: 's', status: 'running', cost: money(tick, tick * 100), timing: { started: true, complete: true, work_ms: tick * 1000 } }], capabilities: { usage_analytics: false } });
+    const runs = Array.from({ length: 1000 }, (_, i) => ({ view: runView({ run_id: String(i), instance_id: `instance-${i}`, run_name: `flow-${i}`, project_root: `/work/p${i % 100}`, mode: 'dashboard',
+      api_url: `http://127.0.0.1:${20000 + i}`, ownership: 'attached', liveness: 'active', run_status: 'running', attention_required: false, actions: [] }), projectId: `p${i % 100}` }));
+    const inventory = Costs.inventoryOf(runs.map(({ view, projectId }) => ({ run: view, projectId })));
+    let requests = 0;
+    let at = start;
+    const history = new CostsHistory(home);
+    const costs = new Costs({ request: async () => { requests++; return { ok: true, json: async () => ({}) }; }, now: () => at, history });
+    // Closed: nothing is read and nothing is stored.
+    await costs.observe(inventory, new Map(inventory.map(({ run }, i) => [run.key, status(i, 1)])));
+    assert.equal(requests, 0, 'Costs made requests while closed');
+    assert.equal(history.keys().length, 0, 'Costs stored history while closed');
+    costs.setWatched(true);
+    costs.setVisible(true);
+    const samples = [];
+    for (let tick = 1; tick <= 60; tick++) {
+      at = start + tick * 30_000;
+      const statuses = new Map(inventory.map(({ run }, i) => [run.key, status(i, tick)]));
+      const t = performance.now();
+      await costs.observe(inventory, statuses);
+      if (tick > 5) samples.push(performance.now() - t);
+    }
+    costs.close();
+    // Followed runs keep accumulating while the ones above the cap wait for a place.
+    const counts = history.keys().map(key => history.run(key).samples.length);
+    assert.equal(history.keys().length, 50, 'History is not at its cap of 50 runs');
+    assert.ok(Math.min(...counts) >= 55, 'Followed runs lost history under churn: ' + Math.min(...counts));
+    assert.equal(requests, 0, 'Costs read analytics for runs that report none');
+    const file = statSync(history.file).size;
+    const reads = [];
+    for (let i = 0; i < 20; i++) {
+      const t = performance.now();
+      await costs.period(at - 24 * 3600000, at, 24);
+      reads.push(performance.now() - t);
+    }
+    report('costs-history-churn', { runs: 1000, polls: 60, retained_runs: 50, min_samples_per_retained_run: Math.min(...counts), observe_p95_ms: percentile(samples, 0.95),
+      period_p95_ms: percentile(reads, 0.95), history_file_kb: Math.round(file / 1024), requests_while_closed: 0, requests_total: requests });
+    assert.ok(percentile(samples, 0.95) < 500, 'A Costs poll over 1,000 runs exceeded its 500 ms regression ceiling');
+    await matureHistory(home, start);
+  } finally { await rm(home, { recursive: true, force: true }); }
+}
+
+// The retained worst case: 50 runs, each with seven days of snapshots at the documented thinning (30 s for the last hour, 10 minutes before).
+// Seven days of real polling cannot be replayed here, so the file is written directly and its shape is asserted before timing.
+// The ceilings are regression guards set above the measured values, not targets.
+async function matureHistory(home, start) {
+  const dir = path.join(home, 'mature');
+  const end = start + 8 * 24 * 3600000;
+  const ticks = [];
+  for (let t = end - 7 * 24 * 3600000; t < end - 3600000; t += 600000) ticks.push(t);
+  for (let t = end - 3600000; t <= end; t += 30000) ticks.push(t);
+  const runs = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`instance-${i}:${i}`, { name: `flow-${i}`, projectId: `p${i % 100}`, startedAt: ticks[0], outage: null, truncated: false,
+    samples: ticks.map((t, k) => ({ t, elapsedMs: k * 30000, idleMs: k * 1000, workMs: k * 20000, tokens: k * 500, usd: k / 100 })) }]));
+  await mkdir(path.join(dir, '.afm', 'desktop'), { recursive: true });
+  await writeFile(path.join(dir, '.afm', 'desktop', 'costs-history.json'), JSON.stringify({ version: 2, runs }));
+  const history = new CostsHistory(dir);
+  await history.load();
+  const retained = history.run('instance-0:0').samples;
+  assert.ok(retained.length > 1000, 'The retained history is not mature');
+  assert.ok(end - retained[0].t > 6.9 * 24 * 3600000, 'The retained history does not cover seven days');
+  assert.equal(history.keys().length, 50);
+  let at = end;
+  const costs = new Costs({ request: async () => ({ ok: true, json: async () => ({}) }), now: () => at, history });
+  costs.setWatched(true);
+  costs.setVisible(true);
+  const inventory = Costs.inventoryOf(Object.keys(runs).map((key, i) => ({ run: runView({ run_id: String(i), instance_id: `instance-${i}`, run_name: `flow-${i}`, project_root: '/work/p', mode: 'dashboard',
+    api_url: `http://127.0.0.1:${20000 + i}`, ownership: 'attached', liveness: 'active', run_status: 'running', attention_required: false, actions: [] }), projectId: `p${i % 100}` })));
+  const status = (i, k) => ({ run_id: String(i), run_status: 'running', started_at: new Date(ticks[0]).toISOString(), elapsed_accumulated_ms: k * 30000, elapsed_since: null, idle_accumulated_ms: 0, idle_since: null,
+    accounting: { health: 'ok', has_data: true, show_money: true }, run_cost: { display_cost: '$1', coverage: 'full', estimated_cost_usd: k / 100, total_tokens: k * 500, unpriced: 0, unmetered: 0 }, stages: [], capabilities: { usage_analytics: false } });
+  const observe = [];
+  for (let k = ticks.length; k < ticks.length + 12; k++) {
+    at = end + (k - ticks.length + 1) * 30000;
+    const t = performance.now();
+    await costs.observe(inventory, new Map(inventory.map(({ run }, i) => [run.key, status(i, k)])));
+    observe.push(performance.now() - t);
+  }
+  const file = statSync(history.file).size;
+  const reads = [];
+  for (let i = 0; i < 20; i++) {
+    const t = performance.now();
+    await costs.period(at - 7 * 24 * 3600000, at, 24);
+    reads.push(performance.now() - t);
+  }
+  costs.close();
+  report('costs-history-mature', { runs: 50, samples_per_run: retained.length, history_file_kb: Math.round(file / 1024), observe_p95_ms: percentile(observe, 0.95), period_p95_ms: percentile(reads, 0.95) });
+  assert.ok(file < 16 * 1024 * 1024, 'The retained history file exceeded 16 MB');
+  assert.ok(percentile(reads, 0.95) < 300, 'A seven-day history read exceeded its 300 ms p95 budget');
+  assert.ok(percentile(observe, 0.95) < 500, 'A poll that saves the retained history exceeded its 500 ms p95 budget');
+}
+
 async function streamedChat() {
   const home = await mkdtemp(path.join(os.tmpdir(), 'perf-chat-'));
   try {
@@ -205,5 +308,6 @@ async function replyLatency() {
 await idleInventory();
 await attentionBurst();
 await subscriberChurn();
+await costsHistoryLoad();
 await streamedChat();
 if (await access('/bin/bash', constants.X_OK).then(() => true, () => false)) await replyLatency();

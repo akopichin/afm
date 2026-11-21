@@ -1,0 +1,105 @@
+.cost-home {font-variant-numeric:tabular-nums}
+.cost-home {flex:1;overflow:auto;padding:36px 38px 48px;margin:auto;width:100%;max-width:1360px}
+.cost-heading,.cost-card-head {display:flex;justify-content:space-between;align-items:center;gap:16px}
+.cost-heading {margin-bottom:24px}
+.cost-heading h1 {font-size:37px;letter-spacing:-.05em;line-height:1.15}
+.cost-heading p,.cost-card-head p {color:var(--text-secondary);font-size:13px;margin-top:4px}
+.cost-filters {display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cost-select select {padding:7px 28px 7px 11px;border:1px solid var(--control-border);border-radius:8px;background:var(--surface-raised);color:var(--text-primary);font:inherit}
+.cost-segment {display:flex;align-items:center;gap:3px;padding:3px;border:1px solid var(--separator-subtle);border-radius:8px;background:var(--surface-tool);white-space:nowrap}
+.cost-segment button {padding:5px 10px;border-radius:5px;color:var(--text-secondary);font-size:13px}
+.cost-segment button[aria-pressed="true"] {color:var(--text-primary);background:var(--surface-overlay);box-shadow:inset 0 0 0 1px var(--separator-subtle)}
+.cost-segment button:hover {color:var(--text-primary)}
+.cost-segment.compact button {padding:3px 8px;font-size:12px}
+.cost-kpis {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:0 0 16px}
+.cost-card {min-width:0;background:var(--surface-raised);border:1px solid var(--separator-subtle);border-radius:12px}
+.cost-kpis>div {padding:15px 19px}
+.cost-kpis dt {color:var(--text-secondary);font-size:13px}
+.cost-kpis dd {margin:4px 0;font-size:28px;letter-spacing:-.045em;font-weight:670;line-height:1.26}
+.cost-kpis small {font-size:12px;color:var(--text-muted)}
+.cost-kpis .partial,.cost-price-note.partial {color:var(--attention)}
+.cost-chart-card {padding:16px 18px 12px}
+.cost-card-head h2 {margin:0;color:var(--text-primary);font-size:16px;letter-spacing:-.02em}
+.cost-breakdown ol {margin:19px 0 2px;list-style:none;display:grid;gap:13px}
+.cost-bar {display:grid;gap:5px}
+.cost-bar-label {display:flex;justify-content:space-between;gap:8px;font-size:13px;align-items:baseline}
+.cost-bar-label span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cost-bar-label strong {white-space:nowrap;font-weight:600}
+.cost-bar-track {height:5px;background:var(--surface-tool);border-radius:4px;overflow:hidden}
+.cost-bar-track i {display:block;height:100%;border-radius:4px;background:var(--bar-color);width:var(--bar-width)}
+.cost-run-card>.cost-card-head {padding:13px 18px 8px}
+.cost-table-scroll {overflow:auto;position:relative}
+.cost-run-card table,.cost-detail-body table {width:100%;border-collapse:collapse}
+.cost-run-card th,.cost-run-card td,.cost-detail-body th,.cost-detail-body td {padding:8px 16px;text-align:left;white-space:nowrap;border-bottom:1px solid var(--separator-subtle)}
+.cost-run-card tr:last-child td,.cost-detail-body tr:last-child td {border-bottom:none}
+.cost-run-card th,.cost-detail-body th {font-size:12px;font-weight:500;color:var(--text-muted)}
+.cost-run-card th button {color:inherit;white-space:nowrap}
+.cost-run-card th[aria-sort="descending"] button,.cost-run-card th[aria-sort="ascending"] button {color:var(--text-primary)}
+.cost-run-card th:nth-child(n+3),.cost-run-card td:nth-child(n+3),.cost-detail-body th:nth-child(n+2),.cost-detail-body td:nth-child(n+2) {text-align:right}
+.cost-run-name {display:flex;flex-direction:column;width:100%;gap:1px;color:var(--text-primary)}
+.cost-run-name strong {font-size:13px;font-weight:620}
+.cost-run-name small,.cost-price-note {font-size:11px;color:var(--text-muted)}
+.cost-run-card tr:hover td {background:color-mix(in srgb,var(--surface-hover) 72%,transparent)}
+.cost-run-card td:first-child {min-width:180px}
+.cost-state {font-size:12px;color:var(--text-secondary);display:inline-flex;align-items:center;gap:7px}
+.cost-state:before {content:"";width:6px;height:6px;border-radius:50%;background:var(--state-color)}
+.cost-run-card td:last-child button {color:var(--text-secondary);padding:3px 6px}
+.cost-run-card td:last-child button:hover {color:var(--accent-primary)}
+.cost-muted {color:var(--text-muted);font-size:12px}
+#run-cost {width:min(700px,92vw);padding:0}
+#run-cost>.cost-card-head {padding:18px 20px;border-bottom:1px solid var(--separator-subtle)}
+#run-cost-name {font-size:22px}
+.cost-detail-project {color:var(--text-muted);font-size:12px;margin-bottom:3px}
+.cost-detail-body {max-height:65vh;overflow:auto;padding:18px 20px}
+.cost-detail-totals {display:flex;gap:26px;margin-bottom:14px}
+.cost-detail-totals div {display:grid;gap:3px}
+.cost-detail-totals small {color:var(--text-muted)}
+.cost-detail-totals strong {font-size:22px;letter-spacing:-.035em}
+.cost-detail-note {margin:12px 0 3px}
+.cost-close {font-size:20px}
+.cost-kpis {grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.cost-detail-totals {flex-wrap:wrap}
+
+.cost-controls {display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.cost-segment button[hidden],.cost-run-card th[hidden] {display:none}
+.cost-state.stale {color:var(--attention)}
+.cost-state:before {background:var(--state-color,var(--success))}
+.cost-state.stale:before {background:var(--attention)}
+.cost-breakdown {margin-bottom:16px}
+.cost-run-card .actions {margin-top:14px}
+.cost-detail-body .actions {justify-content:flex-start}
+#cost-project {min-width:150px}
+@media(max-width:920px) {.cost-home {padding-inline:22px}.cost-breakdown ol {grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}}
+@media(max-width:620px) {.cost-home {padding:19px 12px 28px}.cost-heading {align-items:flex-start;flex-direction:column}.cost-kpis {gap:6px;grid-template-columns:repeat(2,minmax(0,1fr))}.cost-kpis>div{padding:9px}.cost-kpis dd {font-size:21px}.cost-card-head {gap:8px;flex-wrap:wrap}.cost-breakdown ol{grid-template-columns:1fr}.cost-heading h1{font-size:30px}}
+
+.cost-chart-card {padding:16px 18px 12px;margin-bottom:16px}
+.cost-plot {position:relative;height:172px;margin-top:8px}
+.cost-plot svg {display:block;width:100%;height:100%}
+.cost-points {position:absolute;inset:0;pointer-events:none}
+.cost-point {position:absolute;pointer-events:auto;transform:translate(-50%,-50%);width:23px;height:23px;border-radius:50%;background:transparent}
+.cost-point:hover,.cost-point:focus-visible {background:color-mix(in srgb,var(--accent-primary) 26%,transparent)}
+.cost-filters .cost-segment button {padding:5px 10px;font-size:13px}
+.project-cost-art {height:auto;min-height:112px;padding:8px 12px 7px;background:var(--surface-tool)}
+.project-cost-art[hidden],.tile-cost-link[hidden] {display:none}
+.project-cost-top,.project-cost-axis {display:flex;justify-content:space-between;gap:6px}
+.project-cost-top {align-items:baseline;font-size:12px;color:var(--text-muted)}
+.project-cost-top strong {font:650 15px var(--font-ui);color:var(--text-primary)}
+.project-cost-art svg {display:block;width:100%;height:42px;margin:3px 0 1px}
+.project-cost-axis {font-size:10px;color:var(--text-muted)}
+.project-cost-legend {display:flex;gap:2px 12px;flex-wrap:wrap;margin-top:4px;min-height:17px;color:var(--text-secondary);font-size:11px}
+.project-cost-legend span {white-space:nowrap}
+.project-cost-legend i {display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:1px}
+.project-cost-legend b {color:var(--text-primary);font-weight:600}
+.project-cost-legend em {color:var(--attention);font-style:normal}
+.project-tile .tile-cost-link {position:absolute;right:44px;top:8px;padding:3px 9px;font-size:12px;background:var(--surface-raised);opacity:0}
+.project-tile:hover .tile-cost-link,.project-tile:focus-within .tile-cost-link {opacity:1}
+@media(hover:none){.project-tile .tile-cost-link{opacity:1}}
+.row-cost {color:var(--text-muted);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+@media(max-width:760px){.row-cost{display:none}}
+.cost-asof input[type=range] {width:100%;margin:8px 0 2px;accent-color:var(--accent-primary)}
+.cost-asof-days {display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted)}
+.cost-asof {margin-bottom:16px}
+#run-compare {width:min(760px,calc(100vw - 32px))}
+.cost-compare-controls {display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}
+.cost-compare-controls label {display:grid;gap:4px;font-size:12px;color:var(--text-muted)}
+.cost-compare-controls select {min-width:220px}

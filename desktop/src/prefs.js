@@ -4,10 +4,10 @@ import { validVariable } from './environment.js';
 import { MODES } from './git-mode.js';
 
 const NOTIFICATION_KINDS = ['question', 'approval', 'decision', 'failed'];
-const DEFAULTS = { gitMode: 'current', stageBrowser: true, environment: {shell: 'none', file: '', variables: {}},
+const DEFAULTS = { gitMode: 'current', stageBrowser: true, hidePrices: false, environment: {shell: 'none', file: '', variables: {}},
   notifications: {enabled: true, kinds: {question: true, approval: true, decision: true, failed: false}} };
 const isBoolean = value => typeof value === 'boolean';
-const VALIDATORS = { gitMode: value => MODES.includes(value), stageBrowser: isBoolean,
+const VALIDATORS = { gitMode: value => MODES.includes(value), stageBrowser: isBoolean, hidePrices: isBoolean,
   notifications: value => isBoolean(value?.enabled) && NOTIFICATION_KINDS.every(kind => isBoolean(value.kinds?.[kind])) };
 // Only the known switches are stored, whatever else the caller sent.
 const NORMALIZERS = { notifications: value => ({enabled: value.enabled, kinds: Object.fromEntries(NOTIFICATION_KINDS.map(kind => [kind, value.kinds[kind]]))}) };

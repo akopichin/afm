@@ -1,5 +1,7 @@
 'use strict';
 const MAX_RUNS_PER_PROJECT=20;
+// A run opened from Costs stays on its project's tabs even beyond the limit.
+let pinnedRunKey=null;
 const tones=['var(--violet)','var(--attention)','var(--success)'];
 const hashOf=text=>[...text].reduce((n,c)=>(Math.imul(n,31)+c.charCodeAt(0))>>>0,7).toString(36);
 const baseName=path=>path.split(/[\\/]/).filter(Boolean).at(-1)||path;
@@ -39,7 +41,8 @@ function reconcileInventory(projects,snapshot){
     if(!p){p={id:source.id,name:source.name,path:source.path,tone:tones[parseInt(hashOf(source.id),36)%tones.length],external:Boolean(source.external),runs:[]};changed.add(p.id)}
     else if(p.name!==source.name||p.path!==source.path){p.name=source.name;p.path=source.path;changed.add(p.id)}
     const previous=new Map(p.runs.map(r=>[r.key,r]));
-    const runs=source.runs.filter(run=>run.runId&&run.instanceId).slice(-MAX_RUNS_PER_PROJECT).map(run=>{
+    const valid=source.runs.filter(run=>run.runId&&run.instanceId);
+    const runs=valid.filter((run,i)=>i>=valid.length-MAX_RUNS_PER_PROJECT||run.key===pinnedRunKey).map(run=>{
       const state=uiRunState(run,kinds.get(run.key)),live=browsers.get(run.key),signature=runSignature(run,state,live),old=previous.get(run.key);
       return old?.signature===signature?old:toRun(run,state,signature,live);
     });

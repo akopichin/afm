@@ -1,6 +1,6 @@
+import { Costs, FETCH_LIMIT, cancellable } from './costs.js';
 import { localURL } from './host.js';
 
-const FETCH_LIMIT = 6;
 const NOTHING_OBSERVED = { notices: [], status: {}, unavailable: [] };
 
 // Stage statuses that wait for a person, with the notice each one produces.
@@ -64,8 +64,11 @@ async function noticesOf(run, status, request, previous = []) {
 export class Workspace {
   // A hidden window still watches open stage browsers, more slowly, so a finished stage frees its page.
   // `watchActive` says whether a watch task needs the runs the host does not flag; without one they are not read.
-  constructor({ desktop, interval = 3000, hiddenInterval = interval * 5, request = fetch, stageBrowsers = null, watchHidden = () => false, watchActive = () => false }) {
-    Object.assign(this, { desktop, interval, hiddenInterval, request, stageBrowsers, watchHidden, watchActive });
+  constructor({ desktop, interval = 3000, hiddenInterval = interval * 5, request = fetch, stageBrowsers = null, watchHidden = () => false, watchActive = () => false, costs = null }) {
+    Object.assign(this, { desktop, interval, hiddenInterval, stageBrowsers, watchHidden, watchActive, costs });
+    // Closing aborts it: requests of a closed Workspace stop, in flight or not.
+    this.lifetime = new AbortController();
+    this.request = cancellable(request, this.lifetime.signal);
     this.listeners = new Set();
     this.pollListeners = new Set();
     this.snapshot = null;
@@ -92,6 +95,7 @@ export class Workspace {
   // Hidden windows do no discovery unless `watchHidden` asks for it (system notifications); showing one refreshes at once.
   setVisible(visible) {
     this.visible = visible;
+    this.costs?.setVisible(visible && !this.closed);
     clearTimeout(this.timer);
     this.timer = null;
     if (visible && !this.closed) this.refresh().catch(() => {});
@@ -105,6 +109,7 @@ export class Workspace {
   }
 
   refresh() {
+    if (this.closed) return Promise.resolve(this.snapshot);
     if (!this.inflight) {
       this.inflight = this.#build().finally(() => {
         this.inflight = null;
@@ -116,10 +121,19 @@ export class Workspace {
 
   async #build() {
     const overview = await this.desktop.overview();
+    // Costs work of this cycle follows the demand it starts with: once that ends it stops, even if Costs is wanted again.
+    const costs = this.costs?.demand ?? AbortSignal.abort();
     const runs = [...overview.projects.flatMap(project => project.runs), ...overview.unassigned];
+    const sets = this.#classify(runs);
     // While the host is unreachable the last known notices stay, so a reconnect does not reorder them.
+    const statuses = overview.host.error ? new Map() : await this.#readStatuses(sets, overview, costs);
     const { attention, observed } = overview.host.error ? { attention: this.snapshot?.attention ?? [], observed: this.snapshot?.observed ?? NOTHING_OBSERVED }
-      : await this.#read(runs);
+      : await this.#read(sets, statuses);
+    if (!costs.aborted) {
+      if (overview.host.error) this.costs.markUnreachable();
+      else await this.costs.observe(this.#costInventory(overview), statuses, costs);
+    }
+    if (this.closed) return this.snapshot;
     await this.stageBrowsers?.reconcile(runs);
     const snapshot = { host: overview.host, projects: overview.projects, unassigned: overview.unassigned,
       candidates: overview.candidates, attention, observed, stageBrowsers: this.stageBrowsers?.list() ?? [] };
@@ -132,22 +146,52 @@ export class Workspace {
     return this.snapshot;
   }
 
+  // `flagged` runs need a person; `watchable` ones only matter to watch tasks, and are `watched` (read) while one is active.
+  #classify(runs) {
+    const flagged = runs.filter(run => run.attention && (run.state === 'running' || run.can?.open));
+    const watchable = runs.filter(run => run.apiLive && !flagged.includes(run) && (run.attention || run.ownership === 'discovered'));
+    return { flagged, watchable, watched: this.watchActive() ? watchable : [] };
+  }
+
+  #costInventory(overview) {
+    return Costs.inventoryOf([...overview.projects.flatMap(project => project.runs.map(run => ({ run, projectId: project.id }))),
+      ...overview.unassigned.map(run => ({ run, projectId: null }))]);
+  }
+
+  // One verified status read per run and cycle, shared by notices, watch tasks and Costs; null where the read failed.
+  // A run read only for Costs stops with the Costs demand, a run with notices or a watch keeps its read.
+  async #readStatuses({ flagged, watched }, overview, costs) {
+    const reads = new Map([...flagged, ...watched].map(run => [run.key, { run, request: this.request }]));
+    if (!costs.aborted) {
+      const forCosts = cancellable(this.request, costs);
+      for (const { run, readable } of this.#costInventory(overview)) if (readable && !reads.has(run.key)) reads.set(run.key, { run, request: forCosts });
+    }
+    const statuses = new Map();
+    const list = [...reads.values()];
+    for (let i = 0; i < list.length; i += FETCH_LIMIT) {
+      await Promise.all(list.slice(i, i + FETCH_LIMIT).map(async ({ run, request }) => {
+        try { statuses.set(run.key, await readRunStatus(run, request)); }
+        catch { statuses.set(run.key, null); }
+      }));
+    }
+    return statuses;
+  }
+
   // Precise notices for runs the host says need a person. A failed read keeps what was known, so one
   // dropped request neither removes nor re-adds a notice; a run never read successfully is `unavailable`.
   // Watch tasks also need live runs the host does not flag: discovered ones (the host never reports their
   // attention) and API-only ones. Those land in `observed`, apart from `attention`, so they start no banners,
   // and are read only while a watch task is active; otherwise they are `unavailable` too: unknown, not empty.
-  async #read(runs) {
-    const flagged = runs.filter(run => run.attention && (run.state === 'running' || run.can?.open));
-    const watchable = runs.filter(run => run.apiLive && !flagged.includes(run) && (run.attention || run.ownership === 'discovered'));
-    const watched = this.watchActive() ? watchable : [];
+  async #read({ flagged, watchable, watched }, statuses) {
     const found = new Map();
     const reads = [...flagged, ...watched];
+    // Notices may fetch a dialog each, so they run in bounded batches: slow dialogs must not add up.
     for (let i = 0; i < reads.length; i += FETCH_LIMIT) {
       await Promise.all(reads.slice(i, i + FETCH_LIMIT).map(async run => {
         const known = this.lastReads.get(run.key);
+        const status = statuses.get(run.key);
         try {
-          const status = await readRunStatus(run, this.request);
+          if (!status) throw Error('Run unavailable.');
           found.set(run.key, { status: status.run_status ?? null, notices: await noticesOf(run, status, this.request, known?.notices) });
         } catch {
           if (known) found.set(run.key, known);
@@ -172,6 +216,8 @@ export class Workspace {
 
   close() {
     this.closed = true;
+    this.lifetime.abort();
+    this.costs?.setVisible(false);
     clearTimeout(this.timer);
     this.listeners.clear();
     this.pollListeners.clear();

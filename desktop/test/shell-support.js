@@ -26,7 +26,7 @@ export async function loadShell(t, { demo = true, platform = 'MacIntel', native 
   w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), watch: fakeWatch(), liveLayout: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, onWatchOpen: () => {}, reportSelection: async () => {}, onSSHKeyPrompt: () => {}, onSSHKeyClosed: () => {}, ...native };
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
-  const scripts = demo ? ['store', 'desktop', 'library', 'tasks', 'report', 'controls', 'attention'] : ['store', 'desktop', 'library', 'assistant', 'tasks', 'report', 'controls', 'attention', 'inventory', 'native'];
+  const scripts = demo ? ['store', 'desktop', 'library', 'tasks', 'report', 'controls', 'attention', 'costs'] : ['store', 'desktop', 'library', 'assistant', 'tasks', 'report', 'controls', 'attention', 'inventory', 'costs', 'native'];
   // Classic scripts in page order, so a name used before its script has loaded fails here as it would in a browser.
   const addScript = text => { const script = w.document.createElement('script'); script.textContent = text; w.document.body.append(script); };
   for (const name of scripts) addScript(await readFile(new URL(name + '.js', files), 'utf8'));
@@ -80,6 +80,13 @@ export function fakeNative(initial) {
       finally { native.calls.settled++; }
     },
     cancel: async (id, instance) => { native.calls.cancel.push([id, instance]); },
+    costsView: { hidePrices: false, runs: [] }, costsWatches: [], costsListeners: new Set(),
+    periodCalls: [], periodResult: null,
+    costsPeriod: async (...args) => { native.periodCalls.push(args); return (await native.periodResult?.(...args)) ?? { available: false, runs: {}, series: null }; },
+    costs: async () => native.costsView,
+    watchCosts: async watched => { native.costsWatches.push(watched); },
+    onCosts: callback => { native.costsListeners.add(callback); return () => native.costsListeners.delete(callback); },
+    publishCosts: view => { native.costsView = view; for (const callback of native.costsListeners) callback(view); },
     publish: snapshot => { native.snapshot = snapshot; for (const callback of native.listeners) callback(snapshot); },
   });
   return native;
