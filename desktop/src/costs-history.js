@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
+import { desktopDir, Mutex, readJSON, writeAtomic } from './files.js';
 import { liveMs } from './costs.js';
 
 export const RETENTION_MS = 7 * 24 * 3600 * 1000;
@@ -113,8 +113,12 @@ export class CostsHistory {
       const lastInBucket = !next || Math.floor(next.t / BUCKET_MS) !== Math.floor(sample.t / BUCKET_MS);
       if (!old || sample.pin || lastInBucket || index === 0) kept.push(sample);
     }
-    if (kept.length > MAX_SAMPLES) run.truncated = true;
-    run.samples = kept.slice(-MAX_SAMPLES);
+    if (kept.length > MAX_SAMPLES) {
+      run.truncated = true;
+      run.samples = kept.slice(-MAX_SAMPLES);
+    } else {
+      run.samples = kept;
+    }
   }
 
   // Turning prices off in Desktop removes all money from memory and disk.
@@ -145,7 +149,8 @@ export class CostsHistory {
 
   #save() {
     const runs = Object.fromEntries(this.#runs);
-    return this.#lock.run(() => writeJSON(this.file, { version: 2, runs }));
+    // Each save rewrites the retained history, so skip indentation for this store.
+    return this.#lock.run(() => writeAtomic(this.file, JSON.stringify({ version: 2, runs }) + '\n'));
   }
 
   keys() { return [...this.#runs.keys()]; }
