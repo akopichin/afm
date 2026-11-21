@@ -7,7 +7,7 @@ const chatImageTypes=new Set(['image/png','image/jpeg','image/webp','image/gif']
 let nextQueuedMessage=0;
 const toolErrorClock=new Intl.DateTimeFormat(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
 const toolErrorOverrides=new Map(Array.isArray(state.assistantToolErrors)?state.assistantToolErrors:[]);
-let assistantInfo=null,chatDrawQueued=false;
+let assistantInfo=null,chatDrawQueued=false,addingProvider=false;
 
 function authLabel(p){
   if(p.found===false)return 'Not installed';
@@ -55,7 +55,7 @@ function refreshQuickModel(){
 }
 
 function providerForm(){
-  return `<form id="model-form" hidden><label>Name<input name="name" required maxlength="60" placeholder="My Claude, Local model…"></label>
+  return `<form id="model-form" ${addingProvider?'aria-busy="true"':'hidden'}><label>Name<input name="name" required maxlength="60" placeholder="My Claude, Local model…"></label>
     <label>Type<select name="kind"><option value="claude">Claude Code CLI</option><option value="codex">Codex CLI</option><option value="openai">OpenAI-compatible endpoint</option><option value="acp">ACP agent</option></select></label>
     <label id="location-label"><span>Executable path</span><input name="location" required placeholder="/opt/tools/claude"></label>
     <label id="acp-args" hidden>Arguments, one per line
@@ -66,10 +66,10 @@ function providerForm(){
     <label id="reference-label" hidden><span>Environment variable name</span>
       <input name="reference" autocomplete="off" spellcheck="false" aria-describedby="credential-help">
       <small class="field-help" id="credential-help"></small></label>
-    <div class="actions"><button class="primary">Add provider</button></div></form>`;
+    <div class="actions"><button type="submit" class="primary" ${addingProvider?'disabled':''}>${addingProvider?'Adding…':'Add provider'}</button></div></form>`;
 }
 function wireProviderForm(){
-  const form=$('model-form');
+  const form=$('model-form'),toggle=$('add-model'),submit=form.querySelector('button[type="submit"]');
   const refresh=()=>{
     const kind=form.elements.kind.value,credential=form.elements.credential.value;
     $('location-label').querySelector('span').textContent=kind==='openai'?'Endpoint URL':'Executable path';
@@ -90,7 +90,8 @@ function wireProviderForm(){
       :'Enter the absolute path to the file that contains the key.';
   };
   form.elements.kind.onchange=refresh;form.elements.credential.onchange=refresh;refresh();
-  $('add-model').onclick=()=>{form.hidden=!form.hidden;if(!form.hidden)form.elements.name.focus()};
+  toggle.disabled=addingProvider;
+  toggle.onclick=()=>{form.hidden=!form.hidden;if(!form.hidden)form.elements.name.focus()};
   $('scan-models').onclick=scanAssistant;
   $('test-model').onclick=async()=>{
     modelScan='Checking '+profile().name+'…';$('settings-body').querySelector('[role=status]').textContent=modelScan;
@@ -104,21 +105,42 @@ function wireProviderForm(){
     }catch(error){modelScan=error.message}
     if($('settings').open&&settingsTab==='models')drawSettings();
   };
-  if($('remove-model'))$('remove-model').onclick=async()=>{
-    try{applyAssistantInfo(await nativeAFM.assistant.removeProvider(profile().id));modelScan='Provider removed.'}catch(error){modelScan=error.message}
-    drawSettings();
+  for(const button of $('settings-body').querySelectorAll('[data-remove-provider]'))button.onclick=async()=>{
+    const id=button.dataset.removeProvider,name=state.models.find(m=>m.id===id).name;
+    if(!confirm(`Remove “${name}” from Assistant providers?`))return;
+    button.disabled=true;
+    try{
+      const info=await nativeAFM.assistant.removeProvider(id);
+      modelScan='Provider removed.';
+      applyAssistantInfo(info);
+    }catch(error){modelScan=error.message}
+    if(button.isConnected)drawSettings();
   };
   form.onsubmit=async e=>{
     e.preventDefault();
+    if(addingProvider)return;
     const f=new FormData(form),kind=f.get('kind'),credential=f.get('credential');
+    addingProvider=true;
+    form.setAttribute('aria-busy','true');
+    toggle.disabled=submit.disabled=true;
+    submit.textContent='Adding…';
+    let info;
     try{
-      applyAssistantInfo(await nativeAFM.assistant.addProvider({name:f.get('name').trim(),kind,
+      info=await nativeAFM.assistant.addProvider({name:f.get('name').trim(),kind,
         ...(kind==='openai'?{endpoint:f.get('location').trim()}:{executable:f.get('location').trim()}),
         ...(kind==='acp'?{args:f.get('args').split(/\r?\n/).map(value=>value.trim()).filter(Boolean)}:{}),
-        credential:{type:credential,ref:credential==='cli'?undefined:f.get('reference').trim()}}));
+        credential:{type:credential,ref:credential==='cli'?undefined:f.get('reference').trim()}});
       modelScan='Provider added. Pick it and set its model.';
-    }catch(error){modelScan=error.message}
-    drawSettings();
+    }catch(error){modelScan=error.message}finally{addingProvider=false}
+    if(info){
+      applyAssistantInfo(info);
+      if($('model-form')?.hasAttribute('aria-busy'))drawSettings();
+    }else if(form.isConnected){
+      form.removeAttribute('aria-busy');
+      toggle.disabled=submit.disabled=false;
+      submit.textContent='Add provider';
+      $('settings-body').querySelector('[role="status"]').textContent=modelScan;
+    }else if($('settings').open&&settingsTab==='models')drawSettings();
   };
 }
 

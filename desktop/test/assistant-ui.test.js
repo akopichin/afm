@@ -347,7 +347,7 @@ test('settings and the quick chooser offer the detected models, a default and cu
   assert.equal(get('quick-model-list').value,'sonnet');
 });
 
-test('a provider is added as a reference to its credential and can be tested and removed', async t => {
+test('a provider is added as a reference to its credential and can be tested', async t => {
   const assistant = fakeAssistant();
   assistant.info.providers.push(providerInfo('custom-1', { name: 'Mine', builtIn: false }));
   const { w, d, get } = await openShell(t, { assistant });
@@ -373,9 +373,85 @@ test('a provider is added as a reference to its credential and can be tested and
   get('test-model').click();
   await tick();
   assert.deepEqual(assistant.calls.test, ['custom-1']);
-  get('remove-model').click();
+});
+
+test('only custom provider rows offer removal, and confirmation targets the clicked provider', async t => {
+  const assistant = fakeAssistant();
+  assistant.info.providers.push(providerInfo('custom-1', { name: 'Mine', builtIn: false }));
+  assistant.removeProvider = async id => {
+    assistant.calls.remove.push(id);
+    assistant.info.providers = assistant.info.providers.filter(provider => provider.id !== id);
+    return assistant.info;
+  };
+  const { w, d, get } = await openShell(t, { assistant });
+  get('settings-toggle').click();
+  await tick();
+  const buttons = d.querySelectorAll('[data-remove-provider]');
+  assert.equal(buttons.length, 1);
+  const [button] = buttons;
+  assert.equal(button.getAttribute('aria-label'), 'Remove Mine');
+  const confirmations = [];
+  w.confirm = message => { confirmations.push(message); return confirmations.length === 2; };
+  button.click();
+  assert.match(confirmations[0], /Remove “Mine”/);
+  assert.deepEqual(assistant.calls.remove, []);
+  button.click();
   await tick();
   assert.deepEqual(assistant.calls.remove, ['custom-1']);
+  assert.equal(d.querySelector('[data-profile="custom-1"]'), null);
+  assert.equal(d.querySelector('[data-profile="claude"]').getAttribute('aria-pressed'), 'true');
+});
+
+test('adding a provider ignores repeat submissions while pending, even across settings tabs', async t => {
+  const assistant = fakeAssistant();
+  const pending = Promise.withResolvers();
+  assistant.addProvider = input => {
+    assistant.calls.add.push(input);
+    return pending.promise;
+  };
+  const { w, d, get } = await openShell(t, { assistant });
+  get('settings-toggle').click();
+  await tick();
+  get('add-model').click();
+  const submit = () => get('model-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
+  const button = () => get('model-form').querySelector('button[type="submit"]');
+  get('model-form').elements.name.value = 'OpenCode';
+  get('model-form').elements.location.value = '/opt/homebrew/bin/opencode';
+  submit();
+  assert.equal(button().disabled, true);
+  assert.equal(button().textContent, 'Adding…');
+  submit();
+  d.querySelector('[data-panel="appearance"]').click();
+  d.querySelector('[data-panel="models"]').click();
+  assert.equal(button().disabled, true);
+  submit();
+  assert.equal(assistant.calls.add.length, 1);
+
+  assistant.info.providers.push(providerInfo('custom-opencode', { name: 'OpenCode', builtIn: false, kind: 'acp' }));
+  pending.resolve(assistant.info);
+  await tick();
+  assert.equal(d.querySelectorAll('[data-profile="custom-opencode"]').length, 1);
+  assert.equal(button().disabled, false);
+  assert.equal(get('model-form').hidden, true);
+  assert.match(get('settings-body').textContent, /Provider added/);
+});
+
+test('an add provider error unlocks the form and keeps its values for a retry', async t => {
+  const assistant = fakeAssistant();
+  assistant.addProvider = async () => { throw Error('Could not add provider.'); };
+  const { w, get } = await openShell(t, { assistant });
+  get('settings-toggle').click();
+  await tick();
+  get('add-model').click();
+  const form = get('model-form');
+  form.elements.name.value = 'OpenCode';
+  form.elements.location.value = '/opt/homebrew/bin/opencode';
+  form.dispatchEvent(new w.Event('submit', { cancelable: true }));
+  await tick();
+  assert.equal(form.hidden, false);
+  assert.equal(form.elements.name.value, 'OpenCode');
+  assert.equal(form.querySelector('button[type="submit"]').disabled, false);
+  assert.match(get('settings-body').textContent, /Could not add provider/);
 });
 
 test('ACP arguments and the environment variable reference use separate fields', async t => {

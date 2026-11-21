@@ -77,6 +77,7 @@ On Home, hover or focus a project tile and choose **×** to remove it from recen
 projects. Its files and running processes stay on disk and on the host. In
 Settings → Models or the quick model picker (Command+M on macOS, Ctrl+M on Linux),
 choose a provider default, a listed model, or **Custom model…** to enter an ID.
+In Settings → Models, choose **×** next to a custom provider and confirm to remove it.
 Codex suggestions come from the installed client's account-specific model list.
 The macOS app uses an ad-hoc signature and may require manual approval.
 The repository’s Latest release continues to track the CLI. Release any new AFM

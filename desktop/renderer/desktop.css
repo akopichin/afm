@@ -71,6 +71,9 @@ dialog label {font-size:13px;color:var(--text-secondary)}
 #model-form .field-help {display:block;margin-top:6px;color:var(--text-muted);font-size:12px}
 dialog .actions {margin-top:18px}.actions kbd {margin-right:auto}
 .choices {display:grid;gap:4px;margin:12px 0;max-height:32vh;overflow:auto}
+.provider-row {display:flex;align-items:center;gap:4px;min-width:0}
+.provider-row .workflow {flex:1;min-width:0}
+.provider-row .icon {flex:none}
 .workflow {display:flex;gap:12px;align-items:center;padding:11px;width:100%;border-radius:8px;border:1px solid transparent}
 .workflow:hover {background:var(--surface-overlay)}.workflow.chosen {background:var(--surface-hover);border-color:color-mix(in srgb,var(--accent-primary) 48%,transparent)}
 .workflow strong,.source-list strong {font-size:14px;font-weight:560;display:block}.workflow small,.source-list small {display:block;font-size:12px;margin-top:2px}

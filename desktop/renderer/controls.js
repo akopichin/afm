@@ -334,14 +334,19 @@ async function loadSettingsData(){
   }catch(error){showNativeError(error)}
 }
 const demoModelForm=`<form id="model-form" hidden><label>Provider or CLI<input name="name" required placeholder="Ollama, Gemini CLI…"></label><label>Model or deployment<input name="model" required placeholder="Model ID"></label><label>Credential source<select name="auth"><option>Existing CLI login</option><option>Environment variable</option><option>Config file</option><option>Local endpoint</option></select></label><label id="reference-label" hidden><span>Source</span><input name="reference"></label><div class="actions"><button class="primary">Add model</button></div></form>`;
+function providerRow(m){
+  const id=esc(m.id),name=esc(m.name),selected=m.id===state.profile;
+  return `<div class="provider-row"><button class="workflow ${selected?'chosen':''}" data-profile="${id}" aria-pressed="${selected}"><span class="glyph">${m.id==='claude'?'✳':'›_'}</span><span><strong>${name}</strong><small>${esc(m.model)} · ${esc(m.auth)}</small></span><span class="tick">${selected?'✓':''}</span></button>
+    ${!isDemo&&m.custom?`<button type="button" class="icon" data-remove-provider="${id}" aria-label="Remove ${name}" title="Remove ${name}">×</button>`:''}</div>`;
+}
 function drawSettings(){
   $('settings-title').textContent=onboarding?'Set up AFM Desktop':'Settings';
   const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],['appearance','Appearance'],...(!isDemo?[['environment','Environment'],['notifications','Notifications']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
   const body=$('settings-body');
   if(settingsTab==='models'){
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
-      <div class="choices">${state.models.map(m=>`<button class="workflow ${m.id===state.profile?'chosen':''}" data-profile="${esc(m.id)}" aria-pressed="${m.id===state.profile}"><span class="glyph">${m.id==='claude'?'✳':'›_'}</span><span><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.auth)}</small></span><span class="tick">${m.id===state.profile?'✓':''}</span></button>`).join('')}</div>
-      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':`<button id="test-model">${profile().kind==='acp'?'Test connection':'Test sign-in'}</button>`+(profile().custom?'<button id="remove-model">Remove</button>':'')}<button id="add-model">＋ Other model</button></div><p class="hint" role="status">${esc(modelScan)}</p>
+      <div class="choices">${state.models.map(providerRow).join('')}</div>
+      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':`<button id="test-model">${profile().kind==='acp'?'Test connection':'Test sign-in'}</button>`}<button id="add-model">＋ Other model</button></div><p class="hint" role="status">${esc(modelScan)}</p>
       ${isDemo?demoModelForm:providerForm()}
       ${onboarding?'<div class="actions"><button class="primary" id="finish-setup">Continue to projects →</button></div>':''}`;
     wireProfileFields();

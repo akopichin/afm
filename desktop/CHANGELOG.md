@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Remove a custom Assistant provider directly from its card with confirmation.
 - Connect ACP agents to the Desktop Assistant and use their model and mode choices.
 - Give Assistant updates their own timestamped bubbles after a pause.
 
@@ -25,6 +26,7 @@
 
 ### Fix:
 
+- Disable Add provider while the request is pending to prevent duplicate Assistant profiles from repeated submissions.
 - Keep Assistant tool errors in reply order and let readers collapse and reopen their details.
 - Keep Settings tabs visible in narrow windows and clarify credential and argument fields for custom providers.
 
