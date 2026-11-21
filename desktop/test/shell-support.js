@@ -23,7 +23,7 @@ export async function loadShell(t, { demo = true, platform = 'MacIntel', native 
   Object.defineProperty(w.navigator, 'platform', { value: platform, configurable: true });
   if (windowControls) w.navigator.windowControlsOverlay = Object.assign(new w.EventTarget(), { visible: true });
   w.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-  w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), watch: fakeWatch(), liveLayout: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, onWatchOpen: () => {}, reportSelection: async () => {}, onSSHKeyPrompt: () => {}, onSSHKeyClosed: () => {}, ...native };
+  w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), watch: fakeWatch(), liveLayout: async () => {}, focusShell: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, onWatchOpen: () => {}, reportSelection: async () => {}, onSSHKeyPrompt: () => {}, onSSHKeyClosed: () => {}, ...native };
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
   const scripts = demo ? ['store', 'run-report', 'desktop', 'library', 'tasks', 'report', 'controls', 'attention', 'costs'] : ['store', 'run-report', 'desktop', 'library', 'assistant', 'tasks', 'report', 'controls', 'attention', 'inventory', 'costs', 'native'];

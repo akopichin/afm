@@ -127,13 +127,14 @@ function messageHTML(msg){
   if(msg.role==='user'){
     const status=msg.error?`<p class="bubble-error" role="alert">${esc(msg.error)}</p>`:msg.pending?'<small>Sending…</small>'
       :msg.queued?`<div class="chat-queue-state"><small>Queued</small><button type="button" class="icon" data-remove-queued="${msg.queueId}" aria-label="Remove queued message">×</button></div>`:'';
-    return `<div class="bubble mine${msg.queued?' queued':''}"><small>${esc(msg.context||'')}</small>${msg.text?`<p>${esc(msg.text)}</p>`:''}
+    return `<div class="bubble mine${msg.queued?' queued':''}">${chatMetaHTML(msg.context,msg.at)}${msg.text?`<p>${esc(msg.text)}</p>`:''}
       ${msg.imageCount?`<small>${esc(msg.imageCount)} ${msg.imageCount===1?'image':'images'} attached</small>`:''}${status}</div>`;
   }
   const tools=(msg.tools||[]).map(tool=>`<div class="tool ${tool.status}"><code>${esc(tool.name)}</code> <small>${esc(tool.input||'')}</small>${tool.status==='error'?`<p class="tool-error">${esc(tool.text||'Failed')}</p>`:''}</div>`).join('');
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
   const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
-  return `<div class="bubble ${msg.status}"><small>${esc(msg.context||'')}${msg.effective?' · '+esc(msg.effective.label):''}</small>${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${msg.text?`<p>${esc(msg.text)}</p>`:''}${tools}${approvals}${(msg.cards||[]).map(watchCardHTML).join('')}${end}</div>`;
+  const context=[msg.context,msg.effective?.label].filter(Boolean).join(' · ');
+  return `<div class="bubble ${msg.status}">${chatMetaHTML(context,msg.at)}${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${msg.text?`<p>${esc(msg.text)}</p>`:''}${tools}${approvals}${(msg.cards||[]).map(watchCardHTML).join('')}${end}</div>`;
 }
 function drawAssistant(){
   $('chat-context').textContent=scopeText();
@@ -144,7 +145,7 @@ function drawAssistant(){
     box.innerHTML=(messages.length?messages.map(messageHTML).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>')
       +(assistantChat.local?`<div class="bubble error"><p class="bubble-error" role="alert">${esc(assistantChat.local)}</p></div>`:'');
   });
-  if(stick)box.scrollTop=box.scrollHeight;
+  if(stick)scrollChatToEnd();
   $('chat-stop').hidden=!assistantChat.busy;
   const send=document.querySelector('#chat-form .send');
   const sendLabel=assistantChat.busy?'Queue message':'Send message';
@@ -201,7 +202,7 @@ function sendAssistant(text,fromDraft){
     drawAssistant();return;
   }
   const message={role:'user',text,images,imageCount:images.length,scope:currentScope(),context:scopeText().slice(7),
-    queueId:++nextQueuedMessage,queued:true,restoreDraft:fromDraft&&!assistantChat.busy};
+    at:new Date().toISOString(),queueId:++nextQueuedMessage,queued:true,restoreDraft:fromDraft&&!assistantChat.busy};
   if(fromDraft){
     $('chat-input').value='';
     assistantChat.images=[];
@@ -227,7 +228,7 @@ async function drainAssistantQueue(){
     if(assistantChat.pending!==pending)return;
     assistantChat.busy=false;
     assistantChat.pending=null;
-    assistantChat.messages.push({role:'user',text,context:message.context,imageCount:images.length,error:ipcMessage(error)});
+    assistantChat.messages.push({role:'user',text,context:message.context,at:message.at,imageCount:images.length,error:ipcMessage(error)});
     if(message.restoreDraft&&!input.value&&!assistantChat.images.length&&!assistantChat.readingImages){
       input.value=text;
       assistantChat.images=images;
@@ -309,6 +310,10 @@ function startAssistant(){
   nativeAFM.assistant.onEvent(handleAssistantEvent);
   nativeAFM.assistant.state().then(applyAssistantInfo).catch(showNativeError);
   nativeAFM.assistant.history().then(history=>{
-    if(!assistantChat.messages.length&&!assistantChat.cleared){assistantChat.messages=history.map(m=>({...m,approvals:[],notes:[]}));drawAssistant()}
+    if(!assistantChat.messages.length&&!assistantChat.cleared){
+      assistantChat.messages=history.map(m=>({...m,approvals:[],notes:[]}));
+      drawAssistant();
+      scrollChatToEnd();
+    }
   }).catch(showNativeError);
 }

@@ -15,6 +15,23 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
+test('run tabs show status dots and update when a run starts waiting', async t => {
+  const finished = runRow('finished', { state: 'finished', status: 'finished', can: { open: false, report: false } });
+  const rows = [ra, rb, finished];
+  const workspace = runs => snapshotOf([projectRow('a', runs)]);
+  const { d, native } = await openShell(t, workspace(rows));
+  d.querySelector('[data-project="a"]').click();
+  await tick();
+  const tabs = () => [...d.querySelectorAll('.run-tabs [data-run-state]')];
+  const statuses = () => tabs().map(tab => tab.dataset.runState);
+  assert.deepEqual(statuses(), ['running', 'running', 'inactive']);
+  assert.equal(tabs().filter(tab => tab.querySelector('.dot')).length, 3);
+  native.publish(workspace([ra, { ...rb, attention: true }, finished]));
+  assert.deepEqual(statuses(), ['running', 'waiting', 'inactive']);
+  assert.equal(tabs()[1].getAttribute('aria-label'), 'flow-rb · Needs attention');
+  assert.equal(tabs()[2].getAttribute('aria-label'), 'flow-finished · Finished');
+});
+
 test('a finished tab loads and renders its exact saved report after the dashboard closes', async t => {
   const stopped = { ...ra, state: 'finished', status: 'interrupted', can: { open: false, report: true } };
   const report = { run: { status: 'interrupted', elapsed_ms: 20000 }, stages: [

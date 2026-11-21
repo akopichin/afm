@@ -83,12 +83,14 @@ function watchCardHTML(card){
 }
 
 function setAssistantView(view){
+  const returningToChat=view==='chat'&&watchState.view!=='chat';
   watchState.view=view;
   for(const button of $('assistant-tabs').querySelectorAll('[data-assistant-view]'))button.setAttribute('aria-pressed',String(button.dataset.assistantView===view));
   $('messages').hidden=view!=='chat';
   $('tasks').hidden=view!=='tasks';
   document.querySelector('.chat-foot').hidden=view!=='chat';
   if(view==='tasks')drawTasks();
+  if(returningToChat)scrollChatToEnd();
 }
 // Opens a run at its waiting stage when it still waits, else the run itself; a missing run is said so.
 function openRunLink(instance,runId,stage){

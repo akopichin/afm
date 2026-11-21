@@ -587,25 +587,43 @@ document.addEventListener('click',e=>{
 document.addEventListener('keydown',e=>{
   if(primary(e)&&e.shiftKey&&!e.altKey&&!e.isComposing&&!e.repeat&&e.key==='Enter'){e.preventDefault();openLauncher(selection().p)}
 });
+const chatClock=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'});
+const chatDate=new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'});
+function chatMetaHTML(context,at){
+  const time=at?new Date(at):null;
+  const stamp=time&&Number.isFinite(+time)
+    ?`<time class="bubble-time" datetime="${time.toISOString()}" title="${esc(chatDate.format(time))}">${esc(chatClock.format(time))}</time>`:'';
+  return context||stamp?`<div class="bubble-meta">${context?`<small>${esc(context)}</small>`:''}${stamp}</div>`:'';
+}
+function scrollChatToEnd(){
+  const box=$('messages');
+  box.scrollTop=box.scrollHeight;
+}
 function drawChat(){
   if(!isDemo)return drawAssistant();
   const {p,r}=selection(),m=profile();
   $('chat-context').textContent=p?`${p.name}${r?' / '+r.flow:''}`:'All projects';
   $('chat-model').textContent=[m.name,m.model,m.reasoning&&m.reasoning!=='default'?m.reasoning:null,permissionLabels[m.permission||'ask'],'Demo chat'].filter(Boolean).join(' · ');
-  $('messages').innerHTML=state.chat.length?state.chat.map(msg=>`<div class="bubble ${msg.role==='user'?'mine':''}">${msg.context?`<small>${esc(msg.context)}</small>`:''}<p>${esc(msg.text)}</p>${(msg.links||[]).map(link=>`<button class="inline-link" data-project="${esc(link.project)}" data-run="${esc(link.run)}">${esc(link.name)} ↗</button>`).join('')}</div>`).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>';
-  $('messages').scrollTop=$('messages').scrollHeight;
+  $('messages').innerHTML=state.chat.length?state.chat.map(msg=>`<div class="bubble ${msg.role==='user'?'mine':''}">${chatMetaHTML(msg.context,msg.at)}<p>${esc(msg.text)}</p>${(msg.links||[]).map(link=>`<button class="inline-link" data-project="${esc(link.project)}" data-run="${esc(link.run)}">${esc(link.name)} ↗</button>`).join('')}</div>`).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>';
+  scrollChatToEnd();
 }
 function toggleChat(open){
   $('assistant').hidden=!open;
   $('assistant-toggle').setAttribute('aria-expanded',String(open));
-  if(open){drawChat();$('chat-input').focus();if(!isDemo)ensureAssistantScan()}else $('assistant-toggle').focus();
+  if(open){
+    drawChat();
+    $('chat-input').focus({preventScroll:true});
+    scrollChatToEnd();
+    if(!isDemo)ensureAssistantScan();
+  }else $('assistant-toggle').focus();
 }
 function sendMessage(text, fromDraft=false){
   if(!isDemo)return isClearCommand(text)&&(!fromDraft||!assistantChat.images.length)?clearAssistant():sendAssistant(text,fromDraft);
   if(!text.trim())return;
   const {p,r}=selection(),context=p?[p.name,r?.flow].filter(Boolean).join(' / '):'All projects';
-  state.chat.push({role:'user',text,context});$('chat-input').value='';
-  const reply={role:'assistant',text:''};
+  const at=new Date().toISOString();
+  state.chat.push({role:'user',text,context,at});$('chat-input').value='';
+  const reply={role:'assistant',text:'',at};
   const mentioned=[...projects].sort((a,b)=>b.name.length-a.name.length).find(item=>text.toLowerCase().includes(item.name.toLowerCase()))||p;
   if(!isDemo){reply.text='Desktop provider transport is pending in the integration plan.'}
   else if(/start|launch|запуст|запуск/i.test(text)){

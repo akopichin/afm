@@ -42,6 +42,8 @@ The top bar shows the running Desktop version next to Settings.
 In Assistant chat, sending during a reply queues a follow-up in the selected
 run or project. Paste a screenshot into the message field to attach it to a
 message for a provider with image input.
+Chat opens at the latest message and shows local timestamps. Run tabs use green
+for running, yellow for attention, and gray for stopped runs.
 
 Install the macOS app with `brew install --cask akopichin/afm/afm-desktop`.
 When the tap is already installed, use `brew install --cask afm-desktop`.

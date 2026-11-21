@@ -219,6 +219,7 @@ handle('dashboard:layout', (key, bounds) => {
 });
 handle('dashboard:command', (key, message) => dashboardViews.command(key, message));
 handle('dashboard:drop', key => dashboardViews.drop(key));
+handle('navigation:focus-shell', () => window.webContents.focus());
 handle('pipeline-options:get', (id, projectId) => pipelineOptions.get(id, projectId));
 handle('pipeline-options:save', input => pipelineOptions.save(input));
 handle('launch:preview', request => desktop.runs.preview(request));

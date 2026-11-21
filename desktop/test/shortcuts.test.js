@@ -52,9 +52,12 @@ for (const platform of PLATFORMS) {
     const live = { runKey: first.key, stageId: 'stage', handle: 'live-first' };
     const native = fakeNative(snapshotOf([projectRow('a', [
       first,
-      runRow('second'),
+      runRow('second', { state: 'finished', status: 'finished', can: { open: false, report: true } }),
       runRow('third'),
     ])], [], { stageBrowsers: [live] }));
+    native.runReport = async () => ({ run: { status: 'finished', elapsed_ms: 2000 }, stages: [] });
+    let focusRequests = 0;
+    native.focusShell = async () => { focusRequests++; };
     native.onLiveShortcut = listener => { native.emitLiveShortcut = listener; };
     const { w, d, get, key } = await loadShell(t, { demo: false, platform, native });
     const primary = primaryMods(platform);
@@ -70,14 +73,25 @@ for (const platform of PLATFORMS) {
     assert.equal(key('Digit1', '1', primary).defaultPrevented, true);
     await tick();
     assert.equal(selected(), 'flow-first');
+    assert.equal(key('Digit1', '1', primary).defaultPrevented, true);
+    assert.equal(focusRequests, 1, 'the current tab keeps its native focus');
 
     native.emitDashboard(first.key, { navigate: 2 });
     await tick();
     assert.equal(selected(), 'flow-second');
+    assert.match(get('content').textContent, /Elapsed2s/);
+    assert.equal(focusRequests, 2, 'leaving a native dashboard asks the shell to take focus');
     native.emitDashboard(first.key, { navigate: 3 });
     await tick();
     assert.equal(selected(), 'flow-second', 'hidden dashboards cannot switch tabs');
+    assert.equal(focusRequests, 2);
 
+    assert.equal(key('Digit1', '1', primary).defaultPrevented, true);
+    await tick();
+    assert.equal(selected(), 'flow-first', 'shortcuts continue from the finished report');
+    native.emitDashboard(first.key, { navigate: 3 });
+    await tick();
+    assert.equal(selected(), 'flow-third');
     d.querySelector('.run-tabs [data-view="live"]').click();
     await tick();
     native.emitLiveShortcut(3);

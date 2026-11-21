@@ -53,6 +53,9 @@ body:has(#dashboard-host:not([hidden])) #screen {flex:none}
 .icon:hover,.links button:hover,.segments button:hover,.suggestions button:hover {background:var(--surface-hover);color:var(--text-primary)}
 .heading-actions,.links,.suggestions,.segments,.run-tabs {display:flex;align-items:center;gap:8px}
 .run-tabs {min-width:0;overflow:auto;flex-shrink:1}.tabs>.action,.tabs>a {flex-shrink:0}
+.run-tabs [data-run-state] {display:flex;align-items:center;gap:7px}
+.run-tabs [data-run-state="running"] .dot {--tone:var(--success)}
+.run-tabs [data-run-state="waiting"] .dot {--tone:var(--attention)}
 .pane-head,.setting-row,.git-row,.source-list>div {display:flex;align-items:center;justify-content:space-between;gap:12px}
 .pane-head {margin-bottom:15px}.pane-head h2 {font-size:22px;letter-spacing:-.045em;font-weight:610}
 .muted,.hint,.chat-foot small,.pane-head small,.source-list small,.workflow small {color:var(--text-muted);font-size:13px}
@@ -75,6 +78,8 @@ dialog .actions {margin-top:18px}.actions kbd {margin-right:auto}
 #assistant .pane-head {margin:0;padding:18px;border-bottom:1px solid var(--separator-subtle)}#assistant h2 {font-size:18px}
 #messages {flex:1;overflow:auto;padding:18px}.chat-empty {margin:12vh 5px;color:var(--text-muted)}.chat-empty>span {font-size:34px;color:var(--violet)}.chat-empty h3 {font-size:21px;color:var(--text-primary);font-weight:550;margin:8px 0}.chat-empty p {font-size:13px}
 .bubble {background:var(--surface-agent-message);padding:10px 12px;border-radius:9px;margin:0 12px 12px 0;font-size:13px}.bubble.mine {background:var(--surface-user-message);margin:0 0 12px 20px}.bubble small {color:var(--text-muted)}.bubble p {white-space:pre-wrap;overflow-wrap:anywhere}
+.bubble-meta {display:flex;align-items:baseline;gap:8px;overflow-wrap:anywhere}
+.bubble-time {margin-left:auto;flex:none;color:var(--text-muted);font-size:10px;font-variant-numeric:tabular-nums}
 .chat-foot {padding:12px}.suggestions {margin-bottom:8px}.suggestions button {border:1px solid var(--separator-subtle);font-size:12px}
 .chat-compose {position:relative}#chat-input {display:block;width:100%;resize:vertical;background:var(--surface-tool);color:var(--text-primary);border:1px solid var(--separator-subtle);border-radius:8px;padding:10px 40px 10px 10px;font:inherit}
 .chat-compose:has(.chat-stop:not([hidden])) #chat-input {padding-right:72px}

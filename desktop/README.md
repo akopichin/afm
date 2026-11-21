@@ -69,6 +69,10 @@ statuses and timings, and available agent time and token counts. Expand
 **Data notes** to see gaps in the saved data. For a command-line copy, run
 `afm report <run-id>` from the project.
 
+Run tabs have a green dot while running, a yellow dot when they need your
+attention, and a gray dot when they have stopped. Hover over a tab for its
+status and shortcut.
+
 To continue the latest interrupted or failed Desktop run in its saved worktree,
 open the run's tab and choose **Continue run**. Desktop reuses the saved launch
 source and worktree. A pipeline continues from its recorded snapshot, and the
@@ -104,6 +108,9 @@ bounce briefly while the app is in the background. Requests already pending at
 startup show the dot immediately after discovery.
 
 ## Assistant chat
+
+Chat opens at the latest message. Each timestamp shows local time, with the
+full date on hover.
 
 Press Enter or click Send while the assistant is replying to queue a follow-up.
 Queued messages are sent in order using the project or run selected when each

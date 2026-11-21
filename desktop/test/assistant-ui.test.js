@@ -180,6 +180,45 @@ test('saved history is restored and only streaming events of the current turn ch
   assert.doesNotMatch(get('messages').textContent, /LEAK/);
 });
 
+test('opening Chat always shows the latest messages and saved user and assistant messages show local time', async t => {
+  const userAt = '2026-11-21T08:07:00.000Z', replyAt = '2026-11-21T08:09:00.000Z';
+  const assistant = fakeAssistant();
+  let restore;
+  assistant.history = () => new Promise(resolve => { restore = resolve; });
+  const { w, d, get } = await openShell(t, { assistant });
+  const box = get('messages');
+  let scrollTop = 0, scrollHeight = 1000;
+  Object.defineProperties(box, {
+    clientHeight: { value: 200 },
+    scrollHeight: { get: () => scrollHeight },
+    scrollTop: { get: () => scrollTop, set: value => { scrollTop = Math.min(value, scrollHeight - 200); } },
+  });
+  get('assistant-toggle').click();
+  assert.equal(box.scrollTop, 800);
+  box.scrollTop = 0;
+  scrollHeight = 1400;
+  restore([
+    { id: 'legacy', role: 'user', text: 'Older entry' },
+    { id: 'question', role: 'user', text: 'Question', at: userAt },
+    { id: 'answer', role: 'assistant', text: 'Most recent reply', status: 'done', at: replyAt },
+  ]);
+  await tick();
+  assert.equal(box.scrollTop, 1200, 'late history lands at the end');
+  assert.deepEqual([...box.querySelectorAll('time.bubble-time')].map(el => el.dateTime), [userAt, replyAt]);
+  const clock = new w.Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+  assert.equal(box.querySelector('.bubble.done time').textContent, clock.format(new w.Date(replyAt)));
+  assert.ok(box.querySelector('.bubble.done time').title);
+
+  box.scrollTop = 0;
+  get('close-chat').click();
+  get('assistant-toggle').click();
+  assert.equal(box.scrollTop, 1200, 'reopening ignores the old scroll position');
+  box.scrollTop = 0;
+  d.querySelector('[data-assistant-view="tasks"]').click();
+  d.querySelector('[data-assistant-view="chat"]').click();
+  assert.equal(box.scrollTop, 1200, 'returning from Tasks also shows the latest message');
+});
+
 test('settings show detected providers, supported modes only and the effective flags, and changes go to the main process', async t => {
   const assistant = fakeAssistant();
   assistant.info.providers = [providerInfo('claude'), providerInfo('codex', { permissions: ['read'], reasoning: [], auth: { state: 'missing', via: null, detail: 'Run `codex login`.' } })];
