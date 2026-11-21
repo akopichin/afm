@@ -4,7 +4,7 @@ export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:scan', () => assistant.scan());
   handle('assistant:configure', changes => assistant.configure({ ...changes }));
   handle('assistant:add-provider', input => assistant.addProvider({
-    name: input?.name, kind: input?.kind, executable: input?.executable, endpoint: input?.endpoint,
+    name: input?.name, kind: input?.kind, executable: input?.executable, endpoint: input?.endpoint, args: input?.args,
     credential: input?.credential ? { type: input.credential.type, ref: input.credential.ref } : undefined }));
   handle('assistant:remove-provider', id => assistant.removeProvider(String(id)));
   handle('assistant:test-provider', id => assistant.testProvider(String(id)));

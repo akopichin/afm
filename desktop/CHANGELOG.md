@@ -4,6 +4,9 @@
 
 ### Improvement:
 
+- Connect ACP agents to the Desktop Assistant and use their model and mode choices.
+- Give Assistant updates their own timestamped bubbles after a pause.
+
 - Label Costs and Home chart axes and show total and per-run series with values on hover.
 
 - Open `afm://library/install` links to review and add Git pipeline sources in Library.

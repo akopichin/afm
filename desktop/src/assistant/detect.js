@@ -1,3 +1,4 @@
+import { probeAcp } from './acp.js';
 import { createInterface } from 'node:readline';
 import { spawn, execFile } from 'node:child_process';
 import { access, stat } from 'node:fs/promises';
@@ -155,13 +156,25 @@ export function codexModels(executable, env) {
 // One provider as the UI shows it: where it is, what it can do and whether it can sign in.
 export async function detectProvider(provider, { home, env, dirs }) {
   const base = { id: provider.id, name: provider.name, kind: provider.kind, builtIn: !provider.credential, credential: provider.credential ?? { type: 'cli' },
-    reasoning: REASONING_LEVELS[provider.kind] };
+    reasoning: REASONING_LEVELS[provider.kind] ?? [] };
   if (provider.kind === 'openai') {
     const auth = await referencedAuth(provider.credential, env);
     return { ...base, endpoint: provider.endpoint, found: true, capabilities: {}, permissions: supportedPermissions('openai', {}), auth };
   }
   const executable = await findExecutable(provider.executable, dirs);
   if (!executable) return { ...base, found: false, capabilities: {}, permissions: [], auth: missing(`${provider.name} was not found. Install it or set its executable path.`) };
+  if (provider.kind === 'acp') {
+    const configured = { ...base, executable, args: provider.args, found: true, permissions: ['ask'] };
+    if (provider.credential.type === 'env' && !env[provider.credential.ref])
+      return { ...configured, capabilities: {}, auth: missing('Set ' + provider.credential.ref + ' in the Desktop environment.') };
+    try {
+      const { authRequired, ...result } = await probeAcp(configured, { ...env, HOME: home });
+      return { ...configured, ...result, auth: authRequired ? missing('Sign in using the agent’s CLI.')
+        : ready(provider.credential.type === 'env' ? 'env' : 'acp', provider.credential.ref ?? 'ACP connected') };
+    } catch {
+      return { ...configured, capabilities: {}, auth: missing('Could not connect over ACP v1. Check the executable and arguments.') };
+    }
+  }
   const [version, help, resumeHelp] = await Promise.all([
     probe(executable, ['--version'], { env }),
     probe(executable, provider.kind === 'codex' ? ['exec', '--help'] : ['--help'], { env }),

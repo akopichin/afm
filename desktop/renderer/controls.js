@@ -37,7 +37,8 @@ function bindModelPicker(select,input,change){
 function profileFields(m){
   return `<div class="profile-fields"><label>Model<select id="profile-model-list">${modelOptions(m)}</select><input id="profile-model" value="${esc(m.model==='CLI default'?'':m.model)}" placeholder="CLI default" autocomplete="off"></label>
     <label>Reasoning<select id="profile-effort">${reasoningOptions(m)}</select></label>
-    <label>Permissions<select id="profile-permissions">${Object.entries(permissionLabels).filter(([k])=>isDemo||m.permissions.includes(k)).map(([k,v])=>option(k,v,k===(m.permission||'ask'))).join('')}</select></label></div>
+    ${m.agentModes?.length?`<label>Agent mode<select id="profile-acp-mode">${option('','Agent default',!m.acpMode)}${m.agentModes.map(mode=>option(mode.id,mode.label,mode.id===m.acpMode)).join('')}</select></label>`:''}
+    <label>${m.kind==='acp'?'AFM permissions':'Permissions'}<select id="profile-permissions">${Object.entries(permissionLabels).filter(([k])=>isDemo||m.permissions.includes(k)).map(([k,v])=>option(k,v,k===(m.permission||'ask'))).join('')}</select></label></div>
     <p class="hint profile-mode" id="permission-detail">${esc(permissionDetail(m))}</p>`;
 }
 function wireProfileFields(){
@@ -46,6 +47,7 @@ function wireProfileFields(){
   if(!isDemo){
     $('profile-model').onchange=e=>configureAssistant({model:e.target.value.trim()});
     $('profile-effort').onchange=e=>configureAssistant({reasoning:e.target.value});
+    if($('profile-acp-mode'))$('profile-acp-mode').onchange=e=>configureAssistant({acpMode:e.target.value});
     $('profile-permissions').onchange=e=>configureAssistant({permission:e.target.value});
     return;
   }
@@ -339,7 +341,7 @@ function drawSettings(){
   if(settingsTab==='models'){
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
       <div class="choices">${state.models.map(m=>`<button class="workflow ${m.id===state.profile?'chosen':''}" data-profile="${esc(m.id)}" aria-pressed="${m.id===state.profile}"><span class="glyph">${m.id==='claude'?'✳':'›_'}</span><span><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.auth)}</small></span><span class="tick">${m.id===state.profile?'✓':''}</span></button>`).join('')}</div>
-      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':'<button id="test-model">Test sign-in</button>'+(profile().custom?'<button id="remove-model">Remove</button>':'')}<button id="add-model">＋ Other model</button></div><p class="hint" role="status">${esc(modelScan)}</p>
+      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':`<button id="test-model">${profile().kind==='acp'?'Test connection':'Test sign-in'}</button>`+(profile().custom?'<button id="remove-model">Remove</button>':'')}<button id="add-model">＋ Other model</button></div><p class="hint" role="status">${esc(modelScan)}</p>
       ${isDemo?demoModelForm:providerForm()}
       ${onboarding?'<div class="actions"><button class="primary" id="finish-setup">Continue to projects →</button></div>':''}`;
     wireProfileFields();
