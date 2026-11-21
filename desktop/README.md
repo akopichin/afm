@@ -63,6 +63,16 @@ uses AFM's existing override behavior. The Start run button shows a spinner and 
 pipeline and waits for AFM to report readiness. The launcher offers the launch log when an early failure occurs.
 Missing environment variable names from preflight are shown in the launcher.
 
+When a run's dashboard closes, its tab shows a report if the AFM host still
+knows where its files are. The report shows the outcome, elapsed time, stage
+statuses and timings, and available agent time and token counts. Expand
+**Data notes** to see gaps in the saved data. For a command-line copy, run
+`afm report <run-id>` from the project.
+
+Run tabs have a green dot while running, a yellow dot when they need your
+attention, and a gray dot when they have stopped. Hover over a tab for its
+status and shortcut.
+
 To continue the latest interrupted or failed Desktop run in its saved worktree,
 open the run's tab and choose **Continue run**. Desktop reuses the saved launch
 source and worktree. A pipeline continues from its recorded snapshot, and the
@@ -96,6 +106,24 @@ On macOS, enabled questions, approvals, and decisions show an amber dot on the
 Dock icon until the last pending request resolves. A new batch makes the icon
 bounce briefly while the app is in the background. Requests already pending at
 startup show the dot immediately after discovery.
+
+## Assistant chat
+
+Chat opens at the latest message. Each timestamp shows local time, with the
+full date on hover.
+
+Press Enter or click Send while the assistant is replying to queue a follow-up.
+Queued messages are sent in order using the project or run selected when each
+message was queued. Use the × on a queued message to remove it. The square
+button stops the current reply and lets the next queued message proceed.
+Queued messages are kept while Desktop is open.
+
+Paste a screenshot or another image into the message field with
+Command+V on macOS or Ctrl+V on Linux. Preview or remove the attachment before
+sending. A message can contain up to four PNG, JPEG, WebP or GIF images, each up
+to 5 MiB. The selected CLI or endpoint model must support image input.
+Desktop sends the images with the message and records the attachment count in
+its chat history.
 
 ## Background watch tasks
 

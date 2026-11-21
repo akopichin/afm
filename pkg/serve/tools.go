@@ -51,8 +51,9 @@ type runIDInput struct {
 }
 
 type reportInput struct {
-	RunID   string `json:"run_id" jsonschema:"the run_id from afm_runs_list; a finished run is read from its files"`
-	StageID string `json:"stage_id,omitempty" jsonschema:"limit the report to one stage"`
+	RunID      string `json:"run_id" jsonschema:"the run_id from afm_runs_list; a finished run is read from its files"`
+	InstanceID string `json:"instance_id,omitempty" jsonschema:"select the instance_id from afm_runs_list when run IDs may overlap"`
+	StageID    string `json:"stage_id,omitempty" jsonschema:"limit the report to one stage"`
 }
 
 // launchEntry is a launch as clients see it; the receipt's internals stay on disk.
@@ -244,7 +245,7 @@ func runDirOf(v RunView, runID string) string {
 }
 
 func (g *Gateway) report(ctx context.Context, in reportInput) (*runreport.Report, error) {
-	v, err := g.cfg.Inventory.Find(ctx, in.RunID)
+	v, err := g.cfg.Inventory.findReportRun(ctx, in.RunID, in.InstanceID)
 	if err != nil {
 		return nil, err
 	}

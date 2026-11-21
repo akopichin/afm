@@ -109,6 +109,15 @@ function renderHome(){
 function runURL(p,r){
   return '../.generated/run.html?'+new URLSearchParams({flow:r.flow,project:p.name,state:r.state,source:r.source,id:r.id,answer:r.answer||'',scenario:r.scenario||'',workspace:r.workspace||'',agent:r.agent||"codex",kind:r.kind||"",live:r.live?"yes":"no"});
 }
+function runTabStatus(run){
+  if(run.hostState==='offline')return ['inactive','Offline'];
+  if(run.hostState==='mismatch')return ['inactive','Run changed'];
+  if(!active(run)&&run.hostState!=='api-only'){
+    return ['inactive',({failed:'Failed',interrupted:'Interrupted',finished:'Finished'})[run.status]||'Finished'];
+  }
+  if(run.needsAttention||['review','question'].includes(run.state))return ['waiting','Needs attention'];
+  return ['running','Running'];
+}
 function render(){
   const {p,r,tab}=selection();
   const wantFocus=focusDashboard;focusDashboard=false;
@@ -126,9 +135,11 @@ function render(){
   const liveTab=r?.live&&tab==='live';
   if(r)remembered.set(p.id,{id:r.id,tab:liveTab?'live':'run'});
   const tabs=p.runs.map((run,index)=>{
+    const [status,statusLabel]=runTabStatus(run);
+    const title=p.runs.length>1&&index<9?`${statusLabel} · ${modKey} ${index+1}`:statusLabel;
     const shortcut=p.runs.length>1&&index<9
-      ?` aria-keyshortcuts="${ariaModKey}+${index+1}" title="${modKey} ${index+1}"`:'';
-    return `<button class="tab ${r===run&&!liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}"${shortcut}>${esc(run.flow)}</button>${run.live?`<button class="tab ${r===run&&liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}" data-view="live">◉ Live · ${esc(run.liveStage?.stageId||'live-run')}</button>`:''}`;
+      ?` aria-keyshortcuts="${ariaModKey}+${index+1}"`:'';
+    return `<button class="tab ${r===run&&!liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}" data-run-state="${status}" aria-label="${esc(run.flow)} · ${statusLabel}" title="${title}"${shortcut}><i class="dot" aria-hidden="true"></i>${esc(run.flow)}</button>${run.live?`<button class="tab ${r===run&&liveTab?'active':''}" data-project="${p.id}" data-run="${run.id}" data-view="live">◉ Live · ${esc(run.liveStage?.stageId||'live-run')}</button>`:''}`;
   }).join('');
   const continuing=resumingRuns.has(r?.key);
   const deleting=deletingRuns.has(r?.key);
@@ -146,7 +157,11 @@ function render(){
       :'<div class="livebar"><i class="dot"></i><code>Checkout</code><small>Demo browser</small></div><div id="native-live-tab" class="view"></div>';
     return
   }
-  if(!isDemo&&!r.can.open){area.innerHTML=`<p class="empty">${esc(unavailable(r))}</p>`;return}
+  if(!isDemo&&!r.can.open){
+    if(r.hostState==='finished'&&r.can.report)area.append(finishedRunReport(r));
+    else area.innerHTML=`<p class="empty">${esc(unavailable(r))}</p>`;
+    return
+  }
   let frame=dashboards.touch(r.id);
   if(!frame){
     frame=document.createElement(isDemo ? 'iframe' : 'div');

@@ -53,6 +53,12 @@ test('an empty folder becomes a project and one request id starts one run', fast
   const ended = await eventually(async () => (await desktop.runs.list()).find(r => r.key === run.key && r.state === 'finished'), { what: 'cancelled run' });
   assert.equal(ended.can.open, false);
   await assert.rejects(desktop.runs.open(run.runId, run.instanceId), /unavailable/);
+  assert.equal(ended.can.report, true);
+  const report = await desktop.runs.report(run.runId, run.instanceId);
+  assert.equal(report.run.id, run.runId);
+  assert.equal(report.run.status, 'interrupted');
+  assert.deepEqual(report.stages.map(stage => stage.id), ['wait']);
+  await assert.rejects(desktop.runs.report(run.runId, 'wrong-instance'), { code: 'not_found' });
 });
 
 test('Continue run reuses a saved worktree and pipeline snapshot after Desktop restarts', fast, async t => {

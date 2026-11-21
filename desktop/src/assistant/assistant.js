@@ -7,6 +7,7 @@ import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 import { ApprovalServer } from './approval.js';
 import { detectProvider, searchDirs } from './detect.js';
 import { runEndpoint } from './endpoint.js';
+import { assistantImages, claudeImagePrompt, endpointImagePrompt, writeCodexImages } from './images.js';
 import { buildInvocation, canResume, describeMode, PERMISSION_LABELS } from './modes.js';
 import { belongsTo } from '../projects.js';
 import { scopeLabel } from './policy.js';
@@ -35,8 +36,7 @@ export class AssistantError extends Error {
 // Identifies a scope or credential choice without storing either.
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 32);
 const clip = (text, limit) => (text.length > limit ? text.slice(0, limit) + '…' : text);
-// What a provider is given of the chat: failed replies and empty messages are left out.
-const forProvider = message => message.status !== 'error' && message.text;
+const forProvider = message => message.status !== 'error' && (message.text || message.imageCount);
 
 // The longest end of `text` that could still grow into one of `values`.
 function unfinishedValue(text, values) {
@@ -240,6 +240,7 @@ export class Assistant {
   // `catchUp` is whatever was said after the session last saw the chat (another provider, a failed reply).
   async #resumableSession(turn) {
     if (!turn.sessionKey.credentialKey || !canResume(turn.provider, turn.settings)) return null;
+    if (turn.images.length && turn.provider.kind === 'codex' && !turn.provider.capabilities.resumeFlags?.image) return null;
     const stored = (await this.#readHistory()).sessions?.[turn.conversationId];
     if (!stored?.sessionId || stored.providerId !== turn.sessionKey.providerId || stored.scopeKey !== turn.sessionKey.scopeKey
       || stored.credentialKey !== turn.sessionKey.credentialKey) return null;
@@ -267,7 +268,10 @@ export class Assistant {
 
   // Older turns are dropped first; the provider gets only what fits the budget.
   #transcript(messages, text) {
-    const lines = messages.filter(forProvider).map(item => `${item.role === 'user' ? 'User' : 'Assistant'}: ${clip(item.text, 2000)}`);
+    const lines = messages.filter(forProvider).map(item => {
+      const attached = item.imageCount ? `[${item.imageCount} image attachment(s)]` : '';
+      return `${item.role === 'user' ? 'User' : 'Assistant'}: ${[clip(item.text, 2000), attached].filter(Boolean).join(' ')}`;
+    });
     let used = text.length;
     const kept = [];
     for (const line of lines.reverse()) {
@@ -289,9 +293,10 @@ export class Assistant {
 
   // Starts a reply and returns at once; progress arrives through onEvent.
   // `internal.readOnly` is for Desktop's own replies (watch reports): read-only mode and no tools.
-  async send({ conversationId = 'main', text, scope: scopeInput } = {}, internal = {}) {
+  async send({ conversationId = 'main', text, images: inputImages, scope: scopeInput } = {}, internal = {}) {
     text = String(text ?? '').trim();
-    if (!text) throw new AssistantError('invalid', 'Write a message first.');
+    const images = assistantImages(inputImages);
+    if (!text && !images.length) throw new AssistantError('invalid', 'Write a message or attach an image first.');
     if (text.length > MAX_TEXT) throw new AssistantError('invalid', `Messages are limited to ${MAX_TEXT} characters.`);
     if (this.active.has(conversationId)) throw new AssistantError('busy', 'The assistant is still answering. Stop it or wait.');
     if (this.clearing.has(conversationId)) throw new AssistantError('busy', 'The chat is being cleared. Try again in a moment.');
@@ -310,9 +315,12 @@ export class Assistant {
       const provider = await this.#provider(settings.provider, { environment: turn.environment });
       if (!provider.found) throw new AssistantError('provider_missing', provider.auth.detail);
       if (provider.auth.state !== 'ready') throw new AssistantError('missing_credentials', `${provider.name} is not signed in. ${provider.auth.detail}`);
+      if (images.length && provider.kind !== 'openai' && !provider.capabilities.image) {
+        throw new AssistantError('unsupported_image', `The installed ${provider.name} CLI does not accept image attachments. Update it or choose another provider.`);
+      }
       const scope = await this.#resolveScope(scopeInput);
       const prior = await this.history(conversationId);
-      Object.assign(turn, { settings, provider, scope, prior, text });
+      Object.assign(turn, { settings, provider, scope, prior, text, images });
       if (provider.kind !== 'openai') {
         // The credential is resolved once: it is both what the session is bound to and what the process gets.
         turn.credential = await this.#providerCredential(provider, turn.environment.env);
@@ -325,7 +333,8 @@ export class Assistant {
       }
       const effective = provider.kind === 'openai' ? { permission: 'read', label: PERMISSION_LABELS.read, flags: 'chat only', model: settings.model || null, reasoning: 'default' } : this.#invocation(turn).effective;
       turn.effective = effective;
-      user = { id: randomUUID(), role: 'user', text, context: scopeLabel(turn.scope), at: new Date().toISOString() };
+      user = { id: randomUUID(), role: 'user', text, context: scopeLabel(turn.scope), at: new Date().toISOString(),
+        ...(images.length ? { imageCount: images.length } : {}) };
       turn.reply = { id: randomUUID(), role: 'assistant', text: '', context: user.context, status: 'streaming', tools: [], effective: { provider: turn.provider.name, ...turn.effective }, at: user.at };
       await this.#saveMessages(conversationId, messages => [...messages, user]);
     } catch (error) {
@@ -339,8 +348,10 @@ export class Assistant {
     return { turnId: turn.turnId, effective: turn.effective, scope: scopeLabel(turn.scope) };
   }
 
-  #invocation(turn, bridge = null, resume = null) {
-    return buildInvocation({ provider: turn.provider, settings: turn.settings, bridge, resume, isolated: turn.noTools, systemPrompt: this.#systemPrompt(turn.scope, { label: PERMISSION_LABELS[turn.settings.permission] }, Boolean(bridge)) });
+  #invocation(turn, bridge = null, resume = null, imageFiles = []) {
+    return buildInvocation({ provider: turn.provider, settings: turn.settings, bridge, resume, isolated: turn.noTools,
+      hasImages: turn.images.length > 0, imageFiles,
+      systemPrompt: this.#systemPrompt(turn.scope, { label: PERMISSION_LABELS[turn.settings.permission] }, Boolean(bridge)) });
   }
 
   // The provider refused the resumed session before doing anything. Retrying any other failure could repeat
@@ -351,7 +362,7 @@ export class Assistant {
   }
 
   async #run(turn) {
-    const { provider, settings, scope, prior, text } = turn;
+    const { provider, settings, scope, prior, text, images } = turn;
     const env = { ...turn.environment.env };
     const redact = redactor(env);
     turn.redact = redact;
@@ -363,7 +374,8 @@ export class Assistant {
       if (turn.cancelled) return this.#finish(turn, 'cancelled');
       if (provider.kind === 'openai') {
         const messages = [{ role: 'system', content: this.#systemPrompt(scope, { label: PERMISSION_LABELS.read }, false) },
-          ...this.#transcript(prior, text).map(line => ({ role: line.startsWith('User: ') ? 'user' : 'assistant', content: line.replace(/^(User|Assistant): /, '') })), { role: 'user', content: text }];
+          ...this.#transcript(prior, text).map(line => ({ role: line.startsWith('User: ') ? 'user' : 'assistant', content: line.replace(/^(User|Assistant): /, '') })),
+          { role: 'user', content: images.length ? endpointImagePrompt(text, images) : text }];
         if (!settings.model) throw new AssistantError('model_required', 'Choose a model for this endpoint first.');
         const apiKey = await this.#secret(provider, env);
         redact.add(apiKey);
@@ -372,15 +384,17 @@ export class Assistant {
         turn.timing.readyAt = performance.now();
       } else {
         tempDir = await mkdtemp(path.join(os.tmpdir(), 'afm-turn-'));
+        const imageFiles = provider.kind === 'codex' ? await writeCodexImages(tempDir, images) : [];
         const bridge = await this.#prepareBridge(turn, tempDir);
         const cwd = scope.kind === 'all' ? this.home : scope.projectRoot;
         Object.values(turn.credential).forEach(redact.add);
         Object.assign(env, turn.credential);
         // A resumed session already holds the conversation up to its catch-up point; a fresh one gets the bounded transcript.
         const start = resume => {
-          const { args } = this.#invocation(turn, bridge, resume?.id);
-          const prompt = [...this.#transcript(resume ? resume.catchUp : prior, text), `User: ${text}`].join('\n\n');
-          turn.process = runProcess({ command: provider.executable, args, cwd, env, input: prompt, parser: parserFor(provider.kind), onEvent, grace: this.grace });
+          const { args } = this.#invocation(turn, bridge, resume?.id, imageFiles);
+          const prompt = [...this.#transcript(resume ? resume.catchUp : prior, text), `User: ${text || 'Please look at the attached image(s).'}`].join('\n\n');
+          const input = provider.kind === 'claude' && images.length ? claudeImagePrompt(prompt, images) : prompt;
+          turn.process = runProcess({ command: provider.executable, args, cwd, env, input, parser: parserFor(provider.kind), onEvent, grace: this.grace });
           turn.timing.readyAt ??= performance.now();
           return turn.process.done;
         };

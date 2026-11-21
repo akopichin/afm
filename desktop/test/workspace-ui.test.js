@@ -15,6 +15,84 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
+test('run tabs show status dots and update when a run starts waiting', async t => {
+  const finished = runRow('finished', { state: 'finished', status: 'finished', can: { open: false, report: false } });
+  const rows = [ra, rb, finished];
+  const workspace = runs => snapshotOf([projectRow('a', runs)]);
+  const { d, native } = await openShell(t, workspace(rows));
+  d.querySelector('[data-project="a"]').click();
+  await tick();
+  const tabs = () => [...d.querySelectorAll('.run-tabs [data-run-state]')];
+  const statuses = () => tabs().map(tab => tab.dataset.runState);
+  assert.deepEqual(statuses(), ['running', 'running', 'inactive']);
+  assert.equal(tabs().filter(tab => tab.querySelector('.dot')).length, 3);
+  native.publish(workspace([ra, { ...rb, attention: true }, finished]));
+  assert.deepEqual(statuses(), ['running', 'waiting', 'inactive']);
+  assert.equal(tabs()[1].getAttribute('aria-label'), 'flow-rb · Needs attention');
+  assert.equal(tabs()[2].getAttribute('aria-label'), 'flow-finished · Finished');
+});
+
+test('a finished tab loads and renders its exact saved report after the dashboard closes', async t => {
+  const stopped = { ...ra, state: 'finished', status: 'interrupted', can: { open: false, report: true } };
+  const report = { run: { status: 'interrupted', elapsed_ms: 20000 }, stages: [
+    { id: '<img src=x>', status: 'done', timing: { work_ms: 12000, approval_ms: 1000, helpers_ms: 0, backoff_ms: 0, scheduling_ms: 0, paused_ms: 0 } },
+    { id: 'check', status: 'failed', timing: { started: true, complete: false } },
+  ], cost: { total: { tokens: { total: 5000 }, unmetered: 1 } },
+  diagnostics: [{ message: 'Stage timing unavailable' }] };
+  const calls = [];
+  let finish;
+  const response = new Promise(resolve => { finish = resolve; });
+  const { d, get, native } = await openShell(t, snapshotOf([projectRow('a', [ra, rb])]), {
+    runReport: async (...args) => { calls.push(args); return response; },
+  });
+  d.querySelector('[data-project="a"][data-run="i-ra%3Ara"]').click();
+  await tick();
+  assert.equal(calls.length, 0);
+  native.publish(snapshotOf([projectRow('a', [stopped, rb])]));
+  assert.match(get('content').textContent, /Loading run report/);
+  assert.equal(get('dashboard-host').hidden, true);
+  d.querySelector('.tab[data-run="i-rb%3Arb"]').click();
+  await tick();
+  finish(report);
+  await tick();
+  assert.equal(d.querySelector('.run-report'), null);
+
+  d.querySelector('.tab[data-run="i-ra%3Ara"]').click();
+  await tick();
+  assert.deepEqual(calls, [['ra', 'i-ra']]);
+  const page = d.querySelector('.run-report');
+  assert.match(page.textContent, /Interrupted/);
+  assert.match(page.textContent, /Elapsed20s/);
+  assert.match(page.textContent, /Stages done1 \/ 2/);
+  assert.match(page.textContent, /5k \(partial\)/);
+  assert.match(page.textContent, /Stage timing unavailable/);
+  assert.equal(page.querySelector('tbody tr:last-child td:nth-child(3)').textContent, '—');
+  assert.equal(page.querySelector('tbody th').textContent, '<img src=x>');
+  assert.equal(page.querySelector('img'), null);
+});
+
+test('a finished tab picks up report availability and can retry a failed read', async t => {
+  const stopped = { ...ra, state: 'finished', status: 'finished', can: { open: false, report: false } };
+  let calls = 0;
+  const { d, get, native } = await openShell(t, snapshotOf([projectRow('a', [stopped])]), {
+    runReport: async () => {
+      if (++calls === 1) throw Error('Files unavailable');
+      return { run: { status: 'finished', elapsed_ms: 2000 }, stages: [] };
+    },
+  });
+  d.querySelector('[data-project="a"]').click();
+  await tick();
+  assert.match(get('content').textContent, /This run has finished/);
+
+  native.publish(snapshotOf([projectRow('a', [{ ...stopped, can: { ...stopped.can, report: true } }])]));
+  await tick();
+  assert.match(get('content').textContent, /Files unavailable/);
+  get('content').querySelector('button').click();
+  await tick();
+  assert.match(get('content').textContent, /Elapsed2s/);
+  assert.equal(calls, 2);
+});
+
 test('the macOS title follows the project and the native controls overlay', async t => {
   const {get,w} = await loadShell(t, {demo: false, native: fakeNative(twoProjects([])), windowControls: true});
   await tick();

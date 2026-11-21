@@ -51,7 +51,8 @@ test('a message goes to the main process with the selected run as scope and the 
   await tick();
   assert.deepEqual(assistant.calls.send, [{ text: 'what is running?', scope: { runId: 'ra', instanceId: 'i-ra' } }]);
   assert.equal(get('chat-input').value, '', 'the field clears once the request was accepted');
-  assert.equal(d.querySelector('.send').getAttribute('aria-label'), 'Stop reply');
+  assert.equal(d.querySelector('.send').getAttribute('aria-label'), 'Queue message');
+  assert.equal(get('chat-stop').hidden, false);
 
   assistant.emit(start('t1', 'what is running?'));
   await frames(w);
@@ -105,8 +106,8 @@ test('stop cancels, a failure keeps the typed text and shows the reason, and can
   await tick();
   assistant.emit(start('t2', 'hello'));
   await frames(w);
-  submit(w, get);
-  assert.equal(assistant.calls.cancel, 1, 'submitting while a reply runs stops it');
+  get('chat-stop').click();
+  assert.equal(assistant.calls.cancel, 1);
   assistant.emit({ type: 'cancelled', turnId: 't2', reply: { id: 'rt2', role: 'assistant', text: 'partial', status: 'cancelled', tools: [] } });
   await frames(w);
   assert.match(get('messages').textContent, /partial[\s\S]*Stopped/);
@@ -114,6 +115,59 @@ test('stop cancels, a failure keeps the typed text and shows the reason, and can
   assistant.emit({ type: 'error', turnId: 't3', message: 'Codex exited with code 3. boom', reply: { id: 'rt3', role: 'assistant', text: '', status: 'error', error: 'Codex exited with code 3. boom', tools: [] } });
   await frames(w);
   assert.match(d.querySelector('.bubble.error .bubble-error').textContent, /exited with code 3/);
+});
+
+test('messages wait in FIFO order and keep the scope where they were queued', async t => {
+  const { w, d, get, assistant } = await openShell(t);
+  get('assistant-toggle').click();
+  type(w, get, 'first');
+  submit(w, get);
+  assistant.emit(start('t1', 'first'));
+  await frames(w);
+  w.shell.openProject(w.shell.projects[0], w.shell.projects[0].runs[0]);
+  await tick();
+  type(w, get, 'second');
+  enter(w, get);
+  type(w, get, 'remove me');
+  submit(w, get);
+  d.querySelectorAll('[data-remove-queued]')[1].click();
+  get('home').click();
+  await tick();
+  type(w, get, 'third');
+  submit(w, get);
+  assert.deepEqual(assistant.calls.send, [{ text: 'first', scope: {} }]);
+  assert.deepEqual([...d.querySelectorAll('.bubble.queued p')].map(el => el.textContent), ['second', 'third']);
+  assert.equal(assistant.calls.cancel, 0);
+
+  const done = id => assistant.emit({ type: 'done', turnId: id, reply: { id: 'r'+id, role: 'assistant', text: 'Done', status: 'done' } });
+  done('t1');
+  assert.deepEqual(assistant.calls.send[1], { text: 'second', scope: { runId: 'ra', instanceId: 'i-ra' } });
+  assistant.emit(start('t2', 'second'));
+  done('t2');
+  assert.deepEqual(assistant.calls.send[2], { text: 'third', scope: {} });
+  assert.equal(get('chat-input').value, '');
+});
+
+test('pasted images are removable before sending and travel with an image-only queued message', async t => {
+  const { w, d, get, assistant } = await openShell(t);
+  type(w, get, 'first');
+  submit(w, get);
+  assistant.emit(start('first', 'first'));
+  const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTbEAAAAASUVORK5CYII=';
+  const file = new w.File([w.Uint8Array.from(w.atob(data), char => char.charCodeAt(0))], 'screenshot.png', { type: 'image/png' });
+  const paste = new w.Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, 'clipboardData', { value: { files: [file, file] } });
+  get('chat-input').dispatchEvent(paste);
+  for (let attempt=0;attempt<10&&!d.querySelector('.chat-image');attempt++) await tick();
+  assert.equal(paste.defaultPrevented, true);
+  assert.equal(d.querySelectorAll('#chat-images img').length, 2);
+  d.querySelector('[data-remove-image]').click();
+  assert.equal(d.querySelectorAll('#chat-images img').length, 1);
+  enter(w, get);
+  assert.equal(d.querySelector('#chat-images img'), null);
+  assert.match(d.querySelector('.bubble.queued').textContent, /1 image attached/);
+  assistant.emit({ type: 'done', turnId: 'first', reply: { id: 'rfirst', role: 'assistant', text: 'Done', status: 'done' } });
+  assert.deepEqual(assistant.calls.send[1], { text: '', scope: {}, images: [{ type: 'image/png', data }] });
 });
 
 test('saved history is restored and only streaming events of the current turn change the reply', async t => {
@@ -124,6 +178,45 @@ test('saved history is restored and only streaming events of the current turn ch
   assistant.emit({ type: 'delta', turnId: 'stranger', text: 'LEAK' });
   await frames(w);
   assert.doesNotMatch(get('messages').textContent, /LEAK/);
+});
+
+test('opening Chat always shows the latest messages and saved user and assistant messages show local time', async t => {
+  const userAt = '2026-11-21T08:07:00.000Z', replyAt = '2026-11-21T08:09:00.000Z';
+  const assistant = fakeAssistant();
+  let restore;
+  assistant.history = () => new Promise(resolve => { restore = resolve; });
+  const { w, d, get } = await openShell(t, { assistant });
+  const box = get('messages');
+  let scrollTop = 0, scrollHeight = 1000;
+  Object.defineProperties(box, {
+    clientHeight: { value: 200 },
+    scrollHeight: { get: () => scrollHeight },
+    scrollTop: { get: () => scrollTop, set: value => { scrollTop = Math.min(value, scrollHeight - 200); } },
+  });
+  get('assistant-toggle').click();
+  assert.equal(box.scrollTop, 800);
+  box.scrollTop = 0;
+  scrollHeight = 1400;
+  restore([
+    { id: 'legacy', role: 'user', text: 'Older entry' },
+    { id: 'question', role: 'user', text: 'Question', at: userAt },
+    { id: 'answer', role: 'assistant', text: 'Most recent reply', status: 'done', at: replyAt },
+  ]);
+  await tick();
+  assert.equal(box.scrollTop, 1200, 'late history lands at the end');
+  assert.deepEqual([...box.querySelectorAll('time.bubble-time')].map(el => el.dateTime), [userAt, replyAt]);
+  const clock = new w.Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+  assert.equal(box.querySelector('.bubble.done time').textContent, clock.format(new w.Date(replyAt)));
+  assert.ok(box.querySelector('.bubble.done time').title);
+
+  box.scrollTop = 0;
+  get('close-chat').click();
+  get('assistant-toggle').click();
+  assert.equal(box.scrollTop, 1200, 'reopening ignores the old scroll position');
+  box.scrollTop = 0;
+  d.querySelector('[data-assistant-view="tasks"]').click();
+  d.querySelector('[data-assistant-view="chat"]').click();
+  assert.equal(box.scrollTop, 1200, 'returning from Tasks also shows the latest message');
 });
 
 test('settings show detected providers, supported modes only and the effective flags, and changes go to the main process', async t => {
@@ -311,7 +404,7 @@ test('the stop button stops a running reply even when the field holds /clear', a
   assistant.emit(start('t1', 'question'));
   await frames(w);
   type(w, get, '/clear');
-  submit(w, get);
+  get('chat-stop').click();
   await tick();
   assert.equal(assistant.calls.cancel, 1);
   assert.equal(assistant.calls.clear, 0);

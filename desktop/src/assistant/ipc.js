@@ -9,7 +9,7 @@ export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:remove-provider', id => assistant.removeProvider(String(id)));
   handle('assistant:test-provider', id => assistant.testProvider(String(id)));
   handle('assistant:send', request => assistant.send({
-    conversationId: 'main', text: request?.text,
+    conversationId: 'main', text: request?.text, images: request?.images,
     scope: { projectId: request?.scope?.projectId, runId: request?.scope?.runId, instanceId: request?.scope?.instanceId } }));
   handle('assistant:cancel', () => assistant.cancel('main'));
   handle('assistant:approve', (approvalId, approved) => assistant.approve(String(approvalId), approved === true));

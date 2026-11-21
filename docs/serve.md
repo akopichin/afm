@@ -60,7 +60,7 @@ extra required `run_id` argument from `afm_runs_list`. The host adds:
 | Tool | Group | Purpose |
 |---|---|---|
 | `afm_runs_list` | always | Runs with identity, liveness, project, endpoint, launch state, run status and open actions. |
-| `afm_run_report` | always | [Report](accounting.md) of a run, read from its files, so it works after the process exited for managed and explicitly attached runs (a merely discovered manual run needs `afm_run_attach` first). |
+| `afm_run_report` | always | [Report](accounting.md) of a managed or attached run, read from its files even after the process exits. Pass `instance_id` from the run listing to select a specific instance. AFM Desktop uses this report for finished run tabs whose dashboard has closed. |
 | `afm_run_start` | `runs` | Start a run from an allowlisted project and flow or pipeline. Returns at once with a launch in state `starting`; follow it with `afm_runs_list`. |
 | `afm_run_attach` | `runs` | Attach a run started elsewhere by its loopback API URL. The host controls it through MCP but never signals it. |
 | `afm_run_cancel` | `runs` | Stop a managed run whose workflow is active. |

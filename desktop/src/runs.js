@@ -123,6 +123,13 @@ export class Runs {
   // Opens only the run the caller identified, never whatever answers on a reused port.
   async open(runId, instanceId) { return dashboardURL(await this.#find(runId, instanceId)); }
 
+  report(runId, instanceId) {
+    if (typeof runId !== 'string' || !runId || typeof instanceId !== 'string' || !instanceId) {
+      throw new HostError('invalid', 'The run and instance IDs are required.');
+    }
+    return this.host.tool('afm_run_report', { run_id: runId, instance_id: instanceId });
+  }
+
   async cancel(runId, instanceId) {
     const row = await this.#find(runId, instanceId);
     if (!row.actions?.includes('cancel')) throw new HostError('not_supported', 'This run cannot be cancelled from Desktop.');

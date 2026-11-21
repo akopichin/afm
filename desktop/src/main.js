@@ -219,6 +219,7 @@ handle('dashboard:layout', (key, bounds) => {
 });
 handle('dashboard:command', (key, message) => dashboardViews.command(key, message));
 handle('dashboard:drop', key => dashboardViews.drop(key));
+handle('navigation:focus-shell', () => window.webContents.focus());
 handle('pipeline-options:get', (id, projectId) => pipelineOptions.get(id, projectId));
 handle('pipeline-options:save', input => pipelineOptions.save(input));
 handle('launch:preview', request => desktop.runs.preview(request));
@@ -262,6 +263,7 @@ handle('runs:delete', (id, instanceId) => desktop.runs.delete(id, instanceId, as
   return result.response === 1;
 }));
 handle('runs:release', (id, instanceId) => desktop.runs.release(id, instanceId));
+handle('runs:report', (id, instanceId) => desktop.runs.report(id, instanceId));
 handle('runs:attach', endpoint => desktop.runs.attach(endpoint));
 registerAssistantIpc(handle, assistant, event => window?.webContents.send('assistant:event', event));
 publishWatch = registerWatchIpc(handle, watchTasks, tasks => window?.webContents.send('watch:changed', tasks));

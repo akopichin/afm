@@ -32,6 +32,8 @@ function toolFailure(name, text) {
 // one otherwise. The host it starts keeps running after the app quits, because runs it manages are
 // only reachable through it; the owner file records which host is ours so controls stay honest.
 export class Host {
+  #instanceReports = new WeakSet();
+
   constructor(home, binary, { attempts = process.platform === 'darwin' ? 140 : 35, interval = 150, env = process.env } = {}) {
     this.env = env;
     this.home = home;
@@ -89,11 +91,12 @@ export class Host {
       await client.connect(transport, { timeout: 3000 });
       const server = client.getServerVersion();
       // The endpoint speaks MCP, so anything wrong from here on means it is not the AFM host we need.
-      const tools = await client.listTools().then(list => new Set(list.tools.map(tool => tool.name)), () => new Set());
+      const tools = await client.listTools().then(list => new Map(list.tools.map(tool => [tool.name, tool])), () => new Map());
       const missing = REQUIRED_TOOLS.filter(name => !tools.has(name));
       if (server?.name !== 'afm-serve' || missing.length) {
         throw new HostError('incompatible_host', `The service on this port is not a compatible AFM host${server?.name ? ' (' + server.name + ')' : ''}.`);
       }
+      if (tools.get('afm_run_report').inputSchema?.properties?.instance_id) this.#instanceReports.add(client);
       client.onclose = () => { this.connection = null; this.#set({ state: 'offline', reason: 'Connection to AFM host lost.' }); };
       this.#set({ state: 'connected', reason: null, endpoint: info.endpoint, pid: info.pid, startedAt: info.started_at,
         version: server.version, ownership: await this.#ownership(info) });
@@ -148,6 +151,9 @@ export class Host {
   async tool(name, args = {}) {
     for (let attempt = 0; ; attempt++) {
       const client = await this.connect();
+      if (name === 'afm_run_report' && args.instance_id && !this.#instanceReports.has(client)) {
+        throw new HostError('not_supported', 'Update and restart afm serve to view this run report.');
+      }
       let result;
       try { result = await client.callTool({ name, arguments: args }, undefined, { timeout: 15000 }); }
       catch (error) {

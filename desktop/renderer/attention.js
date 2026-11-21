@@ -98,7 +98,12 @@ function navigateApp(command){
   if(document.querySelector('dialog[open]'))return;
   if(Number.isInteger(command)){
     const tab=runTab(command);
-    if(tab&&!tab.classList.contains('active')){closeQueue();closeFocus();tab.click()}
+    if(tab&&!tab.classList.contains('active')){
+      closeQueue();closeFocus();
+      // A finished tab has no native view to take keyboard focus from the previous run.
+      window.nativeAFM?.focusShell().catch(showNativeError);
+      tab.click();
+    }
     return;
   }
   if(command==='assistant'){

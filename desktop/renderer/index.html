@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="select.css">
 <link rel="stylesheet" href="watch.css">
 <link rel="stylesheet" href="costs.css">
+<link rel="stylesheet" href="run-report.css">
 </head>
 <body>
 <div id="window-titlebar" hidden aria-hidden="true"><span id="window-title">Projects · AFM Desktop</span></div>
@@ -42,7 +43,7 @@
   <div id="messages" role="log" aria-live="polite"></div>
   <div id="tasks" aria-label="Watch tasks" hidden></div>
   <div class="chat-foot"><div class="suggestions"><button data-prompt="List active runs">Active runs</button><button data-prompt="Start a run">Start a run</button></div>
-  <form id="chat-form"><textarea id="chat-input" aria-label="Message AFM Assistant" placeholder="Ask about your projects…" rows="2" required></textarea><button class="send" aria-label="Send message">↑</button></form><div class="model-tools"><button id="chat-model" title="Assistant settings"></button><button id="quick-model-key" title="Change assistant model and reasoning" aria-label="Change assistant model and reasoning"></button></div></div>
+  <form id="chat-form"><div id="chat-images" hidden></div><div class="chat-compose"><textarea id="chat-input" aria-label="Message AFM Assistant" placeholder="Ask about your projects…" rows="2"></textarea><div class="chat-compose-actions"><button class="icon chat-stop" id="chat-stop" type="button" aria-label="Stop reply" title="Stop reply" hidden>■</button><button class="send" type="submit" aria-label="Send message" title="Send message">↑</button></div></div></form><div class="model-tools"><button id="chat-model" title="Assistant settings"></button><button id="quick-model-key" title="Change assistant model and reasoning" aria-label="Change assistant model and reasoning"></button></div></div>
 </aside></div>
 <dialog id="picker" aria-label="Switch project"><input id="query" type="search" placeholder="Find a project or run…" aria-label="Find a project or run"><div id="results"></div><footer>↑ ↓ to navigate <span>↵ to open</span><span>esc to close</span></footer></dialog>
 <dialog id="launch" aria-labelledby="launch-title">
@@ -106,6 +107,6 @@
   </form>
 </dialog>
 <input type="file" id="source-folder" webkitdirectory multiple hidden>
-<script src="store.js"></script><script src="desktop.js"></script><script src="library.js"></script><script src="assistant.js"></script><script src="tasks.js"></script><script src="report.js"></script><script src="controls.js"></script><script src="attention.js"></script>
+<script src="store.js"></script><script src="run-report.js"></script><script src="desktop.js"></script><script src="library.js"></script><script src="assistant.js"></script><script src="tasks.js"></script><script src="report.js"></script><script src="controls.js"></script><script src="attention.js"></script>
 <script src="inventory.js"></script><script src="costs.js"></script><script src="native.js"></script><script src="select.js"></script>
 </body></html>
