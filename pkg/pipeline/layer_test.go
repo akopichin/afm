@@ -3,6 +3,7 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -285,6 +286,66 @@ collaboration:
 		t.Fatalf("empty: %v %s", err, empty)
 	} else if l, err := ParseLayer(empty, OriginOptions, "/"); err != nil || len(l.Agents)+len(l.Profiles) != 0 {
 		t.Fatalf("empty layer round trip: %v %+v", err, l)
+	}
+}
+
+const stageContextLayer = `collaboration:
+  profiles:
+    a: {title: A, stage_context: {inputs: []}}
+    b: {title: B}
+    c: {title: C, stage_context: {inputs: [prep.rules]}}
+`
+
+func TestLayerKeepsStageContextThroughEncodeLayer(t *testing.T) {
+	for _, origin := range []LayerOrigin{OriginPackage, OriginOptions} {
+		t.Run(string(origin), func(t *testing.T) {
+			layer, err := ParseLayer([]byte(stageContextLayer), origin, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := EncodeLayer(layer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for stage, l := range map[string]Layer{"parsed": layer, "reparsed": mustParseLayer(t, encoded, origin)} {
+				a, b, c := l.Profiles["a"].StageContext, l.Profiles["b"].StageContext, l.Profiles["c"].StageContext
+				if a == nil || a.Inputs == nil || len(a.Inputs) != 0 {
+					t.Errorf("%s: profile a stage_context = %+v, want an empty non-nil list", stage, a)
+				}
+				if b != nil {
+					t.Errorf("%s: profile b stage_context = %+v, want none", stage, b)
+				}
+				if c == nil || !slices.Equal(c.Inputs, []string{"prep.rules"}) {
+					t.Errorf("%s: profile c stage_context = %+v, want [prep.rules]", stage, c)
+				}
+			}
+		})
+	}
+}
+
+func mustParseLayer(t *testing.T, data []byte, origin LayerOrigin) Layer {
+	t.Helper()
+	layer, err := ParseLayer(data, origin, t.TempDir())
+	if err != nil {
+		t.Fatalf("encoded layer does not parse: %v\n%s", err, data)
+	}
+	return layer
+}
+
+func TestLayerRejectsMalformedStageContext(t *testing.T) {
+	cases := []struct{ name, yaml string }{
+		{"null", "collaboration:\n  profiles:\n    a: {title: t, stage_context: null}\n"},
+		{"unknown key", "collaboration:\n  profiles:\n    a: {title: t, stage_context: {inputs: [], extra: x}}\n"},
+	}
+	for _, tc := range cases {
+		for _, origin := range []LayerOrigin{OriginPackage, OriginOptions} {
+			t.Run(tc.name+"/"+string(origin), func(t *testing.T) {
+				_, err := ParseLayer([]byte(tc.yaml), origin, t.TempDir())
+				if err == nil || !strings.Contains(err.Error(), "collaboration.profiles.a") {
+					t.Fatalf("err = %v, want containing collaboration.profiles.a", err)
+				}
+			})
+		}
 	}
 }
 

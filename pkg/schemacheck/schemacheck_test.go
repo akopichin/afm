@@ -804,3 +804,44 @@ func TestConfigSchemaMatchesCollaborationRuntimeContext(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigSchemaMatchesProfileStageContext(t *testing.T) {
+	sch := compileSchema(t, configSchemaPath)
+	profile := func(block string) string {
+		return "collaboration:\n  profiles:\n    p:\n      command: /abs/x.sh\n" + block
+	}
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"no block", profile(""), true},
+		{"empty inputs", profile("      stage_context: {inputs: []}\n"), true},
+		{"valid references", profile("      stage_context: {inputs: [prep.rules, prep.results.json]}\n"), true},
+		{"explicit null", profile("      stage_context: null\n"), false},
+		{"empty mapping", profile("      stage_context: {}\n"), false},
+		{"inputs null", profile("      stage_context: {inputs: null}\n"), false},
+		{"inputs scalar", profile("      stage_context: {inputs: prep.rules}\n"), false},
+		{"number item", profile("      stage_context: {inputs: [123]}\n"), false},
+		{"reference without dot", profile("      stage_context: {inputs: [rules]}\n"), false},
+		{"unknown key", profile("      stage_context: {inputs: [], extra: x}\n"), false},
+		{"list instead of mapping", profile("      stage_context: []\n"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schemaAcceptsYAML(t, sch, tt.body); got != tt.want {
+				t.Errorf("schema accepts = %v, want %v", got, tt.want)
+			}
+
+			projectDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectDir, "config.yaml"), []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(t.TempDir(), projectDir)
+			if runtimeAccepts := err == nil; runtimeAccepts != tt.want {
+				t.Errorf("config.LoadFrom accepts = %v, want %v (error: %v)", runtimeAccepts, tt.want, err)
+			}
+		})
+	}
+}

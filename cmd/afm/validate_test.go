@@ -453,3 +453,82 @@ func TestValidateFlowFile_PreCompletionHelperOnExecutionStageReturnsOK(t *testin
 		t.Fatalf("validateFlowFile: %v", err)
 	}
 }
+
+const stageContextConfig = `collaboration:
+  profiles:
+    picky:
+      command: codex-as-claude
+      stage_context: {inputs: [prep.rules]}
+    bare:
+      command: codex-as-claude
+      stage_context: {inputs: []}
+    bad:
+      command: codex-as-claude
+      stage_context: {inputs: [prep.missing]}
+`
+
+// stageContextFlow runs prep → work; work declares helperProfile and has a team member backed by memberProfile.
+func stageContextFlow(helperProfile, memberProfile string) string {
+	return `name: ctx-flow
+team:
+  - id: member
+    profile: ` + memberProfile + `
+    title: Member
+stages:
+  - id: prep
+    agents: [auto]
+    artifacts:
+      - name: rules
+        path: rules.md
+      - name: big
+        path: big.md
+  - id: work
+    agents: [auto]
+    depends_on: [prep]
+    inputs: [prep.rules, prep.big]
+    assistants: ` + helperProfile + `
+`
+}
+
+func TestValidateFlowFile_StageContextValidBlocksReturnOK(t *testing.T) {
+	writeValidateConfig(t, stageContextConfig)
+	if _, err := validateFlowFile(writeTestFlow(t, stageContextFlow("picky", "bare"))); err != nil {
+		t.Fatalf("validateFlowFile: %v", err)
+	}
+}
+
+func TestValidateFlowFile_StageContextUnknownReferenceOfDeclaredHelper(t *testing.T) {
+	writeValidateConfig(t, stageContextConfig)
+	_, err := validateFlowFile(writeTestFlow(t, stageContextFlow("bad", "bare")))
+	for _, want := range []string{`stage "work"`, "bad", "prep.missing"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("validateFlowFile = %v, want an error containing %q", err, want)
+		}
+	}
+}
+
+func TestValidateFlowFile_StageContextTeamMemberSelectsNothing(t *testing.T) {
+	writeValidateConfig(t, stageContextConfig)
+	_, err := validateFlowFile(writeTestFlow(t, stageContextFlow("picky", "picky")))
+	for _, want := range []string{"team member", "picky", "prep.rules"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("validateFlowFile = %v, want an error containing %q", err, want)
+		}
+	}
+}
+
+func TestValidateFlowFile_StageContextMalformedBlockStopsConfigLoading(t *testing.T) {
+	cases := map[string]string{
+		"null":          "stage_context: null",
+		"no dot in ref": "stage_context: {inputs: [rules]}",
+	}
+	for name, block := range cases {
+		t.Run(name, func(t *testing.T) {
+			writeValidateConfig(t, "collaboration:\n  profiles:\n    p:\n      command: codex-as-claude\n      "+block+"\n")
+			_, err := validateFlowFile(writeTestFlow(t, stageContextFlow("p", "p")))
+			if err == nil || !strings.Contains(err.Error(), "stage_context") {
+				t.Fatalf("validateFlowFile = %v, want a config error naming stage_context", err)
+			}
+		})
+	}
+}

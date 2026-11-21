@@ -62,6 +62,8 @@ server:
 #     reviewer: { title: Code reviewer, instructions: Review the stage }  # runs the executor it is attached to
 #     codex-reviewer: { command: codex-as-claude, runtime_context: wrapper,
 #                       instructions: Review the stage, delegate: false }
+#     picky-reviewer: { instructions: Review the stage,
+#                       stage_context: { inputs: [prep.rules] } }  # only these stage inputs, no plan
 
 # worktrees:
 #   enabled: true           # per-flow git worktrees; OFF by default. env AFM_WORKTREES
@@ -166,6 +168,9 @@ a
 profile value wins, and an empty, `null` or unknown value stops config loading.
 `profiles.<id>.budget` (`{tokens, money, stop_policy}`) is the default
 [spending limit](budgets.md) of helpers of that profile.
+`profiles.<id>.stage_context` (`{inputs: [stage.artifact, ...]}`) limits the stage
+context in the helper's prompt to the listed inputs and drops the stage plan; an
+empty list passes none. See [Stage context](collaboration.md#stage-context).
 See [Which executor a helper runs](collaboration.md#which-executor-a-helper-runs)
 and [Runtime context](collaboration.md#runtime-context).
 

@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Add `stage_context` to helper profiles to pass a helper only chosen stage inputs instead of the stage plan and all inputs, with afm-engine v1.2.4 and contracts v0.4.1. See [Stage context](docs/collaboration.md#stage-context).
 - Verify and run the archived Intel macOS AFM executable before publishing a CLI release.
 - Add repeating Assistant tasks with model selection, result history, and Telegram delivery to AFM Desktop.
 - Show message times and run tab status dots in AFM Desktop.

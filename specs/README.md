@@ -47,6 +47,7 @@ new behavior is introduced only through deltas.
 | HLP | | [helpers-recovery](helpers-recovery/spec.md) | Replay of helper state, settle/resume at startup, crash points, owed passes |
 | HLP | | [helpers-admission](helpers-admission/spec.md) | Admission order, delegation limits, slots, size limits, budgets, usage-limit parks, run-open rules |
 | HLP | | [helpers-pre-completion](helpers-pre-completion/spec.md) | `pre_completion` review round in stage view, attach over HTTP, dashboard, `afm check`, MCP, SDK |
+| HLP | | [helpers-context](helpers-context/spec.md) | Helper profile `stage_context`: accepted forms, validation against stage inputs, prompt contents |
 | MESH | Agent mesh | [agent-mesh](agent-mesh/spec.md) | Collaboration policy and mode, Assistant toggle, roster, team and run agents, tokens, agent jobs |
 | MESH | | [agent-mesh-messaging](agent-mesh-messaging/spec.md) | send/reply threads, human member, inbox, turn prompts, limits, redaction |
 | MESH | | [agent-mesh-waits](agent-mesh-waits/spec.md) | Non-blocking `wait`, conditions, target checks, refusals, cycle detection, batches |

@@ -102,7 +102,47 @@ independent of the model's context window.
 
 For large input artifacts, `inline: false` passes a file path instead of the
 file contents. `runtime_context: isolated` controls the process environment;
-it does not remove inherited input artifacts from the prompt.
+it does not remove inherited input artifacts from the prompt. To choose which
+of them a helper receives, set [`stage_context`](#stage-context) on its profile.
+
+### Stage context
+
+By default a helper's `context.md` contains the parent stage's plan and all of
+its `inputs`. A profile can narrow this with an optional `stage_context` block:
+
+```yaml
+collaboration:
+  profiles:
+    writer:
+      instructions: Write tests for the assigned package.
+      stage_context:
+        inputs: [prep.test-rules]
+    reviewer:
+      instructions: Review the changes named in the request.
+      stage_context:
+        inputs: []
+```
+
+- **No block:** the helper gets the stage plan and every stage input, as before.
+- **With a block:** the stage plan is left out and only the listed inputs are
+  passed. `inputs` is required and takes `stage.artifact` references; an empty
+  list is valid and passes no stage inputs. `null`, unknown keys, a missing or
+  non-list `inputs`, non-string items and malformed references stop config
+  loading.
+- Selected inputs follow the usual rules: `inline`, `optional`, path
+  permissions and secret masking. Their files are read again on every turn.
+  A selected required file that is missing fails the turn before the helper
+  process starts.
+- Each reference must name an entry in the `inputs` of the root stage. Unknown
+  references are reported with the profile, stage and reference when the run
+  opens, in `afm validate`, and on `spawn`, declared helpers (including
+  `on_message`) and delegation. A run-level agent has no root stage, so only
+  `inputs: []` is accepted for it. `team:` members can use only `[]`.
+- The profile's instructions, the task, addressed messages, the helper's own
+  results and AFM service sections are always included.
+- The setting is frozen into each helper task: editing the config affects only
+  tasks created afterwards. The stage itself still receives all of its inputs,
+  and file access is unchanged; only the prompt contents differ.
 
 ### Runtime context
 
