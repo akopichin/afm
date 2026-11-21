@@ -8,6 +8,7 @@ import { afmBinary } from '../src/binary.js';
 import { Desktop } from '../src/desktop.js';
 import { desktopEnvironment } from '../src/environment.js';
 import { ServeConfig } from '../src/serve-config.js';
+import { LibraryLinks } from '../src/library-links.js';
 import { Sources, projectFlows } from '../src/sources.js';
 import { makeProject, tempHome } from './support.js';
 
@@ -72,6 +73,33 @@ test('a Git package is inspected through the AFM CLI', { timeout: 60000 }, async
   assert.equal(source.entries[0].name, 'from-git');
   assert.equal(source.entries[0].flowName, 'git-flow');
   assert.equal((await serveConfig.read()).pipelines[0].source, 'file://' + repo);
+});
+
+test('a confirmed Git link uses the real Library registration and keeps one source', async t => {
+  const { home, env } = await tempHome(t);
+  const repo = path.join(home, 'remote');
+  await writePackage(path.join(repo, 'packages', 'dev'), 'dev');
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  git('add', '.');
+  git('-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-qm', 'packages');
+  git('tag', 'v1');
+  const remote = 'https://example.invalid/team/pipelines';
+  const location = remote + '//packages/dev@v1';
+  const config = new ServeConfig(home);
+  execFileSync('git', ['config', '--global', `url.file://${repo}.insteadOf`, remote], { env });
+  const sources = new Sources({ home, serveConfig: config, binary: afmBinary, environment: () => env });
+  const links = new LibraryLinks(input => sources.add(input));
+  const request = 'afm://library/install?' + new URLSearchParams({ source: location });
+  assert.equal(links.receive(request), true);
+  assert.deepEqual(await sources.list(), []);
+  const first = await links.confirm(links.current().id);
+  assert.equal(first.error, null, first.error);
+  assert.equal(first.entries[0].name, 'dev');
+  links.receive(request);
+  assert.equal((await links.confirm(links.current().id)).id, first.id);
+  assert.equal((await sources.list()).length, 1);
+  assert.deepEqual((await config.read()).pipelines.map(pipeline => pipeline.source), [location]);
 });
 
 test('Git Library passes the configured environment to both catalog and inspect', async t => {

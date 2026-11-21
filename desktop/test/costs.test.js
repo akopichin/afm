@@ -588,6 +588,38 @@ test('Costs.period reports growth from the history, hides money, and says no dat
   assert.equal((await new Costs().period(T0 - 1, T0 + 1, 2)).available, false, 'no history store');
 });
 
+test('Costs uses current counters for a run inside the window and preserves readings across an outage', async t => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { CostsHistory } = await import('../src/costs-history.js');
+  const dir = await mkdtemp((await import('node:path')).join(tmpdir(), 'costs-window-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const history = new CostsHistory(dir);
+  const view = row(await fakeRun(t));
+  let now = T0;
+  const costs = new Costs({ history, now: () => now });
+  t.after(() => costs.close());
+  costs.setWatched(true);
+  costs.setVisible(true);
+  const inventory = Costs.inventoryOf([{ run: view, projectId: 'p' }]);
+  const observe = tokens => costs.observe(inventory, new Map([[view.key, statusBody({
+    started_at: new Date(T0 - 60000).toISOString(), run_cost: cost(1, tokens),
+  })]]));
+  await observe(39019835);
+  await history.markOutage([view.key], now);
+  now += 60000;
+  await observe(55500505);
+  const { runs } = await costs.period(T0 - 3600000, now, 8);
+  const run = runs[view.key];
+  assert.equal(run.tokens.observed, false);
+  assert.equal(run.meta.wholeRun, true);
+  assert.equal(run.windowTotals.tokens, 55500505);
+  assert.deepEqual(run.recorded.tokens, [
+    { at: T0, value: 39019835, breakBefore: false },
+    { at: now, value: 55500505, breakBefore: true },
+  ]);
+});
+
 test('Costs.period as of a past moment: finished runs appear while followed, later ones do not, and the real reading time is separate', async t => {
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');

@@ -48,6 +48,14 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   onSSHKeyClosed:callback=>ipcRenderer.on('ssh:closed',(_event,id)=>callback(id)),
   answerSSHKey:(id,answer)=>ipcRenderer.invoke('ssh:reply',id,answer),
   addSource:location=>ipcRenderer.invoke('sources:add',location),
+  libraryLink:()=>ipcRenderer.invoke('library:link'),
+  confirmLibraryLink:id=>ipcRenderer.invoke('library:confirm-link',id),
+  dismissLibraryLink:id=>ipcRenderer.invoke('library:dismiss-link',id),
+  onLibraryLink:callback=>{
+    const listener=(_event,link)=>callback(link);
+    ipcRenderer.on('library:link',listener);
+    return ()=>ipcRenderer.removeListener('library:link',listener);
+  },
   pickSource:()=>ipcRenderer.invoke('sources:pick'),
   removeSource:id=>ipcRenderer.invoke('sources:remove',id),
   refreshSource:id=>ipcRenderer.invoke('sources:refresh',id),

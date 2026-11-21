@@ -49,7 +49,7 @@ test('totals add the runs and say what is missing instead of inventing numbers',
   const kpis = shell.d.querySelector('.cost-kpis').textContent;
   assert.match(kpis, /\$12\.50/);
   assert.match(kpis, /1\.50M/);
-  assert.match(kpis, /1 runs without accounting/);
+  assert.match(kpis, /1 run without token totals/);
   const rows = [...shell.d.querySelectorAll('[data-cost-row]')];
   const missing = rows.find(row => row.textContent.includes('flow-rb'));
   assert.match(missing.textContent, /—/);
@@ -253,6 +253,38 @@ test('Finished changes the table, totals, and chart without mixing in active run
   assert.doesNotMatch(shell.get('cost-rows').textContent, /flow-old/);
 });
 
+function hoverReading(shell, marker) {
+  const plot = marker.closest('[data-cost-plot]');
+  plot.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 170 });
+  plot.dispatchEvent(new shell.w.MouseEvent('pointermove', {
+    bubbles: true, clientX: Number(marker.dataset.costX) * 640, clientY: Number(marker.dataset.costY) * 170,
+  }));
+  return plot.querySelector('.cost-tooltip');
+}
+
+test('Costs shows totals and per-run lines with axes and exact values on hover', async t => {
+  const shell = await openCosts(t);
+  const keys = { 'i-ra:ra': figures(55500505), 'i-rb:rb': figures(6000) };
+  shell.native.periodResult = (from, to) => ({
+    ...periodOf(keys, { 'i-ra:ra': { tokens: flat(55500505) }, 'i-rb:rb': { tokens: flat(6000) } }), from, to,
+  });
+  shell.d.querySelector('[data-cost-range="24"]').click();
+  await tick();
+  shell.d.querySelector('[data-cost-metric="tokens"]').click();
+  const chart = shell.d.querySelector('.cost-chart-card');
+  assert.ok(chart.querySelector('[aria-label="Tokens"]'));
+  assert.ok(chart.querySelector('[aria-label="Local time"]'));
+  assert.equal(chart.querySelectorAll('polyline').length, 3);
+  assert.ok(chart.querySelector('polyline[stroke-dasharray]'));
+  assert.match(chart.querySelector('.project-cost-legend').textContent, /flow-ra.*flow-rb.*Total/);
+  const marker = [...chart.querySelectorAll('[data-cost-hover]')].find(point => point.dataset.costHover.startsWith('flow-ra'));
+  const tooltip = hoverReading(shell, marker);
+  assert.equal(tooltip.hidden, false);
+  assert.match(tooltip.textContent, /flow-ra.*55,500,505 tokens/);
+  marker.closest('[data-cost-plot]').dispatchEvent(new shell.w.MouseEvent('pointerout', { bubbles: true }));
+  assert.equal(tooltip.hidden, true);
+});
+
 test('Finished charts report totals by completion when no interval observations exist', async t => {
   const shell = await openCosts(t, [], { hidePrices: true });
   const final = entry('old', { finished: true, runStatus: 'finished' });
@@ -264,7 +296,7 @@ test('Finished charts report totals by completion when no interval observations 
   await tick();
   assert.match(text(shell), /Elapsed time for runs that finished in each interval/);
   assert.match(shell.d.querySelector('[data-cost-point]:last-child').ariaLabel, /1h 0m/);
-  assert.equal(shell.d.querySelectorAll('.cost-plot circle').length, 1);
+  assert.equal(shell.d.querySelectorAll('.cost-plot circle').length, 2);
 });
 
 test('a chosen period shows the growth inside it, asks the history once per change and stops ticking', async t => {
@@ -574,12 +606,13 @@ test('a Home line opened while analytics are read still starts from the history 
   try {
     assert.equal(home.native.costsView.runs[0].money.usd, 10);
     await home.goHome();
-    assert.equal(home.line().points[23], 9, 'an hour ago the run had cost $9');
+    const earlier = home.line().points.find(point => point.at < BASE - 2 * 60000);
+    assert.equal(earlier?.value, 9, 'earlier recorded usage was $9');
     home.gate.resolve();
     await pending;
     await tick();
-    assert.equal(home.line().points[23], 9, 'the arriving view does not move the point');
-    assert.equal(home.line().points[24], 20);
+    assert.equal(home.line().points.find(point => point.at === earlier.at)?.value, 9, 'the arriving view does not move the point');
+    assert.equal(home.line().points.at(-1).value, 20);
     assert.equal(home.line().total, 20, 'the legend is live');
   } finally { home.gate.resolve(); await pending; }
 });
@@ -591,8 +624,8 @@ test('a Home line ends at the last recorded reading when a newer view is not in 
   assert.equal(home.history.run(home.key).samples.at(-1).usd, 10, 'ten seconds after the last snapshot the reading is not stored');
   await home.goHome();
   const line = home.line();
-  assert.equal(line.points[23], 9);
-  assert.equal(line.points[24], 10);
+  assert.equal(line.points.find(point => point.at === BASE - 3600000)?.value, 9);
+  assert.equal(line.points.at(-1).value, 10);
   assert.equal(line.total, 20, 'the legend and total show the live value');
   assert.match(home.shell.d.querySelector('[data-cost-project="a"]').textContent, /\$20\.00/);
 });
@@ -602,15 +635,15 @@ test('a running Stage work clock moves the Home total, never the recorded points
   home.setNow(BASE + 10000);
   await home.goHome();
   const line = home.line();
-  assert.equal(line.points[23], 3600000, 'an hour of Stage work an hour ago');
-  assert.equal(line.points[24], 7200000, 'two hours at the last snapshot');
+  assert.equal(line.points.find(point => point.at === BASE - 3600000)?.value, 3600000, 'an hour of Stage work an hour ago');
+  assert.equal(line.points.at(-1).value, 7200000, 'two hours at the last snapshot');
   assert.equal(line.total, 7210000, 'the total includes the ten seconds since');
 });
 
 test('a run that stops showing its price loses its Home money line at once, also in a project with priced runs', async t => {
   const home = await observedHome(t, { ids: ['ra', 'rb'] });
   await home.goHome();
-  assert.equal(home.line(0).points[24], 10);
+  assert.equal(home.line(0).points.at(-1).value, 10);
   const shapes = color => home.shell.d.querySelectorAll(`[data-cost-project="a"] polyline[stroke="${color}"], [data-cost-project="a"] circle[fill="${color}"]`).length;
   assert.ok(shapes('#8995ff') > 0);
   const reads = home.native.periodCalls.length;
@@ -619,7 +652,7 @@ test('a run that stops showing its price loses its Home money line at once, also
   const model = home.shell.w.eval('costsTileModel(projects[0])');
   assert.equal(model.money, true, 'the other run still shows money');
   assert.equal(model.lines[0].total, null);
-  assert.ok(model.lines[0].points.every(point => point === null), 'no cached price stays in the line');
+  assert.ok(model.lines[0].points.length === 0, 'no cached price stays in the line');
   assert.equal(shapes('#8995ff'), 0, 'the run has no shape in the chart');
   assert.ok(shapes('#6dcaa5') > 0, 'the priced run keeps its line');
   assert.equal(home.native.periodCalls.length, reads, 'no new history read was needed');
@@ -630,15 +663,19 @@ test('a reset or a gap stops a Home line at the reading after it', async t => {
   home.setNow(BASE + 60000);
   await home.observe(2);
   await home.goHome();
-  assert.equal(home.line().points[24], 2);
-  assert.equal(home.line().points[23], null, 'nothing is subtracted across the reset');
+  assert.equal(home.line().points.at(-1).value, 2);
+  assert.ok(home.line().points.at(-1).breakBefore, 'the line does not cross the reset');
+  assert.ok(home.line().points.some(point => point.value === 9), 'older readings are still plotted');
+  const tile = tileOf(home.shell, 'a');
+  const marker = [...tile.querySelectorAll('[data-cost-hover]')].find(point => point.dataset.costHover.startsWith('flow-ra') && point.dataset.costHover.endsWith('$2.00'));
+  assert.match(hoverReading(home.shell, marker).textContent, /flow-ra.*\$2\.00/);
   await home.history.markOutage([home.key], BASE + 60000);
   home.setNow(BASE + 20 * 60000);
   await home.observe(30);
   home.shell.w.refreshCostsHome(true);
   await tick();
-  assert.equal(home.line().points[24], 30);
-  assert.equal(home.line().points[23], null, 'nothing is subtracted across the gap');
+  assert.equal(home.line().points.at(-1).value, 30);
+  assert.ok(home.line().points.at(-1).breakBefore, 'the line does not cross the gap');
 });
 
 const asOfRun = (key, name, extra = {}) => ({ ...figures(1000, 1), meta: { name, projectId: 'a', startedAt: 0, finished: false },

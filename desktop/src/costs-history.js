@@ -181,6 +181,26 @@ export class CostsHistory {
     return { observedAt: sample.t, gap };
   }
 
+  // Keep the first and last readings per bucket, with their real times, so a gap does not erase older points.
+  recorded(key, field, from, to, buckets) {
+    const run = this.#runs.get(key);
+    if (!run) return [];
+    const byBucket = new Map();
+    for (const sample of run.samples) {
+      if (sample.t < from || sample.t > to || sample[field] == null) continue;
+      const bucket = Math.min(buckets - 1, Math.floor((sample.t - from) * buckets / (to - from)));
+      const pair = byBucket.get(bucket);
+      if (pair) pair[1] = sample;
+      else byBucket.set(bucket, [sample, sample]);
+    }
+    const gaps = missedStretches(run, field);
+    const points = [...byBucket.values()].flatMap(([first, last]) => first === last ? [first] : [first, last]);
+    return points.map((sample, i) => ({
+      at: sample.t, value: sample[field],
+      breakBefore: i > 0 && gaps.some(([start, end]) => start < sample.t && end > points[i - 1].t),
+    }));
+  }
+
   // Growth of `field` for one run between `from` and `to`. `partial` means there was no snapshot at or before
   // `from` and the run did not start inside the period, or older snapshots were dropped; `gaps` counts the stretches
   // inside the period in which this field was not followed (see missedStretches), whose change is not counted.
@@ -206,19 +226,23 @@ function deltaWithin(run, field, from, to, stretches) {
   }
   if (!first) return null;
   let value = 0;
+  let observed = false;
   let previous = base;
   let unobserved = false;
   for (const sample of run.samples) {
     if (!(sample.t <= to) || (base && !(sample.t > base.t))) continue;
     if (sample.gapFrom !== undefined) unobserved = true;
     if (sample[field] == null) { unobserved = true; continue; }
-    if (previous && !unobserved && !sample.breaks?.includes(field)) value += sample[field] - previous[field];
+    if (previous && !unobserved && !sample.breaks?.includes(field)) {
+      observed = true;
+      value += sample[field] - previous[field];
+    }
     previous = sample;
     unobserved = false;
   }
   const gaps = stretches.filter(([start, end]) => start < to && end > from).length;
   const covered = run.startedAt >= from && !run.truncated;
-  return { value, partial: !base && !covered, gaps, from: (base ?? first).t };
+  return { value, observed, partial: !base && !covered, gaps, from: (base ?? first).t };
 }
 
 // Stretches in which `field` was not followed: unobserved time (including an outage still going on), snapshots without

@@ -91,3 +91,47 @@ function addProject(path,git,flows=[]){
   if(!existing)projects.push(project);
   save();$('open-project').close();openProject(project);
 }
+
+let libraryLink=null, installingLibraryLink=false;
+function showLibraryLink(link){
+  if(!link||libraryLink?.id===link.id)return;
+  libraryLink=link;
+  openSettings(false,'library');
+}
+function libraryLinkHTML(){
+  if(!libraryLink)return '';
+  const {repository,subdir,ref,error}=libraryLink;
+  return `<section class="library-link" aria-labelledby="library-link-title">
+    <h3 id="library-link-title">Add pipeline to Library</h3>
+    ${repository?`<dl><dt>Repository</dt><dd>${esc(repository)}</dd>${subdir?`<dt>Directory</dt><dd>${esc(subdir)}</dd>`:''}
+      <dt>Git ref</dt><dd>${esc(ref||'Default branch')}</dd></dl>`:''}
+    ${error?`<p class="hint error" role="alert">${esc(error)}</p>`:''}
+    <div class="actions"><button type="button" id="library-link-dismiss"${installingLibraryLink?' disabled':''}>${repository?'Cancel':'Dismiss'}</button>
+    ${repository?`<button class="primary" type="button" id="library-link-confirm"${installingLibraryLink?' disabled':''}>${installingLibraryLink?'Reading repository…':error?'Retry':'Add to Library'}</button>`:''}</div>
+  </section>`;
+}
+async function dismissLibraryLink(){
+  const link=libraryLink;
+  if(!link||installingLibraryLink)return;
+  try{
+    await nativeAFM.dismissLibraryLink(link.id);
+    if(libraryLink===link){libraryLink=null;drawSettings()}
+  }catch(error){showNativeError(error)}
+}
+async function confirmLibraryLink(){
+  const link=libraryLink;
+  if(!link?.repository||installingLibraryLink)return;
+  installingLibraryLink=true;drawSettings();
+  try{
+    const source=await nativeAFM.confirmLibraryLink(link.id);
+    if(libraryLink===link)libraryLink=source.error?{...link,error:source.error}:null;
+    if(!source.error)sourceMessage=`${source.entries.length} workflows available in New run.`;
+    await loadSettingsData();
+  }catch(error){
+    if(libraryLink===link)libraryLink={...link,error:error.message};
+    else showNativeError(error);
+  }finally{
+    installingLibraryLink=false;
+    if($('settings').open&&settingsTab==='library')drawSettings();
+  }
+}

@@ -4,6 +4,12 @@ function showNativeError(error) {
   bar.textContent=String(error?.message||error); bar.hidden=false;
   if($('launch').open)$('git-hint').textContent=bar.textContent;
 }
+if(!isDemo&&nativeAFM.onLibraryLink){
+  let receivedLibraryLink=false;
+  const stop=nativeAFM.onLibraryLink(link=>{receivedLibraryLink=true;showLibraryLink(link)});
+  addEventListener('pagehide',stop);
+  nativeAFM.libraryLink().then(link=>{if(!receivedLibraryLink)showLibraryLink(link)}).catch(showNativeError);
+}
 // One snapshot from the main process carries projects, runs and notices; nothing here polls the host.
 // A snapshot that changes nothing the page shows touches nothing.
 let attentionSignature='[]';

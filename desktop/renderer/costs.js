@@ -63,14 +63,15 @@ function costsPeriodFigures(entry, hidden) {
   const run = costsPeriodData()?.runs?.[entry.key];
   const base = costsFinished() && !hidden ? { usd: 0 } : costsPrice(entry, hidden);
   const growth = costsGrowthMode();
-  const value = figure => (figure ? figure.value : null);
+  const whole = growth && !costsFinished() && run?.meta?.wholeRun ? run.windowTotals ?? run.asOf : null;
+  const value = field => whole ? (whole[field] ?? null) : run?.[field]?.observed === false ? null : run?.[field]?.value ?? null;
   const flags = Object.values(run ?? {}).filter(item => item && typeof item.value === 'number');
-  const usd = growth ? run?.usd?.value : run?.asOf?.usd ?? undefined;
+  const usd = (growth ? value('usd') : run?.asOf?.usd) ?? undefined;
   // History keeps amounts, not how complete the estimate was, so a recorded estimate is never presented as comparable.
   const price = base.usd === undefined ? base : usd !== undefined ? { ...base, usd, text: costsMoney(usd), kind: 'partial', note: 'Coverage not recorded' } : { text: '—', note: 'No history yet', kind: 'none' };
   const at = run?.asOf;
   const history = { loaded: Boolean(run), partial: growth && flags.some(f => f.partial), gaps: growth ? flags.some(f => f.gaps > 0) : Boolean(at?.gap), observedAt: at?.observedAt ?? null };
-  if (growth) return { elapsed: value(run?.elapsed), idle: value(run?.idle), work: value(run?.work), tokens: entry.tokens === null && !costsFinished() ? null : value(run?.tokens), price, history };
+  if (growth) return { elapsed: value('elapsed'), idle: value('idle'), work: value('work'), tokens: entry.tokens === null && !costsFinished() ? null : value('tokens'), price, history };
   return { elapsed: at?.elapsed ?? null, idle: at?.idle ?? null, work: at?.work ?? null, tokens: at?.tokens ?? null, price, history };
 }
 // Figures since the run started, whatever period the Costs screen shows; Home always reads these.
@@ -142,7 +143,7 @@ function costsTotals(rows) {
 // Bars for the selected metric: models and projects from the collected rows, or one bar per run.
 function costsBars(rows) {
   const metric = costsUi.metric, bars = new Map();
-  const group = costsPeriodMode() && costsUi.group === 'model' && metric !== 'time' ? 'project' : costsUi.group;
+  const group = costsUi.group === 'model' && metric === 'time' ? 'run' : costsPeriodMode() && costsUi.group === 'model' ? 'project' : costsUi.group;
   const add = (name, value) => { if (value === null || value === undefined) return; bars.set(name, (bars.get(name) ?? 0) + value); };
   let note = '';
   for (const { entry, figures } of rows) {
@@ -151,10 +152,10 @@ function costsBars(rows) {
     else if (!entry.models) note = 'Models appear once a run reports its usage.';
     else for (const model of entry.models) add(model.label, metric === 'cost' ? model.usd : model.tokens);
   }
-  if (group !== costsUi.group) note = 'Models are reported for the whole run: choose Since start and Back to now to see them.';
+  if (group !== costsUi.group && metric !== 'time') note = 'Models are reported for the whole run: choose Since start and Back to now to see them.';
   const list = [...bars].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   const sum = list.reduce((n, item) => n + item.value, 0);
-  return { list: list.map(item => ({ ...item, ratio: sum ? item.value / sum : 0 })), note };
+  return { list: list.map(item => ({ ...item, ratio: sum ? item.value / sum : 0 })), note, group };
 }
 const costsValue = (metric, value) => metric === 'cost' ? costsMoney(value) : metric === 'tokens' ? costsTokens(value) : costsDuration(value);
 
@@ -199,17 +200,24 @@ function costsRowHtml({ entry, figures }) {
   const clock = (kind, text) => `<span${live ? ` data-clock="${kind}" data-key="${esc(entry.key)}"` : ''}>${text}</span>`;
   const work = figures.work === null ? 'Stage work unknown' : `Stage work ${clock('work', costsDuration(figures.work))}`;
   const historyNote = figures.history.partial ? '<br><small class="cost-price-note partial">History starts after the period start</small>' : figures.history.gaps ? '<br><small class="cost-price-note partial">Gap in history</small>' : '';
+  const fullTokens = entry.finished && costsGrowthMode() && figures.tokens === null && !entry.recorded && entry.tokens !== null
+    ? `<br><small class="cost-price-note">${costsTokens(entry.tokens)} since start</small>` : '';
   const read = costsRewind > 0 && figures.history.observedAt ? `<br><small class="cost-price-note">Read at ${esc(costsStamp(figures.history.observedAt, true))}</small>` : '';
   const state = costsRewind > 0 && !costsFinished() ? (entry.finished ? 'Finished since' : 'Active') : costsRunLabel(entry);
   const priceCell = `${esc(price.text)}${price.note ? `<br><small class="cost-price-note ${price.kind === 'partial' ? 'partial' : ''}">${esc(price.note)}</small>` : ''}`;
   return `<tr data-cost-row="${esc(entry.key)}"><td><button type="button" class="cost-run-name" data-cost-run="${esc(entry.key)}"><strong>${esc(entry.name)}</strong><small>${esc(costsProjectName(entry))}</small></button></td>
     <td><span class="cost-state${entry.stale ? ' stale' : ''}">${esc(state)}</span>${read}</td>
     <td>${clock('elapsed', costsDuration(figures.elapsed))}<br><small class="cost-price-note">${work} · idle ${clock('idle', costsDuration(figures.idle))}</small>${historyNote}</td>
-    <td title="${figures.tokens === null && !costsFinished() ? 'Accounting is off for this run' : ''}">${costsTokens(figures.tokens)}</td>
+    <td title="${figures.tokens === null ? entry.tokens === null ? 'No usage was reported for this run' : 'No recorded token total for this period' : ''}">${costsTokens(figures.tokens)}${fullTokens}</td>
     ${costsView.hidePrices ? '' : `<td>${priceCell}</td>`}
     <td><button type="button" data-cost-run="${esc(entry.key)}" aria-label="Open cost details for ${esc(entry.name)}">↗</button></td></tr>`;
 }
 function costsFormatPoint(metric, value) { return value === null ? 'No data' : costsValue(metric, value); }
+function costsExactPoint(metric, value) {
+  if (metric === 'tokens') return `${new Intl.NumberFormat().format(value)} tokens`;
+  if (metric === 'cost' || value < 60000) return costsValue(metric, value);
+  return `${costsDuration(value)} ${Math.floor(value / 1000) % 60}s`;
+}
 function costsStamp(ms, long) {
   return new Date(ms).toLocaleString('en-GB', long ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
 }
@@ -219,7 +227,8 @@ function costsSeries(rows, metric, count) {
   const data = costsPeriodData(), key = metric === 'cost' ? 'cost' : metric;
   return Array.from({ length: count }, (_, i) => {
     const parts = rows.map(({ entry, figures }) => (metric === 'cost' && figures.price.usd === undefined ? null : data.runs[entry.key]?.buckets?.[key]?.[i] ?? null)).filter(Boolean);
-    return parts.length ? { value: parts.reduce((sum, part) => sum + part.value, 0), partial: parts.some(part => part.partial), gaps: parts.reduce((sum, part) => sum + part.gaps, 0) } : null;
+    const observed = parts.filter(part => part.observed !== false);
+    return observed.length ? { value: observed.reduce((sum, part) => sum + part.value, 0), partial: parts.some(part => part.partial), gaps: parts.reduce((sum, part) => sum + part.gaps, 0) } : null;
   });
 }
 function costsCompletionSeries(rows, metric, count, data) {
@@ -234,35 +243,92 @@ function costsCompletionSeries(rows, metric, count, data) {
   }
   return points;
 }
+const COST_TOTAL = { name: 'Total', color: 'var(--text-primary)', totalLine: true };
+function costsRecordedTotal(lines) {
+  const active = lines.filter(line => line.points.length);
+  const readings = new Map();
+  for (const line of active) for (const point of line.points) {
+    const row = readings.get(point.at) ?? { at: point.at, value: 0, count: 0, breakBefore: false };
+    row.value += point.value;
+    row.count++;
+    row.breakBefore ||= point.breakBefore;
+    readings.set(point.at, row);
+  }
+  let missing = false;
+  return [...readings.values()].sort((a, b) => a.at - b.at).flatMap(point => {
+    if (point.count < active.length) { missing = true; return []; }
+    const result = { ...point, breakBefore: point.breakBefore || missing };
+    missing = false;
+    return [result];
+  });
+}
+
+function costsPlot(lines, metric, from, to, { compact = false, controls = [] } = {}) {
+  const W = compact ? 300 : 640, H = compact ? 64 : 170;
+  const scale = Math.max(0, ...lines.flatMap(line => line.points.map(point => point.value)));
+  const unit = metric === 'cost' ? 'USD' : metric === 'tokens' ? 'Tokens' : 'Time';
+  const x = at => (0.04 + 0.92 * Math.max(0, Math.min(1, (at - from) / (to - from)))) * W;
+  const y = value => (0.90 - 0.80 * (scale ? value / scale : 0)) * H;
+  const mark = (point, label) => `data-cost-hover="${esc(label)}" data-cost-x="${x(point.at) / W}" data-cost-y="${point.value === null ? 0.5 : y(point.value) / H}"`;
+  const grid = [0.1, 0.5, 0.9].map(ratio => `<line x1="${W * 0.04}" x2="${W * 0.96}" y1="${H * ratio}" y2="${H * ratio}" stroke="var(--separator-subtle)"/>`).join('');
+  const strokes = lines.map(line => {
+    const segments = [];
+    for (const point of line.points) {
+      if (point.breakBefore || !segments.length) segments.push([]);
+      segments.at(-1).push([x(point.at).toFixed(1), y(point.value).toFixed(1)]);
+    }
+    return segments.map(segment => segment.length === 1
+      ? `<circle cx="${segment[0][0]}" cy="${segment[0][1]}" r="${compact ? 2 : 3}" fill="${line.color}"/>`
+      : `<polyline points="${segment.map(point => point.join(',')).join(' ')}" fill="none" stroke="${line.color}" stroke-width="${line.totalLine ? 2.5 : 1.7}"${line.totalLine ? ' stroke-dasharray="5 3"' : ''} vector-effect="non-scaling-stroke"/>`).join('');
+  }).join('');
+  const markers = lines.flatMap(line => line.points.map(point =>
+    `<span hidden ${mark(point, `${line.name} · ${point.label ?? costsStamp(point.at, true)} · ${costsExactPoint(metric, point.value)}`)}></span>`)).join('');
+  const buttons = controls.map(point => `<button type="button" class="cost-point" data-cost-point="${esc(point.text)}" aria-label="${esc(point.text)}" style="left:${x(point.at) * 100 / W}%;top:${point.value === null ? 50 : y(point.value) * 100 / H}%"></button>`).join('');
+  const ticks = scale ? [scale, scale / 2, 0].map(value => costsValue(metric, value)) : ['', '', lines.some(line => line.points.length) ? costsValue(metric, 0) : ''];
+  const steps = compact ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
+  return `<div class="cost-axes${compact ? ' compact' : ''}"><div class="cost-y-axis" aria-label="${unit}">${ticks.map(tick => `<span>${esc(tick)}</span>`).join('')}</div>
+    <div class="cost-plot" data-cost-plot><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${grid}${strokes}</svg>
+      ${markers}${buttons ? `<div class="cost-points" role="group" aria-label="Time intervals">${buttons}</div>` : ''}<span class="cost-tooltip" aria-hidden="true" hidden></span></div>
+    <div class="cost-x-axis" aria-label="Local time">${steps.map((step, i) => `<span>${esc(compact && i === 0 ? '−24h' : compact && i === steps.length - 1 ? 'Now' : costsStamp(from + (to - from) * step, to - from > 86400000))}</span>`).join('')}</div></div>`;
+}
+
 function costsChart(hidden, rows) {
   if (!costsGrowthMode()) return '';
   const data = costsPeriodData();
   const metric = hidden && costsUi.metric === 'cost' ? 'time' : costsUi.metric;
   const count = Object.keys(data?.runs ?? {}).length ? data.series?.buckets ?? 0 : 0;
-  let points = count ? costsSeries(rows, metric, count) : null;
-  const byCompletion = costsFinished() && metric !== 'cost' && count && points && !points.some(Boolean);
-  if (byCompletion) points = costsCompletionSeries(rows, metric, count, data);
+  if (!data || !count) return costsChartEmpty(!data ? 'Loading history…' : 'History is not available.');
+  const observed = costsSeries(rows, metric, count);
+  const selectedBuckets = rows.flatMap(({ entry, figures }) =>
+    metric === 'cost' && figures.price.usd === undefined ? [] : data.runs[entry.key]?.buckets?.[metric] ?? []);
+  const partial = selectedBuckets.some(point => point?.partial);
+  const interrupted = selectedBuckets.some(point => point?.gaps > 0);
+  const hasGrowth = observed.some(point => point?.value > 0) || (observed.some(Boolean) && !partial && !interrupted);
+  const byCompletion = costsFinished() && metric !== 'cost' && !hasGrowth;
+  const readings = !costsFinished() && !hasGrowth;
+  const source = selected => byCompletion ? costsCompletionSeries(selected, metric, count, data) : costsSeries(selected, metric, count);
+  const step = (data.to - data.from) / count;
+  const label = i => `${costsStamp(data.from + i * step, costsUi.range !== '24')} → ${costsStamp(data.from + (i + 1) * step, costsUi.range !== '24')}`;
+  const intervalPoints = values => values.flatMap((point, i) => point ? [{ ...point, at: data.from + (i + 0.5) * step, label: label(i), breakBefore: i > 0 && (!values[i - 1] || point.gaps > 0 || values[i - 1]?.gaps > 0) }] : []);
+  const lines = rows.map((row, i) => ({ name: row.entry.name, color: COSTS_COLORS[i % COSTS_COLORS.length],
+    points: readings ? data.runs[row.entry.key]?.recorded?.[metric] ?? [] : intervalPoints(source([row])) })).filter(line => line.points.length);
+  if (!lines.length) return costsChartEmpty('Desktop recorded no intervals for this metric.');
+  const points = readings ? costsRecordedTotal(lines) : intervalPoints(source(rows));
+  if (points.length) lines.push({ ...COST_TOTAL, points });
+  const controls = readings ? points.map(point => ({ ...point, text: `${costsStamp(point.at, true)}: ${costsFormatPoint(metric, point.value)}` })) : source(rows).map((point, i) => ({
+    at: data.from + (i + 0.5) * step, value: point?.value ?? null,
+    text: `${label(i)}: ${costsFormatPoint(metric, point?.value ?? null)}${point?.partial ? ' (history starts later)' : ''}${point?.gaps ? ' (gap in history)' : ''}`,
+  }));
+  const gaps = interrupted || (readings && lines.some(line => line.points.some(point => point.breakBefore)));
   const title = costsUi.range === '24' ? 'Usage, last 24 hours' : 'Usage, last 7 days';
-  if (!points || (costsFinished() && !points.some(Boolean))) return `<section class="cost-card cost-chart-card" aria-labelledby="cost-chart-title"><header class="cost-card-head"><div><h2 id="cost-chart-title">${title}</h2><p>${!data ? 'Loading history…' : costsFinished() ? 'Desktop recorded no intervals for this metric.' : 'History is not available.'}</p></div></header></section>`;
-  const step = (data.to - data.from) / points.length, W = 640, H = 170, pad = 24;
-  const high = Math.max(1e-9, ...points.map(p => p?.value ?? 0));
-  const x = i => pad + (points.length === 1 ? 0 : i * (W - 2 * pad) / (points.length - 1));
-  const y = value => H - pad - value / high * (H - 2 * pad);
-  const runs = [];
-  points.forEach((p, i) => { if (p) { if (!runs.at(-1)) runs.push([]); runs.at(-1).push(`${x(i).toFixed(1)},${y(p.value).toFixed(1)}`); } else runs.push(null); });
-  const lines = runs.filter(Boolean).map(run => {
-    if (run.length > 1) return `<polyline points="${run.join(' ')}" fill="none" stroke="var(--accent-primary)" stroke-width="2"/>`;
-    const [cx, cy] = run[0].split(',');
-    return `<circle cx="${cx}" cy="${cy}" r="3" fill="var(--accent-primary)"/>`;
-  }).join('');
-  const buttons = points.map((p, i) => {
-    const label = `${costsStamp(data.from + i * step, costsUi.range !== '24')} → ${costsStamp(data.from + (i + 1) * step, costsUi.range !== '24')}: ${costsFormatPoint(metric, p?.value ?? null)}${p?.partial ? ' (history starts later)' : ''}${p?.gaps ? ' (gap in history)' : ''}`;
-    return `<button type="button" class="cost-point" data-cost-point="${esc(label)}" aria-label="${esc(label)}" title="${esc(label)}" style="left:${(x(i) / W * 100).toFixed(2)}%;top:${p ? (y(p.value) / H * 100).toFixed(2) : 50}%"></button>`;
-  }).join('');
-  const partial = points.some(p => p?.partial), gaps = points.some(p => p?.gaps);
-  return `<section class="cost-card cost-chart-card" aria-labelledby="cost-chart-title"><header class="cost-card-head"><div><h2 id="cost-chart-title">${title}</h2><p>${metric === 'time' ? 'Elapsed time' : metric === 'tokens' ? 'Recorded tokens' : 'Known estimated cost'} ${byCompletion ? 'for runs that finished in each interval' : 'per interval'}${partial ? ' · history starts after the period start' : ''}${gaps ? ' · gaps in history' : ''}</p></div></header>
-    <div class="cost-plot"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><line x1="${pad}" x2="${W - pad}" y1="${H - pad}" y2="${H - pad}" stroke="var(--separator-subtle)"/>${lines}</svg><div class="cost-points" role="group" aria-label="Time intervals">${buttons}</div></div>
+  return `<section class="cost-card cost-chart-card" aria-labelledby="cost-chart-title"><header class="cost-card-head"><div><h2 id="cost-chart-title">${title}</h2><p>${metric === 'time' ? 'Elapsed time' : metric === 'tokens' ? 'Recorded tokens' : 'Known estimated cost'} ${byCompletion ? 'for runs that finished in each interval' : readings ? 'since start at each reading' : 'per interval'}${partial ? ' · history starts after the period start' : ''}${gaps ? ' · gaps in history' : ''}</p></div></header>
+    ${costsPlot(lines, metric, data.from, data.to, { controls })}
+    <div class="project-cost-legend">${lines.map(line => `<span><i style="background:${line.color}"></i>${esc(line.name)}</span>`).join('')}</div>
     <p id="cost-chart-readout" class="cost-muted" aria-live="polite">${esc(`${costsStamp(data.from, true)} – ${costsStamp(data.to, true)}`)}</p></section>`;
+}
+function costsChartEmpty(message) {
+  const title = costsUi.range === '24' ? 'Usage, last 24 hours' : 'Usage, last 7 days';
+  return `<section class="cost-card cost-chart-card" aria-labelledby="cost-chart-title"><header class="cost-card-head"><div><h2 id="cost-chart-title">${title}</h2><p>${esc(message)}</p></div></header></section>`;
 }
 function costsSortHead(field, text, hidden) {
   if (hidden) return '';
@@ -285,16 +351,16 @@ function renderCosts() {
     <button type="button" class="action" id="cost-asof-now"${costsRewind > 0 ? '' : ' disabled'}>Back to now</button></header>
     <input type="range" id="cost-asof" min="0" max="${COSTS_REWIND_HOURS}" step="1" value="${COSTS_REWIND_HOURS - costsRewind}" aria-label="Look back up to 7 days" aria-valuetext="${esc(asOfLine)}">
     <div class="cost-asof-days" aria-hidden="true">${Array.from({ length: 8 }, (_, i) => `<span>${i === 7 ? 'Now' : new Date(Date.now() - (7 - i) * 86400000).toLocaleDateString('en-GB', { weekday: 'short' })}</span>`).join('')}</div></section>`;
-  $('screen').innerHTML = `<div class="cost-home"><div class="cost-heading"><div><h1>Costs</h1><p>${costsGrowthMode() ? `Growth in the ${costsRewind > 0 ? `${costsUi.range === '24' ? '24 hours' : '7 days'} before the chosen moment` : `last ${costsUi.range === '24' ? '24 hours' : '7 days'}`} from Desktop's own observations.` : costsRewind > 0 ? 'Figures since each run started, as of the chosen moment.' : 'Figures are since each run started.'}</p></div>
+  $('screen').innerHTML = `<div class="cost-home"><div class="cost-heading"><div><h1>Costs</h1><p>${costsGrowthMode() ? `Growth in the ${costsRewind > 0 ? `${costsUi.range === '24' ? '24 hours' : '7 days'} before the chosen moment` : `last ${costsUi.range === '24' ? '24 hours' : '7 days'}`} using AFM counters and Desktop’s recorded history.` : costsRewind > 0 ? 'Figures since each run started, as of the chosen moment.' : 'Figures are since each run started.'}</p></div>
     <div class="cost-filters">${segment('status', 'Run status', [['active', 'Active'], ['finished', 'Finished']])}<div class="cost-segment" role="group" aria-label="Date range">${COSTS_RANGES.map(([value, text]) => `<button type="button" data-cost-range="${value}" aria-pressed="${costsUi.range === value}">${text}</button>`).join('')}</div><label class="cost-select"><span class="sr-only">Project</span><select id="cost-project">${options.map(o => `<option value="${esc(o.id)}"${o.id === costsUi.project ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
     <button type="button" class="action" id="cost-price-toggle" aria-pressed="${hidden}">${hidden ? 'Show prices' : 'Hide prices'}</button></div></div>
     ${asOfHtml}
     <dl class="cost-kpis" aria-live="polite">${hidden ? '' : costsKpi('Estimated cost', total.priced ? costsMoney(total.usd) : '—', total.priced ? ([total.partial || noPrice ? `${total.partial + noPrice} of ${rows.length} runs partial or without prices` : '', total.partialHistory ? `${total.partialHistory} runs: history starts after the period start` : ''].filter(Boolean).join(' · ') || 'List-price estimate') : 'No priced usage')}
-    ${costsKpi('Tokens', total.withTokens ? costsTokens(total.tokens) : '—', total.withTokens ? (total.withTokens < rows.length ? `${rows.length - total.withTokens} runs without accounting` : 'Recorded input, cache and output') : 'No usage recorded')}
+    ${costsKpi('Tokens', total.withTokens ? costsTokens(total.tokens) : '—', total.withTokens ? (total.withTokens < rows.length ? `${rows.length - total.withTokens} ${rows.length - total.withTokens === 1 ? 'run' : 'runs'} without token totals for this period` : 'Recorded input, cache and output') : 'No usage recorded')}
     ${costsKpi(title, String(rows.length), costsFinished() ? (costsRewind > 0 ? 'Finished by the chosen moment' : '') : costsRewind > 0 ? 'Followed at that moment' : total.stale ? `${total.stale} offline, figures paused` : 'Observed now')}
     ${costsKpi('Elapsed time', `<span${liveClocks ? ' data-clock="total-elapsed"' : ''}>${costsDuration(total.elapsedKnown ? total.elapsed : null)}</span>`, '', '', `Idle <span${liveClocks ? ' data-clock="total-idle"' : ''}>${costsDuration(total.idleKnown ? total.idle : null)}</span> · runs can overlap`)}</dl>
     ${costsChart(hidden, rows)}
-    <section class="cost-card cost-chart-card cost-breakdown" aria-labelledby="cost-breakdown-title"><header class="cost-card-head"><div><h2 id="cost-breakdown-title">Breakdown</h2><p>${costsUi.metric === 'time' ? 'Elapsed time' : costsUi.metric === 'tokens' ? 'Recorded tokens' : 'Known estimated cost'} by ${costsUi.group === 'model' && costsUi.metric !== 'time' ? 'model' : costsUi.group === 'project' ? 'project' : 'run'}</p></div>
+    <section class="cost-card cost-chart-card cost-breakdown" aria-labelledby="cost-breakdown-title"><header class="cost-card-head"><div><h2 id="cost-breakdown-title">Breakdown</h2><p>${costsUi.metric === 'time' ? 'Elapsed time' : costsUi.metric === 'tokens' ? 'Recorded tokens' : 'Known estimated cost'} by ${bars.group}</p></div>
     <div class="cost-controls">${segment('metric', 'Metric', [['cost', 'Cost'], ['tokens', 'Tokens'], ['time', 'Time']])}${segment('group', 'Grouping', [['model', 'Model'], ['project', 'Project'], ['run', 'Run']])}</div></header>
     <ol id="cost-breakdown">${bars.list.map((bar, i) => `<li class="cost-bar"><div class="cost-bar-label"><span>${esc(bar.name)}</span><strong>${esc(costsValue(costsUi.metric, bar.value))} <small class="cost-muted">· ${Math.round(bar.ratio * 100)}%</small></strong></div><div class="cost-bar-track" aria-hidden="true"><i style="--bar-width:${bar.ratio * 100}%;--bar-color:${['#8995ff', '#6dcaa5', '#efb76c', '#b58cf1', '#63b7e9', '#f185a0'][i % 6]}"></i></div></li>`).join('') || `<li class="cost-muted">${esc(bars.note || 'No recorded usage yet.')}</li>`}</ol>${bars.list.length && bars.note ? `<p class="cost-muted">${esc(bars.note)}</p>` : ''}</section>
     <section class="cost-card cost-run-card" aria-labelledby="cost-runs-title"><header class="cost-card-head"><div><h2 id="cost-runs-title">${title}</h2><p>${rows.length} ${rows.length === 1 ? 'run' : 'runs'} · ${costsGrowthMode() ? 'in the period' : 'since start'}</p></div>
@@ -422,33 +488,36 @@ function costsTileModel(p) {
   const items = costsView.runs.filter(entry => entry.projectId === p.id).map(entry => ({ entry, figures: costsLiveFigures(entry, hidden, now) }));
   if (!items.length) return null;
   const money = !hidden && items.some(({ figures }) => figures.price.usd !== undefined);
+  const from = costsHome?.from ?? 0, to = costsHome?.to ?? 86400000;
+  const metric = money ? 'cost' : 'work';
   const lines = items.map(({ entry, figures }, i) => {
     const total = money ? figures.price.usd ?? null : figures.work;
     const run = costsHome?.runs?.[entry.key];
-    // The legend and total are live; the line is history and keeps no money of a run that no longer shows its price.
-    const anchor = money && figures.price.usd === undefined ? null : run?.anchors?.[money ? 'cost' : 'work'] ?? null;
-    const growth = run?.buckets?.[money ? 'cost' : 'work'];
+    let points = [];
+    if (!money || figures.price.usd !== undefined) {
+      points = run?.recorded?.[metric] ?? [];
+      if (!run?.recorded && run?.buckets?.[metric]) {
+        const previous = costsCumulative(run.anchors?.[metric], run.buckets[metric]);
+        points = previous.flatMap((value, index) => value === null ? [] : [{ at: from + (to - from) * index / COSTS_HOME_BUCKETS, value }]);
+      }
+    }
     return { name: entry.name, color: COSTS_COLORS[i % COSTS_COLORS.length], total,
       label: money ? (figures.price.usd === undefined ? 'No price' : figures.price.text) : costsDuration(figures.work), partial: money && figures.price.kind === 'partial',
-      points: growth ? costsCumulative(anchor, growth) : new Array(COSTS_HOME_BUCKETS + 1).fill(null) };
+      recorded: Boolean(run?.recorded), points };
   });
   const known = lines.filter(line => line.total !== null);
-  return { money, project: p.id, total: known.length ? known.reduce((sum, line) => sum + line.total, 0) : null, lines };
+  return { money, project: p.id, total: known.length ? known.reduce((sum, line) => sum + line.total, 0) : null, lines, from, to };
 }
 function costsTileHtml(model) {
-  const W = 300, H = 64, pad = 4;
-  const high = Math.max(1e-9, ...model.lines.flatMap(line => line.points.filter(point => point !== null)));
-  const x = i => pad + i * (W - 2 * pad) / COSTS_HOME_BUCKETS, y = value => H - pad - value / high * (H - 2 * pad);
-  const lines = model.lines.map(line => {
-    const runs = [];
-    line.points.forEach((point, i) => { if (point === null) runs.push(null); else { if (!runs.at(-1)) runs.push([]); runs.at(-1).push(`${x(i).toFixed(1)},${y(point).toFixed(1)}`); } });
-    return runs.filter(Boolean).map(run => run.length > 1 ? `<polyline points="${run.join(' ')}" fill="none" stroke="${line.color}" stroke-width="2"/>` : `<circle cx="${run[0].split(',')[0]}" cy="${run[0].split(',')[1]}" r="2" fill="${line.color}"/>`).join('');
-  }).join('');
+  const lines = [...model.lines];
+  if (lines.some(line => line.recorded && line.points.length)) {
+    const points = costsRecordedTotal(lines);
+    if (points.length) lines.push({ ...COST_TOTAL, points });
+  }
   const total = model.total === null ? '—' : model.money ? costsMoney(model.total) : costsDuration(model.total);
   return `<div class="project-cost-top"><span>${model.money ? 'Est. cost' : 'Stage work'} · since start</span><strong>${esc(total)}</strong></div>
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>
-    <div class="project-cost-axis"><span>−24h</span><span>Now</span></div>
-    <div class="project-cost-legend">${model.lines.map(line => `<span><i style="background:${line.color}"></i>${esc(line.name)} <b>${esc(line.label)}</b>${line.partial ? ' <em>partial</em>' : ''}</span>`).join('')}</div>`;
+    ${costsPlot(lines, model.money ? 'cost' : 'time', model.from, model.to, { compact: true })}
+    <div class="project-cost-legend">${lines.map(line => `<span><i style="background:${line.color}"></i>${esc(line.name)}${line.label ? ` <b>${esc(line.label)}</b>` : ''}${line.partial ? ' <em>partial</em>' : ''}</span>`).join('')}</div>`;
 }
 // Only tiles and rows whose figures changed are touched, so focus and the scroll position of Home stay where they were.
 function paintHomeCosts() {
@@ -579,6 +648,26 @@ document.addEventListener('click', event => {
 const costsReadout = event => { const point = event.target.closest?.('[data-cost-point]'); const readout = point && $('cost-chart-readout'); if (readout) readout.textContent = point.dataset.costPoint; };
 document.addEventListener('focusin', costsReadout);
 document.addEventListener('pointerover', costsReadout);
+document.addEventListener('pointermove', event => {
+  const plot = event.target.closest?.('[data-cost-plot]');
+  if (!plot) return;
+  const { left, top, width, height } = plot.getBoundingClientRect();
+  const x = event.clientX - left, y = event.clientY - top;
+  const points = [...plot.querySelectorAll('[data-cost-hover]')].map(({ dataset }) => ({
+    text: dataset.costHover, distance: Math.hypot(x - Number(dataset.costX) * width, y - Number(dataset.costY) * height),
+  })).sort((a, b) => a.distance - b.distance);
+  if (!points.length) return;
+  const tooltip = plot.querySelector('.cost-tooltip');
+  const text = points.filter(point => point.distance - points[0].distance < 1).slice(0, 3).map(point => point.text).join('\n');
+  if (tooltip.textContent !== text) tooltip.textContent = text;
+  tooltip.hidden = false;
+  tooltip.style.left = Math.max(0, Math.min(x + 10, width - tooltip.offsetWidth)) + 'px';
+  tooltip.style.top = Math.max(0, y < tooltip.offsetHeight + 10 ? y + 10 : y - tooltip.offsetHeight - 10) + 'px';
+});
+document.addEventListener('pointerout', event => {
+  const plot = event.target.closest?.('[data-cost-plot]');
+  if (plot && !(event.relatedTarget?.nodeType && plot.contains(event.relatedTarget))) plot.querySelector('.cost-tooltip').hidden = true;
+});
 // Dragging only moves the label; the history is asked once, when the slider is released or a key step ends.
 document.addEventListener('pointerdown', event => { if (event.target.id === 'cost-asof') costsSliding = true; });
 const costsReleased = () => { if (costsSliding) { costsSliding = false; refreshCostsPeriod(true); paintCosts(); } };
