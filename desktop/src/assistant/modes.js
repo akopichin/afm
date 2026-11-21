@@ -46,6 +46,13 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
   if (reasoning !== 'default' && !provider.reasoning.includes(reasoning))
     throw new SettingsError(`${provider.name} does not support reasoning level "${reasoning}".`);
   if (model && caps.model === false) throw new SettingsError(`${provider.name} cannot select a model.`);
+  if (provider.kind === 'acp') {
+    if (isolated) throw new SettingsError('This ACP agent cannot run a tool-free report.');
+    if (settings.acpMode && !provider.agentModes?.some(item => item.id === settings.acpMode))
+      throw new SettingsError('This ACP agent does not offer the selected mode.');
+    return { effective: { permission, label: 'AFM · Ask before actions', flags: 'ACP agent permissions apply to its own tools',
+      model: model || null, reasoning } };
+  }
   const args = [];
   let flags;
   if (provider.kind === 'claude') {

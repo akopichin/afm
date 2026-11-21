@@ -221,6 +221,20 @@ test('opening Chat always shows the latest messages and saved user and assistant
   assert.equal(box.scrollTop, 1200, 'returning from Tasks also shows the latest message');
 });
 
+test('a long pause splits one streamed reply into independently timestamped bubbles', async t => {
+  const first = '2026-11-21T13:00:00.000Z', second = '2026-11-21T17:30:00.000Z';
+  const { w, get, assistant } = await openShell(t);
+  get('assistant-toggle').click();
+  assistant.emit(start('split', 'Keep me updated'));
+  assistant.emit({ type: 'delta', turnId: 'split', text: 'Started.', segments: [{ at: first, offset: 0 }] });
+  await frames(w);
+  assistant.emit({ type: 'delta', turnId: 'split', text: '\n\nFinished.', segments: [{ at: first, offset: 0 }, { at: second, offset: 8 }] });
+  await frames(w);
+  const box = get('messages');
+  assert.deepEqual([...box.querySelectorAll('.bubble:not(.mine) time')].map(el => el.dateTime), [first, second]);
+  assert.deepEqual([...box.querySelectorAll('.bubble:not(.mine) p')].map(el => el.textContent), ['Started.', 'Finished.']);
+});
+
 test('settings show detected providers, supported modes only and the effective flags, and changes go to the main process', async t => {
   const assistant = fakeAssistant();
   assistant.info.providers = [providerInfo('claude'), providerInfo('codex', { permissions: ['read'], reasoning: [], auth: { state: 'missing', via: null, detail: 'Run `codex login`.' } })];

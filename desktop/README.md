@@ -208,6 +208,22 @@ disappears from the host loses its history. Codex scheduled summaries always use
 the plain-text fallback. Quitting Desktop does not finish an in-flight summary;
 it runs again after restart. At most 50 watches are kept.
 
+### Connect an ACP agent
+
+Under **Settings → Models → Add provider**, choose **ACP agent**. Enter the
+absolute path to the agent or adapter and one argument per line. Use the
+agent's CLI login or name a credential variable from Desktop's environment.
+**Test connection** checks the ACP session and refreshes the agent's model,
+reasoning and mode choices. For Codex, use the
+[Codex ACP adapter](https://github.com/agentclientprotocol/codex-acp).
+
+Desktop passes scoped AFM tools over MCP. The agent controls its own native
+tool permissions through its agent mode. Desktop displays approval prompts the
+agent sends. ACP providers supply their own file and terminal access. Queued chat messages and the transcript are kept in Desktop.
+
+A streamed reply starts a new timestamped bubble after a pause of 30 seconds
+or longer. The bubbles keep their timestamps when the chat reopens.
+
 ## Costs
 
 Open **Costs** next to the logo, or the **Costs** link on a project tile that

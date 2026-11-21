@@ -6,6 +6,7 @@ import { performance } from 'node:perf_hooks';
 import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 import { ApprovalServer } from './approval.js';
 import { detectProvider, searchDirs } from './detect.js';
+import { runAcp } from './acp.js';
 import { runEndpoint } from './endpoint.js';
 import { assistantImages, claudeImagePrompt, endpointImagePrompt, writeCodexImages } from './images.js';
 import { buildInvocation, canResume, describeMode, PERMISSION_LABELS } from './modes.js';
@@ -22,6 +23,7 @@ const MAX_MESSAGES = 60;
 const MAX_TEXT = 8000;
 // Text deltas reach the window in batches, so a fast model does not cost one IPC message per token.
 const DELTA_FLUSH_MS = 40;
+const CHAT_PAUSE_MS = 30_000;
 const MAX_TOOLS = 20;
 const PROMPT_BUDGET = 24000;
 const DETECTION_TTL_MS = 5 * 60 * 1000;
@@ -138,7 +140,7 @@ export class Assistant {
     if (!turn.pendingDelta) return;
     const text = turn.pendingDelta;
     turn.pendingDelta = '';
-    this.#emit({ conversationId: turn.conversationId, turnId: turn.turnId, type: 'delta', text });
+    this.#emit({ conversationId: turn.conversationId, turnId: turn.turnId, type: 'delta', text, segments: turn.reply.segments });
   }
 
   async #definitions() {
@@ -213,7 +215,7 @@ export class Assistant {
   // Setup check without a model call: the executable, what it supports and whether its credential resolves.
   async testProvider(id) {
     const info = await this.#provider(id, { fresh: true });
-    return { id, found: info.found, version: info.version ?? null, permissions: info.permissions, auth: info.auth, ok: info.found && info.auth.state === 'ready' };
+    return { id, found: info.found, version: info.version ?? null, permissions: info.permissions, auth: info.auth, capabilities: info.capabilities, ok: info.found && info.auth.state === 'ready' };
   }
 
   // ---- conversations ----
@@ -410,6 +412,7 @@ export class Assistant {
         const start = resume => {
           const { args } = this.#invocation(turn, bridge, resume?.id, imageFiles);
           const context = [];
+          if (provider.kind === 'acp') context.push(this.#systemPrompt(scope, { label: turn.effective.label }, Boolean(bridge), turn));
           if (provider.kind === 'codex') {
             if (turn.repeating) context.push(this.#systemPrompt(scope, { label: PERMISSION_LABELS[settings.permission] }, Boolean(bridge), turn));
             if (bridge && turn.conversationId === 'main') context.push(WAIT_GUIDANCE);
@@ -417,7 +420,13 @@ export class Assistant {
           }
           const prompt = [...context, ...this.#transcript(resume ? resume.catchUp : prior, text), `User: ${text || 'Please look at the attached image(s).'}`].join('\n\n');
           const input = provider.kind === 'claude' && images.length ? claudeImagePrompt(prompt, images) : prompt;
-          turn.process = runProcess({ command: provider.executable, args, cwd, env, input, parser: parserFor(provider.kind), onEvent, grace: this.grace });
+          if (provider.kind === 'acp') {
+            turn.process = runAcp({ provider, settings, cwd, env: { ...env, HOME: this.home }, bridge, prompt, images, resume: resume?.id, onEvent,
+              approve: tool => this.#askUser({ turnId: turn.turnId, tool: tool.title, kind: 'acp', scope: scopeLabel(scope),
+                summary: clip(JSON.stringify(tool.rawInput ?? tool.title), 3000) }) });
+          } else {
+            turn.process = runProcess({ command: provider.executable, args, cwd, env, input, parser: parserFor(provider.kind), onEvent, grace: this.grace });
+          }
           turn.timing.readyAt ??= performance.now();
           return turn.process.done;
         };
@@ -472,6 +481,7 @@ export class Assistant {
     const { type } = provider.credential;
     if (type !== 'file' && type !== 'env') return {};
     const value = await this.#secret(provider, env);
+    if (provider.kind === 'acp') return value ? { [provider.credential.ref]: value } : {};
     return value ? { [provider.kind === 'codex' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY']: value } : {};
   }
 
@@ -499,8 +509,15 @@ export class Assistant {
       turn.textReceived = true;
       const text = redact.stream(event.text);
       turn.timing.firstTextAt ??= performance.now();
-      reply.text += text;
-      if (text) this.#queueDelta(turn, text);
+      if (text) {
+        const now = Date.now();
+        if (!turn.lastTextAt || now - turn.lastTextAt >= CHAT_PAUSE_MS) {
+          (reply.segments ??= []).push({ offset: reply.text.length, at: new Date(now).toISOString() });
+        }
+        turn.lastTextAt = now;
+        reply.text += text;
+        this.#queueDelta(turn, text);
+      }
     } else if (event.type === 'tool') {
       turn.workStarted = true;
       if (event.native) this.#trackNativeTool(turn, event.id, true);
@@ -635,8 +652,8 @@ export class Assistant {
     return outcome;
   }
 
-  #taskModel({ provider, model, reasoning, permission }, providerName) {
-    return { settings: { provider, model, reasoning, permission }, providerName };
+  #taskModel({ provider, model, reasoning, permission, acpMode }, providerName) {
+    return { settings: { provider, model, reasoning, permission, ...(acpMode ? { acpMode } : {}) }, providerName };
   }
 
   #taskScope({ kind, projectId, runId, instanceId, name }) {

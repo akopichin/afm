@@ -2,8 +2,7 @@ import path from 'node:path';
 import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 
 export const PERMISSIONS = ['ask', 'read', 'edit', 'yolo'];
-export const KINDS = ['claude', 'codex', 'openai'];
-const REASONING = ['default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const KINDS = ['claude', 'codex', 'openai', 'acp'];
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MODEL = /^[A-Za-z0-9][\w.:/@+-]{0,119}$/;
 
@@ -46,6 +45,13 @@ export function validateProvider(input) {
   }
   const executable = String(input.executable ?? '').trim();
   if (!path.isAbsolute(executable) || executable.includes('\0')) throw new SettingsError('Executable must be an absolute path.');
+  if (input.kind === 'acp') {
+    if (base.credential.type === 'file') throw new SettingsError('ACP takes a CLI login or an environment variable.');
+    const args = input.args ?? [];
+    if (!Array.isArray(args) || args.length > 32 || args.some(arg => typeof arg !== 'string' || arg.length > 4096 || arg.includes('\0')))
+      throw new SettingsError('Enter up to 32 ACP arguments, one per line.');
+    return { ...base, executable, args };
+  }
   return { ...base, executable };
 }
 
@@ -55,7 +61,8 @@ export function validateSelection(changes) {
     if (typeof value !== 'string') throw new SettingsError(`Invalid assistant setting ${key}.`);
     if (key === 'provider' && /^[a-z0-9][a-z0-9-]{0,40}$/.test(value)) out.provider = value;
     else if (key === 'model' && (value === '' || MODEL.test(value))) out.model = value;
-    else if (key === 'reasoning' && REASONING.includes(value)) out.reasoning = value;
+    else if (key === 'reasoning' && MODEL.test(value)) out.reasoning = value;
+    else if (key === 'acpMode' && (value === '' || MODEL.test(value))) out.acpMode = value;
     else if (key === 'permission' && PERMISSIONS.includes(value)) out.permission = value;
     else throw new SettingsError(`Invalid assistant setting ${key}.`);
   }
@@ -73,7 +80,7 @@ export class AssistantSettings {
       try { providers.push(validateProvider(item)); } catch { /* A hand-edited entry that no longer validates is ignored. */ }
     }
     const selection = {};
-    for (const key of ['provider', 'model', 'reasoning', 'permission'].filter(name => typeof stored[name] === 'string')) {
+    for (const key of ['provider', 'model', 'reasoning', 'permission', 'acpMode'].filter(name => typeof stored[name] === 'string')) {
       try { Object.assign(selection, validateSelection({ [key]: stored[key] })); } catch { /* Fall back to the default. */ }
     }
     return { ...DEFAULTS, ...selection, providers };
@@ -90,7 +97,13 @@ export class AssistantSettings {
   select(changes) {
     const valid = validateSelection(changes);
     // A model name belongs to one provider; switching providers drops it unless the caller names one.
-    return this.#update(current => ({ ...current, ...(valid.provider && valid.provider !== current.provider && !('model' in valid) ? { model: '', reasoning: 'default' } : {}), ...valid }));
+    return this.#update(current => {
+      const switched = valid.provider && valid.provider !== current.provider;
+      const acp = switched && current.providers.some(item => item.id === valid.provider && item.kind === 'acp');
+      const defaults = switched ? { acpMode: '', ...(acp ? { permission: 'ask' } : {}),
+        ...(!('model' in valid) ? { model: '', reasoning: 'default' } : {}) } : {};
+      return { ...current, ...defaults, ...valid };
+    });
   }
 
   addProvider(input, id) {
@@ -104,7 +117,7 @@ export class AssistantSettings {
   removeProvider(id) {
     return this.#update(current => ({
       ...current, providers: current.providers.filter(item => item.id !== id),
-      ...(current.provider === id ? { provider: DEFAULTS.provider, model: '', reasoning: 'default' } : {}),
+      ...(current.provider === id ? { provider: DEFAULTS.provider, model: '', reasoning: 'default', acpMode: '' } : {}),
     }));
   }
 }

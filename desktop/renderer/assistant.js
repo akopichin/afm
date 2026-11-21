@@ -18,7 +18,7 @@ function providerModel(p,settings){
   const unsupported=selected&&!p.permissions.includes(settings.permission);
   return {id:p.id,name:p.name,custom:!p.builtIn,kind:p.kind,found:p.found,auth:authLabel(p),authDetail:p.auth.detail,authState:p.auth.state,
     catalog:p.models||[],model:selected&&settings.model?settings.model:'CLI default',reasoning:selected?settings.reasoning:'default',
-    permission:selected?settings.permission:'ask',levels:p.reasoning,permissions:p.permissions,modes:p.modes,
+    permission:selected?settings.permission:'ask',levels:p.reasoning,permissions:p.permissions,modes:p.modes,agentModes:p.agentModes||[],acpMode:selected?settings.acpMode:'',
     problem:unsupported?'This provider cannot enforce the chosen permission mode. Pick another.':p.found===false||p.auth.state==='missing'?p.auth.detail:''};
 }
 function applyAssistantInfo(info){
@@ -54,8 +54,9 @@ function refreshQuickModel(){
 
 function providerForm(){
   return `<form id="model-form" hidden><label>Name<input name="name" required maxlength="60" placeholder="My Claude, Local model…"></label>
-    <label>Type<select name="kind"><option value="claude">Claude Code CLI</option><option value="codex">Codex CLI</option><option value="openai">OpenAI-compatible endpoint</option></select></label>
+    <label>Type<select name="kind"><option value="claude">Claude Code CLI</option><option value="codex">Codex CLI</option><option value="openai">OpenAI-compatible endpoint</option><option value="acp">ACP agent</option></select></label>
     <label id="location-label"><span>Executable path</span><input name="location" required placeholder="/opt/tools/claude"></label>
+    <label id="acp-args" hidden>Arguments (one per line)<textarea name="args" rows="3" spellcheck="false"></textarea></label>
     <label>Credential<select name="credential"><option value="cli">Existing CLI login</option><option value="env">Environment variable</option><option value="file">Key file</option></select></label>
     <label id="reference-label" hidden><span>Variable name</span><input name="reference"></label>
     <div class="actions"><button class="primary">Add provider</button></div></form>`;
@@ -68,6 +69,9 @@ function wireProviderForm(){
     form.elements.location.placeholder=kind==='openai'?'http://127.0.0.1:11434/v1':'/opt/tools/'+kind;
     const cli=form.elements.credential.querySelector('[value=cli]');cli.disabled=kind==='openai';
     if(kind==='openai'&&credential==='cli')form.elements.credential.value='env';
+    form.elements.credential.querySelector('[value=file]').disabled=kind==='acp';
+    if(kind==='acp'&&credential==='file')form.elements.credential.value='cli';
+    $('acp-args').hidden=kind!=='acp';
     $('reference-label').hidden=form.elements.credential.value==='cli';
     form.elements.reference.required=!$('reference-label').hidden;
     $('reference-label').querySelector('span').textContent=form.elements.credential.value==='env'?'Variable name':'Key file path';
@@ -79,7 +83,11 @@ function wireProviderForm(){
     modelScan='Checking '+profile().name+'…';$('settings-body').querySelector('[role=status]').textContent=modelScan;
     try{
       const result=await nativeAFM.assistant.testProvider(profile().id);
-      modelScan=!result.found?'Not found on this machine.':result.ok?`${profile().name} ${result.version||''} is installed and signed in.`.replace('  ',' '):result.auth.detail;
+      const { name, kind } = profile();
+      if(kind==='acp')applyAssistantInfo(await nativeAFM.assistant.state());
+      modelScan=!result.found?'Not found on this machine.':!result.ok?result.auth.detail:kind==='acp'
+        ?[name+' connected',result.version,result.capabilities?.image?'Images':null,result.capabilities?.resume?'Resume':null].filter(Boolean).join(' · ')
+        :`${name} ${result.version||''} is installed and signed in.`.replace('  ',' ');
     }catch(error){modelScan=error.message}
     if($('settings').open&&settingsTab==='models')drawSettings();
   };
@@ -93,6 +101,7 @@ function wireProviderForm(){
     try{
       applyAssistantInfo(await nativeAFM.assistant.addProvider({name:f.get('name').trim(),kind,
         ...(kind==='openai'?{endpoint:f.get('location').trim()}:{executable:f.get('location').trim()}),
+        ...(kind==='acp'?{args:f.get('args').split(/\r?\n/).map(value=>value.trim()).filter(Boolean)}:{}),
         credential:{type:credential,ref:credential==='cli'?undefined:f.get('reference').trim()}}));
       modelScan='Provider added. Pick it and set its model.';
     }catch(error){modelScan=error.message}
@@ -114,7 +123,9 @@ function scopeText(){
 const effectiveLine=()=>{
   const m=profile(),s=assistantInfo?.settings;
   if(!m||!s)return '';
-  return [m.name,s.model||'CLI default',s.reasoning!=='default'?s.reasoning:null,permissionLabels[s.permission],m.problem?'Needs setup':null].filter(Boolean).join(' · ');
+  const agentMode=m.agentModes?.find(mode=>mode.id===s.acpMode)?.label;
+  return [m.name,s.model||'CLI default',s.reasoning!=='default'?s.reasoning:null,agentMode,
+    m.kind==='acp'?'AFM · '+permissionLabels[s.permission]:permissionLabels[s.permission],m.problem?'Needs setup':null].filter(Boolean).join(' · ');
 };
 function providerError(raw){
   try {
@@ -134,7 +145,12 @@ function messageHTML(msg){
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
   const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='yielded'?'<small>Continued with your next message</small>':msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
   const context=[msg.context,msg.effective?.label].filter(Boolean).join(' · ');
-  return `<div class="bubble ${msg.status}">${chatMetaHTML(context,msg.at)}${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${msg.text?`<p>${esc(msg.text)}</p>`:''}${tools}${approvals}${(msg.cards||[]).map(watchCardHTML).join('')}${end}</div>`;
+  const sections=(msg.segments||[]).filter(section=>section.offset<msg.text.length);
+  const tail=sections.pop();
+  const earlier=sections.map((section,i)=>
+    `<div class="bubble">${chatMetaHTML(context,section.at)}<p>${esc(msg.text.slice(section.offset,(sections[i+1]||tail).offset).trim())}</p></div>`).join('');
+  const text=tail?msg.text.slice(tail.offset).trimStart():msg.text;
+  return earlier+`<div class="bubble ${msg.status}">${chatMetaHTML(context,tail?.at||msg.at)}${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${text?`<p>${esc(text)}</p>`:''}${tools}${approvals}${(msg.cards||[]).map(watchCardHTML).join('')}${end}</div>`;
 }
 function drawAssistant(){
   $('chat-context').textContent=scopeText();
@@ -279,7 +295,7 @@ function handleAssistantEvent(event){
     if(!messages.some(m=>m.id===event.message.id))messages.push(event.message,{...event.reply,turnId:event.turnId,approvals:[],notes:[]});
   }else{
     const reply=replyFor(event);
-    if(event.type==='delta'&&reply){reply.text+=event.text}
+    if(event.type==='delta'&&reply){reply.text+=event.text;if(event.segments)reply.segments=event.segments}
     else if(event.type==='tool'&&reply){reply.tools.push({...event.tool,status:'running'})}
     else if(event.type==='tool_result'&&reply){const tool=reply.tools.find(t=>t.id===event.id);if(tool)Object.assign(tool,{status:event.error?'error':'done',text:event.text})}
     else if(event.type==='approval'&&reply){reply.approvals.push(event)}
