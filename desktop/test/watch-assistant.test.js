@@ -644,3 +644,44 @@ test('the events boundary of a model report is stored with it and reaches the wi
   await again.load();
   assert.deepEqual(taskView(again.store.get(created.id)).reports, [report]);
 });
+
+test('an explicit repeating request requires approval and pins the creating model and scope', async t => {
+  const ctx = await providerHome(t, { FAKE_SCENARIO: 'bridge', FAKE_CALLS: JSON.stringify([{
+    name: 'desktop_task_schedule', args: { title: 'Progress', prompt: 'Read our run status', everyMinutes: 10, delivery: 'telegram' },
+  }]) });
+  const service = new WatchService({ home: ctx.home });
+  const accepted = [];
+  const { assistant, events } = makeAssistant(t, ctx, { context: await makeContext(ctx.home), watch: {
+    ...service.tools(), schedule: async (input, config) => {
+      accepted.push({ input, config });
+      return { id: 'task-1', kind: 'repeating', title: input.title, scope: config.scope, everyMs: 600000, delivery: 'telegram', results: [], unread: 0 };
+    },
+  } });
+  await assistant.configure({ provider: 'claude', model: 'haiku', permission: 'read' });
+  await assistant.send({ text: 'Send me progress every 10 minutes', scope: { projectId: 'alpha' } });
+  const approval = await eventually(() => events.find(event => event.type === 'approval'), { what: 'scheduling approval' });
+  assert.match(approval.summary, /Telegram[\s\S]*Read our run status/);
+  assert.deepEqual(accepted, []);
+  assistant.approve(approval.approvalId, true);
+  await settled(events);
+  assert.equal(accepted[0].config.settings.model, 'haiku');
+  assert.equal(accepted[0].config.scope.projectId, 'alpha');
+  assert.equal(events.find(event => event.type === 'watch_card').card.kind, 'repeating');
+});
+
+test('a background run uses its pinned provider and leaves the interactive settings and transcript alone', async t => {
+  const ctx = await providerHome(t);
+  const { assistant, events } = makeAssistant(t, ctx);
+  await assistant.configure({ provider: 'codex', model: 'other-model', permission: 'read' });
+  const reply = await assistant.runRepeating({ id: 'task-1', prompt: 'Write one update', scope: { kind: 'all' },
+    settings: { provider: 'claude', model: 'pinned-model', reasoning: 'default', permission: 'read' } });
+  assert.equal(reply, 'Hello world');
+  const [call] = await ctx.invocations();
+  assert.equal(call.kind, 'claude');
+  assert.ok(call.args.includes('pinned-model'));
+  assert.match(call.stdin, /Write one update/);
+  assert.ok(events.every(event => event.conversationId === 'task:task-1'));
+  assert.deepEqual(await assistant.history(), []);
+  assert.deepEqual(await assistant.history('task:task-1'), []);
+  assert.equal((await assistant.state()).settings.model, 'other-model');
+});

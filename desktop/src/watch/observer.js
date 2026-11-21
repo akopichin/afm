@@ -77,7 +77,7 @@ export class WatchObserver {
   }
 
   // True while any task needs the one observation loop to keep running.
-  get active() { return this.store.tasks.some(task => task.status === 'active'); }
+  get active() { return this.store.tasks.some(task => task.status === 'active' && task.kind !== 'repeating'); }
 
   // Observation was interrupted: the next connected poll is a new baseline and reports nothing.
   interrupt(task) { this.live.delete(task); }
@@ -103,7 +103,7 @@ export class WatchObserver {
     this.store.retry()?.catch(this.onError);
     this.announced = new Set();
     for (const task of this.store.tasks) {
-      if (task.status !== 'active') continue;
+      if (task.status !== 'active' || task.kind === 'repeating') continue;
       if (!isLive(snapshot)) this.interrupt(task);
       // A poll delivered at or after the deadline collects nothing; the timers then complete the task.
       else if (!this.#expired(task)) changed = this.#collect(task, snapshot) || changed;

@@ -86,6 +86,25 @@
   <small id="watch-report-time" class="watch-report-time"></small>
   <article id="watch-report-body" class="watch-report"></article>
 </dialog>
+<dialog id="repeating-task" aria-labelledby="repeating-title">
+  <form id="repeating-form">
+    <header class="pane-head"><h2 id="repeating-title">New repeating task</h2><button type="button" class="icon" data-close aria-label="Close">×</button></header>
+    <fieldset id="repeating-fields">
+      <p id="repeating-context" class="muted"></p>
+      <label>Title<input name="title" maxlength="120" required></label>
+      <label>Prompt<textarea name="prompt" rows="4" maxlength="8000" required></textarea></label>
+      <label>Repeat every (minutes)<input name="everyMinutes" type="number" min="1" max="43200" value="10" required></label>
+      <label>End time (optional)<input name="deadline" type="datetime-local"></label>
+      <label>Delivery<select name="delivery"><option value="tasks">Tasks</option><option value="telegram">Tasks and Telegram</option></select></label>
+    </fieldset>
+    <fieldset id="repeating-model" hidden disabled>
+      <label>Provider<select name="provider" required></select></label>
+      <label>Model<input name="model" placeholder="Provider default" maxlength="120"></label>
+    </fieldset>
+    <p id="repeating-error" class="muted" role="alert" hidden></p>
+    <div class="actions"><button type="button" data-close>Cancel</button><button type="submit" class="primary" id="repeating-submit">Schedule task</button></div>
+  </form>
+</dialog>
 <dialog id="run-cost" aria-labelledby="run-cost-name">
   <header class="cost-card-head"><div><div id="run-cost-project" class="cost-detail-project"></div><h2 id="run-cost-name"></h2></div>
     <button class="icon cost-close" id="close-cost" aria-label="Close run cost">×</button></header>

@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { localURL } from '../host.js';
 import { askApproval, askLocal } from './approval.js';
-import { isWatchTool, WATCH_TOOLS } from './watch-tools.js';
+import { isWatchTool, SCHEDULE_TOOL, TASK_TOOL, WATCH_TOOLS } from './watch-tools.js';
 import { filterRuns, modeDecision, scopeLabel, scopeViolation, toolKind, visibleTools } from './policy.js';
 import { PERMISSION_LABELS } from './modes.js';
 
@@ -19,15 +19,15 @@ const clip = (text, limit = 300) => (text.length > limit ? text.slice(0, limit) 
 // `local` answers the Desktop-side watch tools; without it (or with `policy.watch` off) those tools are not offered.
 export function createBridge({ host, policy, approve, local = null }) {
   const watching = Boolean(policy.watch && local);
+  const scheduling = Boolean(watching && policy.schedule);
   const server = new Server({ name: 'afm-desktop-assistant', version: '0.0.1' }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...visibleTools(await host.listTools(), policy), ...(watching ? WATCH_TOOLS : [])] }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...visibleTools(await host.listTools(), policy), ...(watching ? WATCH_TOOLS : []), ...(scheduling ? [TASK_TOOL] : [])] }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     const args = params.arguments ?? {};
     if (isWatchTool(params.name)) {
-      if (!watching) return refusal(`${params.name}: not_found: Unknown AFM tool.`);
-      // Observation only, so every permission mode allows it; Desktop checks the scope against this turn's.
+      if (!watching || (params.name === SCHEDULE_TOOL && !scheduling)) return refusal(`${params.name}: not_found: Unknown AFM tool.`);
       try {
-        const answer = await local({ op: 'watch', turnId: policy.turnId, tool: params.name, args });
+        const answer = await local({ op: 'watch', turnId: policy.turnId, tool: params.name, args }, params.name === SCHEDULE_TOOL ? 601_000 : undefined);
         return { content: [{ type: 'text', text: answer.text }] };
       } catch (error) { return refusal(`${params.name}: rejected: ${error.message}`); }
     }
@@ -69,7 +69,7 @@ async function main() {
       callTool: (name, args) => client.callTool({ name, arguments: args }),
     };
   }
-  await createBridge({ host, policy, approve: request => askApproval(policy.approvalSocket, request), local: request => askLocal(policy.approvalSocket, request) }).connect(new StdioServerTransport());
+  await createBridge({ host, policy, approve: request => askApproval(policy.approvalSocket, request), local: (request, timeout) => askLocal(policy.approvalSocket, request, timeout) }).connect(new StdioServerTransport());
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

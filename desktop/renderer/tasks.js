@@ -2,6 +2,7 @@
 // The Tasks tab: background watches Desktop keeps for the user, their results and written summaries.
 // The tasks live in the main process; this page shows the latest list it was sent and sends back the user's choices.
 const watchState={tasks:[],view:'chat',note:''};
+const repeatingHistory=new Map();
 const WATCH_STATUS={active:'Watching',paused:'Paused',stopped:'Stopped',completed:'Completed'};
 const WATCH_KIND={question:'Question',approval:'Approval needed',decision:'Decision needed',failed:'Failed',finished:'Finished'};
 
@@ -51,6 +52,7 @@ function historyRowHTML(task,row,unread){
   return `<button type="button" class="watch-event" data-watch-open="result" data-task="${esc(task.id)}" data-item="${esc(item.id)}">${bell}<span><strong>${dot}${esc(WATCH_KIND[item.kind]||item.kind)}${item.runName?' · '+esc(item.runName):''}</strong><small>${esc([item.stageName,watchTime(item.at)].filter(Boolean).join(' · '))}</small></span></button>`;
 }
 function taskCardHTML(task){
+  if(task.kind==='repeating')return repeatingCardHTML(task);
   const live=task.status==='active'||task.status==='paused';
   const buttons=live?`<button type="button" class="action" data-watch-action="${task.status==='paused'?'resume':'pause'}" data-task="${esc(task.id)}">${task.status==='paused'?'Resume':'Pause'}</button><button type="button" class="watch-stop" data-watch-action="stop" data-task="${esc(task.id)}">Stop task</button>`:'';
   // Summaries are never cut off by newer results.
@@ -63,11 +65,39 @@ function taskCardHTML(task){
     ${rows.length?rows.map((row,index)=>historyRowHTML(task,row,index<task.unread)).join(''):'<p class="watch-none">Nothing has needed attention yet.</p>'}
   </article>`;
 }
+function repeatingCardHTML(task){
+  const live=['active','paused'].includes(task.status);
+  const reports=[...task.reports].reverse();
+  const selected=Math.max(0,reports.findIndex(report=>report.id===repeatingHistory.get(task.id)));
+  const report=reports[selected];
+  const status=task.status==='active'?(task.inFlightAt?'Running':'Scheduled'):WATCH_STATUS[task.status];
+  const delivery=report?.deliveryStatus==='sent'?'Sent to Telegram':report?.deliveryStatus==='cancelled'?'Delivery cancelled':report?.deliveryStatus;
+  return `<article class="watch-card" aria-label="${esc(task.title)}">
+    <div class="watch-title">${radar}<strong>${esc(task.title)}</strong><span class="watch-state" role="status" ${task.status==='active'?'':'data-inactive'}>${esc(status)}</span>
+      ${live?`<button type="button" class="icon repeat-cancel" data-watch-action="stop" data-task="${esc(task.id)}" aria-label="Cancel repeating task" title="Cancel repeating task">×</button>`:''}</div>
+    <dl class="watch-meta"><div><dt>Scope</dt><dd>${esc(task.scope.name||watchScopeText(task))}</dd></div>
+      <div><dt>Schedule</dt><dd>Every ${esc(task.everyMs/60000)} min${task.status==='active'?' · Next '+esc(watchTime(task.nextAt)):''}</dd></div>
+      <div><dt>Model</dt><dd>${esc(task.providerName)} · ${esc(task.settings.model||'Provider default')}</dd></div>
+      <div><dt>Delivery</dt><dd>${task.delivery==='telegram'?'Telegram':'Tasks'}</dd></div>
+      ${task.deadline?`<div><dt>Ends</dt><dd>${esc(watchTime(task.deadline))}</dd></div>`:''}</dl>
+    ${live?`<div class="watch-buttons"><button type="button" class="action" data-watch-action="${task.status==='paused'?'resume':'pause'}" data-task="${esc(task.id)}">${task.status==='paused'?'Resume':'Pause'}</button>
+      <button type="button" class="action" data-edit-repeating="${esc(task.id)}">Change model</button></div>`:''}
+    ${report?`<div class="repeat-history">
+      <button type="button" class="icon" data-repeat-step="1" data-task="${esc(task.id)}" aria-label="Older result" ${selected+1>=reports.length?'disabled':''}>←</button>
+      <small>${esc(watchTime(report.at))} · ${esc(report.status)} · ${selected+1}/${reports.length}</small>
+      <button type="button" class="icon" data-repeat-step="-1" data-task="${esc(task.id)}" aria-label="Newer result" ${selected===0?'disabled':''}>→</button></div>
+      ${delivery?`<p class="watch-line">${esc(delivery)}</p>`:''}
+      <p class="repeat-preview">${esc(report.markdown)}</p>
+      <button type="button" class="action" data-watch-open="report" data-task="${esc(task.id)}" data-item="${esc(report.id)}">Open result</button>`
+      :'<p class="watch-none">No results yet.</p>'}
+  </article>`;
+}
 function drawTasks(){
   const total=watchUnreadTotal(),badge=$('tasks-unread');
   badge.hidden=!total;badge.textContent=total;
   badge.setAttribute('aria-label',total+(total===1?' unread result':' unread results'));
   paintKeepingFocus('tasks',()=>{$('tasks').innerHTML=(watchState.note?`<p class="watch-note" role="status">${esc(watchState.note)}</p>`:'')
+    +(!isDemo?'<button type="button" class="action repeat-new" data-new-repeating>New repeating task</button>':'')
     +(watchState.tasks.length?[...watchState.tasks].reverse().map(taskCardHTML).join(''):'<div class="chat-empty"><span>◎</span><h3>No watches yet</h3><p>Ask the assistant to watch your runs and report back.</p></div>');});
   queueChatDraw();
 }
@@ -75,8 +105,9 @@ function drawTasks(){
 function watchCardHTML(card){
   const task=watchState.tasks.find(item=>item.id===card.taskId);
   const report=task?.reports.at(-1);
-  return `<div class="watch-card compact" role="group" aria-label="Watch task">
-    <div class="watch-title">${radar}<strong>${esc(card.title)}</strong>${task?`<span class="watch-state" ${task.status==='active'?'':'data-inactive'}><i class="dot"></i>${esc(WATCH_STATUS[task.status]||task.status)}</span>`:''}</div>
+  const status=task?.kind==='repeating'&&task.status==='active'?'Scheduled':WATCH_STATUS[task?.status]||task?.status;
+  return `<div class="watch-card compact" role="group" aria-label="${card.kind==='repeating'?'Repeating task':'Watch task'}">
+    <div class="watch-title">${radar}<strong>${esc(card.title)}</strong>${task?`<span class="watch-state" ${task.status==='active'?'':'data-inactive'}><i class="dot"></i>${esc(status)}</span>`:''}</div>
     <p class="watch-line">${esc([card.scope,card.deadline?'until '+watchTime(card.deadline):null].filter(Boolean).join(' · '))}</p>
     <div class="watch-buttons"><button type="button" class="action" data-watch-card="tasks" data-task="${esc(card.taskId)}">Open in Tasks</button>${report?`<button type="button" class="action" data-watch-card="summary" data-task="${esc(card.taskId)}" data-item="${esc(report.id)}">Open summary</button>`:''}</div>
   </div>`;
@@ -125,7 +156,55 @@ function acceptTasks(tasks){
   else{const badge=$('tasks-unread'),total=watchUnreadTotal();badge.hidden=!total;badge.textContent=total;badge.setAttribute('aria-label',total+(total===1?' unread result':' unread results'));queueChatDraw()}
 }
 $('assistant-tabs').addEventListener('click',e=>{const button=e.target.closest('[data-assistant-view]');if(button)setAssistantView(button.dataset.assistantView)});
+$('repeating-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form=event.currentTarget, button=$('repeating-submit'), error=$('repeating-error');
+  const fields=new FormData(form);
+  button.disabled=true;
+  error.hidden=true;
+  try {
+    if(form.dataset.task) await nativeAFM.watch.setModel(form.dataset.task,{provider:fields.get('provider'),model:fields.get('model')});
+    else await nativeAFM.watch.schedule({title:fields.get('title'),prompt:fields.get('prompt'),everyMinutes:Number(fields.get('everyMinutes')),
+      delivery:fields.get('delivery'),deadline:fields.get('deadline')?new Date(fields.get('deadline')).toISOString():null,scope:repeatingScope});
+    $('repeating-task').close();
+  }catch(problem){error.textContent=ipcMessage(problem);error.hidden=false}
+  finally{button.disabled=false}
+});
+let repeatingScope;
+function openRepeating(task){
+  const form=$('repeating-form');
+  form.reset();
+  form.dataset.task=task?.id||'';
+  $('repeating-fields').hidden=$('repeating-fields').disabled=Boolean(task);
+  $('repeating-model').hidden=$('repeating-model').disabled=!task;
+  $('repeating-title').textContent=task?'Change task model':'New repeating task';
+  $('repeating-submit').textContent=task?'Save model':'Schedule task';
+  if(task){
+    form.elements.provider.innerHTML=state.models.map(model=>`<option value="${esc(model.id)}">${esc(model.name)}</option>`).join('');
+    form.elements.provider.value=task.settings.provider;
+    form.elements.model.value=task.settings.model;
+    form.elements.provider.onchange=()=>{form.elements.model.value=''};
+  }else{
+    repeatingScope=currentScope();
+    $('repeating-context').textContent=scopeText()+' · '+(profile()?.name||'Selected provider')+' · '+(profile()?.model||'Provider default');
+  }
+  $('repeating-error').hidden=true;
+  $('repeating-task').showModal();
+}
 $('tasks').addEventListener('click',e=>{
+  if(e.target.closest('[data-new-repeating]')){openRepeating();return}
+  const edit=e.target.closest('[data-edit-repeating]');
+  if(edit){const task=watchState.tasks.find(item=>item.id===edit.dataset.editRepeating);if(task)openRepeating(task);return}
+  const step=e.target.closest('[data-repeat-step]');
+  if(step){
+    const task=watchState.tasks.find(item=>item.id===step.dataset.task);
+    if(!task)return;
+    const reports=[...task.reports].reverse();
+    const at=Math.max(0,reports.findIndex(report=>report.id===repeatingHistory.get(task.id)));
+    const index=at+Number(step.dataset.repeatStep);
+    if(reports[index]){repeatingHistory.set(task.id,index===0?null:reports[index].id);drawTasks()}
+    return;
+  }
   const action=e.target.closest('[data-watch-action]');
   if(action){changeTask(action.dataset.watchAction,action.dataset.task);return}
   const open=e.target.closest('[data-watch-open]'),task=open&&watchState.tasks.find(item=>item.id===open.dataset.task);

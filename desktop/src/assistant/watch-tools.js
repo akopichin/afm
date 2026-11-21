@@ -1,10 +1,22 @@
 import { EVENT_KINDS } from '../watch/observer.js';
 
-const NAMES = ['desktop_watch_create', 'desktop_watch_list', 'desktop_watch_pause', 'desktop_watch_resume', 'desktop_watch_stop'];
+export const SCHEDULE_TOOL = 'desktop_task_schedule';
+const NAMES = ['desktop_watch_create', 'desktop_watch_list', 'desktop_watch_pause', 'desktop_watch_resume', 'desktop_watch_stop', SCHEDULE_TOOL];
 export const isWatchTool = name => NAMES.includes(name);
 
 const taskId = { type: 'object', properties: { id: { type: 'string', description: 'Watch task id from desktop_watch_list.' } }, required: ['id'] };
 const readOnly = { readOnlyHint: true };
+const scopeInput = { type: 'object', description: 'Defaults to the conversation scope. Select a narrower project or exact run when requested.',
+  properties: { all: { type: 'boolean' }, projectId: { type: 'string' }, runId: { type: 'string' }, instanceId: { type: 'string' } } };
+export const TASK_TOOL = {
+  name: SCHEDULE_TOOL, annotations: { readOnlyHint: false, destructiveHint: false },
+  description: 'Create one repeating Assistant task for an explicit user request. It runs the supplied prompt on a fixed interval using this reply’s model, with optional Telegram delivery. Desktop asks the user to approve the schedule.',
+  inputSchema: { type: 'object', required: ['prompt', 'everyMinutes'], properties: {
+    title: { type: 'string' }, prompt: { type: 'string', description: 'The work to do each time, as specified by the user. Keep the user’s details and omit scheduling and delivery instructions.' },
+    everyMinutes: { type: 'integer', minimum: 1, maximum: 43200 }, delivery: { type: 'string', enum: ['tasks','telegram'] },
+    deadline: { type: 'string', description: 'Optional end time as ISO 8601 with a timezone.' }, scope: scopeInput,
+  } },
+};
 
 // Background watch tools the provider sees next to the AFM tools. They only observe: nothing here starts, stops or changes a run.
 export const WATCH_TOOLS = [
@@ -31,7 +43,8 @@ const inside = (inner, outer, belongsTo) => {
 };
 
 const brief = task => ({ id: task.id, title: task.title, status: task.status, scope: task.scope, events: task.events,
-  deadline: task.deadline, summaryAt: task.summaryAt, results: task.results.length, unread: task.unread });
+  deadline: task.deadline, summaryAt: task.summaryAt, results: task.results.length, unread: task.unread,
+  ...(task.kind === 'repeating' ? { kind: task.kind, everyMinutes: task.everyMs / 60000, nextAt: task.nextAt, delivery: task.delivery } : {}) });
 
 // Whether a stored watch lies inside the conversation's scope: all sees everything, a project its own project and runs,
 // a run only itself. A run watch is placed in its project through `resolveScope`.
@@ -48,7 +61,7 @@ async function visibleTo(turnScope, task, { resolveScope, belongsTo }) {
 // Runs one watch tool for a turn. `resolveScope` turns a requested scope into a known project or run (or throws), and
 // `belongsTo` says whether a project folder holds a run's folder. Everything is checked against the turn's own scope,
 // and `authorized` is asked again right before a change, so a reply stopped meanwhile changes nothing.
-export async function runWatchTool({ watch, tool, args, turnScope, resolveScope, belongsTo, scopeName, authorized }) {
+export async function runWatchTool({ watch, tool, args, turnScope, resolveScope, belongsTo, scopeName, authorized, schedule }) {
   const helpers = { resolveScope, belongsTo };
   const stopped = () => Error('This reply was stopped, so nothing was changed.');
   if (tool === 'desktop_watch_list') {
@@ -56,7 +69,7 @@ export async function runWatchTool({ watch, tool, args, turnScope, resolveScope,
     for (const task of await watch.list()) if (await visibleTo(turnScope, task, helpers)) tasks.push(task);
     return { text: JSON.stringify({ tasks: tasks.map(brief) }) };
   }
-  if (tool !== 'desktop_watch_create') {
+  if (tool !== 'desktop_watch_create' && tool !== SCHEDULE_TOOL) {
     // A watch outside this conversation is reported as unknown, so its existence is not revealed.
     const found = (await watch.list()).find(task => task.id === String(args.id ?? ''));
     if (!found || !await visibleTo(turnScope, found, helpers)) throw Error('That watch task no longer exists.');
@@ -69,6 +82,12 @@ export async function runWatchTool({ watch, tool, args, turnScope, resolveScope,
     : wanted.all === true ? { kind: 'all' } : turnScope;
   if (!inside(resolved, turnScope, belongsTo)) throw Error(`That watch is outside this conversation's scope (${scopeName(turnScope)}).`);
   if (!authorized()) throw stopped();
+  if (tool === SCHEDULE_TOOL) {
+    if (!schedule) throw Error('Repeating tasks are unavailable in this conversation.');
+    const task = await schedule(args, resolved, authorized);
+    return { text: JSON.stringify({ task: brief(task) }), card: { taskId: task.id, title: task.title, kind: task.kind,
+      scope: scopeName(resolved), deadline: task.deadline } };
+  }
   const task = await watch.create({ title: args.title, events: args.events, deadline: args.deadline, summaryAt: args.summaryAt,
     scope: { kind: resolved.kind, projectId: resolved.projectId, runId: resolved.runId, instanceId: resolved.instanceId } });
   return { text: JSON.stringify({ task: brief(task) }), card: { taskId: task.id, title: task.title, scope: resolved.kind === 'all' ? 'All projects' : resolved.name,

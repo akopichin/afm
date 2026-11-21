@@ -78,6 +78,8 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   },
   watch:{
     list:()=>ipcRenderer.invoke('watch:list'),
+    schedule:input=>ipcRenderer.invoke('watch:schedule',input),
+    setModel:(id,input)=>ipcRenderer.invoke('watch:set-model',id,input),
     pause:id=>ipcRenderer.invoke('watch:pause',id),
     resume:id=>ipcRenderer.invoke('watch:resume',id),
     stop:id=>ipcRenderer.invoke('watch:stop',id),

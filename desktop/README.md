@@ -125,6 +125,29 @@ to 5 MiB. The selected CLI or endpoint model must support image input.
 Desktop sends the images with the message and records the attachment count in
 its chat history.
 
+## Repeating Assistant tasks
+
+Ask the Assistant to run a prompt on a schedule, such as “Every ten minutes,
+send me the progress of this project in Telegram.” Approve the schedule in
+Chat, or use **Tasks → New repeating task**. A task keeps its scope, provider,
+model and permission mode. **Change model** affects future runs of that task.
+Selecting Provider default uses the provider's default model at each run.
+Each run gets a separate conversation and uses the tools its provider and
+permission mode allow. Actions that require a fresh interactive tool approval
+are declined during a background run.
+
+Tasks shows the next run, a preview of its latest result, and arrows for the
+previous 20 results. Pause or resume a schedule, or click × to cancel future
+runs and keep its results. The first run is one interval after creation.
+Busy or offline intervals are skipped. Desktop saves the schedule in
+`~/.afm/desktop/watch-tasks.json` and resumes at its next interval after restart.
+
+For Telegram, configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in Desktop
+Environment, or use `~/.afm/secrets/telegram-bot-token` and
+`~/.afm/secrets/telegram-chat-id`. Start a chat with the bot before trying to
+send. Tasks saves each result and displays the delivery status. The approved
+chat remains bound to the task.
+
 ## Background watch tasks
 
 Ask the assistant to watch work in the background, for example "tell me when

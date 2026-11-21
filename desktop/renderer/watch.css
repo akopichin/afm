@@ -63,3 +63,12 @@
 .watch-report .diagram-note { margin: 10px 0 0; color: var(--text-muted); font-size: 12px }
 .watch-report p { margin: 6px 0 }
 .watch-nav[hidden] { display: none }
+.repeat-new {margin-bottom:10px}
+.repeat-cancel {width:24px;height:24px;flex:none}
+.repeat-history {display:flex;align-items:center;justify-content:space-between;gap:5px;margin-top:10px;color:var(--text-muted)}
+.repeat-history .icon {width:24px;height:24px}
+.repeat-history :disabled {opacity:.4}
+.repeat-preview {max-height:9em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:8px 0}
+#repeating-task fieldset {margin:0;padding:0;border:0;min-width:0}
+#repeating-task {max-height:90vh;overflow:auto}
+#repeating-task textarea {width:100%;resize:vertical;padding:8px;background:var(--surface-tool);border:1px solid var(--control-border);border-radius:6px;font:inherit}

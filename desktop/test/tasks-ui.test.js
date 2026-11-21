@@ -413,3 +413,22 @@ test('a model report written, saved and loaded again opens with its events click
   assert.equal(shell.get('watch-report').open, false);
   assert.match(shell.w.location.hash, /i-ra/);
 });
+
+test('a repeating Tasks card opens the latest result, browses history, and cancels future runs', async t => {
+  const newer = { id: 'new', at: '2026-06-01T08:20:00Z', title: 'Progress', markdown: 'Latest result', status: 'completed', deliveryStatus: 'sent' };
+  const older = { id: 'old', at: '2026-06-01T08:10:00Z', title: 'Progress', markdown: 'Previous result', status: 'completed' };
+  const shell = await openShell(t, [watchTask('repeat', { kind: 'repeating', title: 'Progress', everyMs: 600000, delivery: 'telegram',
+    providerName: 'Claude Code', settings: { provider: 'claude', model: 'haiku' }, nextAt: '2026-06-01T08:30:00Z', reports: [older, newer] })]);
+  const tasks = await openTasks(shell);
+  assert.match(tasks.textContent, /Every 10 min[\s\S]*Sent to Telegram[\s\S]*Latest result/);
+  tasks.querySelector('[aria-label="Older result"]').click();
+  assert.equal(tasks.querySelector('.repeat-preview').textContent, 'Previous result');
+  tasks.querySelector('[aria-label="Newer result"]').click();
+  tasks.querySelector('[data-watch-open="report"]').click();
+  assert.match(shell.get('watch-report-body').textContent, /Latest result/);
+  shell.get('watch-report').close();
+  tasks.querySelector('[aria-label="Cancel repeating task"]').click();
+  await tick();
+  assert.deepEqual(shell.watch.calls.stop, ['repeat']);
+  assert.match(tasks.textContent, /Stopped[\s\S]*Latest result/);
+});

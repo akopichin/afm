@@ -18,6 +18,8 @@ import { WatchService } from './watch/index.js';
 import { SummaryRunner } from './watch/summary.js';
 import { registerWatchIpc } from './watch/ipc.js';
 import { createWatchBanners } from './watch/banners.js';
+import { RepeatingTasks } from './watch/repeating.js';
+import { sendTelegram, telegramSettings } from './watch/telegram.js';
 import { DashboardOrigins, allowRequest } from './protocol.js';
 import { Assistant } from './assistant/assistant.js';
 import { loginShellPath } from './assistant/detect.js';
@@ -77,9 +79,9 @@ const costs = new Costs({ history: new CostsHistory(desktop.home) });
 // Background watch tasks keep the one hidden-window poll running while any of them is active.
 let publishWatch;
 const watchBanners = createWatchBanners({ show: banner => showBanner(banner), visible: result => Boolean(window?.isFocused() && shownRun === result.runKey) });
-const watchTasks = new WatchService({ home, onActiveChange: () => workspace.wake(), onChange: () => publishWatch?.(), onResult: (task, result) => watchBanners.result(task, result), onSummaryDue: task => summaries.run(task).catch(error => console.error('Watch report:', error)), onError: error => console.error('Watch tasks were not saved:', error) });
+const watchTasks = new WatchService({ home, onActiveChange: () => { workspace.wake(); repeatingTasks.wake(); }, onChange: () => publishWatch?.(), onResult: (task, result) => watchBanners.result(task, result), onSummaryDue: task => summaries.run(task).catch(error => console.error('Watch report:', error)), onError: error => console.error('Watch tasks were not saved:', error) });
 const workspace = new Workspace({ desktop, stageBrowsers, costs, watchHidden: () => notifier.enabled || watchTasks.active, watchActive: () => watchTasks.active });
-watchTasks.load().then(() => workspace.wake()).catch(error => console.error('Watch tasks:', error));
+watchTasks.load().then(async () => { workspace.wake(); await repeatingTasks.load(); }).catch(error => console.error('Watch tasks:', error));
 desktop.prefs.get().then(prefs => costs.setHidePrices(prefs.hidePrices)).catch(() => {});
 const loadNotificationSettings = () => desktop.prefs.get().then(prefs => notifier.setSettings(prefs.notifications, workspace.snapshot?.attention));
 // A stage browser appearing or going away changes the Live tabs at once, not at the next poll.
@@ -87,7 +89,7 @@ stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
 // A Finder-launched app lacks the login shell's PATH; it is read once, when the assistant first needs it.
 let loginPath;
 const assistant = new Assistant({
-  home, env: environment, watch: watchTasks.tools(), loginPath: () => (loginPath ??= loginShellPath(process.env)),
+  home, env: environment, watch: { ...watchTasks.tools(), schedule: createRepeatingTask }, loginPath: () => (loginPath ??= loginShellPath(process.env)),
   context: {
     endpoint: async () => { await desktop.host.connect(); return desktop.host.state.endpoint; },
     runs: () => desktop.host.runs(),
@@ -98,6 +100,21 @@ const assistant = new Assistant({
 
 // The scheduled report asks the assistant for a read-only reply and falls back to the plain collected facts.
 const summaries = new SummaryRunner({ watch: watchTasks, ask: (id, prompt) => assistant.summarize(id, prompt), onReport: (task, report) => watchBanners.report(task, report) });
+const repeatingTasks = new RepeatingTasks({ store: watchTasks.store, execute: task => assistant.runRepeating(task),
+  deliver: async (task, text) => {
+    const config = await telegramSettings(home, await environment());
+    if (config.chatId !== task.chatId) throw Error('The configured Telegram chat changed. Create a task for the new chat.');
+    await sendTelegram(config, text);
+  },
+  onError: error => console.error('Repeating task:', error),
+});
+async function createRepeatingTask(input, config) {
+  if (input.delivery === 'telegram') {
+    const { chatId } = await telegramSettings(home, await environment());
+    config = { ...config, chatId };
+  }
+  return repeatingTasks.create(input, config);
+}
 
 function handle(name, handler) {
   ipcMain.handle(name, (event, ...args) => {
@@ -267,6 +284,14 @@ handle('runs:report', (id, instanceId) => desktop.runs.report(id, instanceId));
 handle('runs:attach', endpoint => desktop.runs.attach(endpoint));
 registerAssistantIpc(handle, assistant, event => window?.webContents.send('assistant:event', event));
 publishWatch = registerWatchIpc(handle, watchTasks, tasks => window?.webContents.send('watch:changed', tasks));
+handle('watch:schedule', async input => {
+  const { title, prompt, everyMinutes, deadline, delivery } = input;
+  await createRepeatingTask({ title, prompt, everyMinutes, deadline, delivery }, await assistant.prepareRepeating(input.scope ?? {}));
+});
+handle('watch:set-model', async (id, input) => {
+  const { settings, providerName } = await assistant.prepareRepeating(null, { provider: input.provider, model: input.model, reasoning: 'default' });
+  await repeatingTasks.setModel(String(id), settings, providerName);
+});
 let sampleView;
 handle('live:focus', async stage => {
   if(!demo){ if(typeof stage==='string') stageBrowsers.focus(stage); return; }
@@ -467,9 +492,9 @@ let quitting=false;
 app.on('before-quit',event=>{
   if(quitting)return;
   event.preventDefault();quitting=true;
-  stopEnvironmentImports();const summariesClosed=summaries.close();stageBrowsers.close();workspace.close();costs.close();
+  stopEnvironmentImports();const repeatingClosed=repeatingTasks.close();const summariesClosed=summaries.close();stageBrowsers.close();workspace.close();costs.close();
   // Cancelling the Assistant ends a running report; watch tasks are saved only after that report stored its last change.
-  const watchSaved=Promise.allSettled([assistant.close(),summariesClosed]).then(()=>watchTasks.flush()).catch(error=>console.error('Watch tasks were not saved on Quit:',error));
+  const watchSaved=Promise.allSettled([assistant.close(),summariesClosed,repeatingClosed]).then(()=>watchTasks.flush()).catch(error=>console.error('Watch tasks were not saved on Quit:',error));
   const settled=Promise.allSettled([watchSaved,desktop.close()]);
   Promise.race([settled,new Promise(resolve=>setTimeout(resolve,6000))]).finally(()=>app.quit());
 });

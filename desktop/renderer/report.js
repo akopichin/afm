@@ -68,7 +68,7 @@ function restoreReportFocus(){
 function openReport(task,report){
   const dialog=reportDialog();
   reportOpener=rememberControl(document.activeElement instanceof HTMLElement?document.activeElement:null);
-  $('watch-report-scope').textContent='Watch · '+watchScopeText(task);
+  $('watch-report-scope').textContent=(task.kind==='repeating'?'Repeating task · ':'Watch · ')+(task.scope.name||watchScopeText(task));
   $('watch-report-title').textContent=report.title||task.title;
   $('watch-report-time').textContent=new Date(report.at).toLocaleString();
   $('watch-report-body').replaceChildren(...renderReport(report));

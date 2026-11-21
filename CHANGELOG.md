@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Add repeating Assistant tasks with model selection, result history, and Telegram delivery to AFM Desktop.
 - Show message times and run tab status dots in AFM Desktop.
 - Queue follow-ups and paste image attachments in the AFM Desktop Assistant.
 - Show a report in finished AFM Desktop run tabs. The host report accepts an instance ID to select the exact run.
@@ -16,6 +17,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Fix:
 
+- Preserve interrupted Desktop watch summaries, link their events to the exact run, and avoid late banners for already-open questions.
 - Open AFM Desktop chat at the newest message and keep tab shortcuts working across finished runs.
 
 ## 2026-11-20

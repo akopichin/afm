@@ -33,7 +33,7 @@ export function normalizeTask(request, now) {
 
 // What the window may see of a task: everything but the observer's private cursor.
 export function taskView(task) {
-  const { cursor, ...visible } = structuredClone(task);
+  const { cursor, chatId, ...visible } = structuredClone(task);
   return visible;
 }
 
@@ -76,7 +76,10 @@ export class WatchService {
   pause(id) { return this.#move(id, 'active', 'paused'); }
   resume(id) {
     const task = this.#need(id);
-    if (task.status === 'paused') this.observer.interrupt(task);
+    if (task.status === 'paused' && task.kind === 'repeating') {
+      const now = this.now(), next = Date.parse(task.nextAt);
+      if (next <= now) task.nextAt = new Date(next + (Math.floor((now - next) / task.everyMs) + 1) * task.everyMs).toISOString();
+    } else if (task.status === 'paused') this.observer.interrupt(task);
     return this.#move(id, 'paused', 'active');
   }
   stop(id) {

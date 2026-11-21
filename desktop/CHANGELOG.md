@@ -2,13 +2,9 @@
 
 ## 2026-11-21
 
-### Fix:
-
-- Avoid late banners for questions already open when observation starts.
-- Preserve interrupted watch summaries and link their events to the exact run.
-
 ### Improvement:
 
+- Schedule repeating Assistant prompts with a per-task model, result history, and optional Telegram delivery.
 - Show local timestamps in Assistant chat and status dots on run tabs.
 - Queue Assistant messages during a reply and paste images into the composer.
 - Show an outcome and run report in finished run tabs after the dashboard closes.
@@ -21,6 +17,8 @@
 
 ### Fix:
 
+- Avoid late banners for questions already open when observation starts.
+- Preserve interrupted watch summaries and link their events to the exact run.
 - Open Assistant chat at the latest message and keep numbered run shortcuts working after entering a finished tab.
 
 ## 2026-11-20

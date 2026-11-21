@@ -122,7 +122,7 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 .bubble.streaming:last-child p::after {content:'▍';color:var(--accent-primary);margin-left:1px}
 .bubble .tool {margin:8px 0 0;padding:6px 8px;border:1px solid var(--separator-subtle);border-radius:6px;background:var(--surface-tool);font-size:12px;overflow-wrap:anywhere}
 .bubble .tool.error {border-color:var(--attention)}.bubble .tool small {color:var(--text-muted)}.tool-error,.bubble-error {color:var(--attention);margin-top:6px}
-.bubble .approval {margin:8px 0 0;padding:8px;border:1px solid var(--attention);border-radius:6px;background:var(--surface-tool)}.approval code {display:block;margin:6px 0;font-size:11px;overflow-wrap:anywhere;color:var(--text-muted)}.approval .actions {display:flex;gap:8px;justify-content:flex-end}
+.bubble .approval {margin:8px 0 0;padding:8px;border:1px solid var(--attention);border-radius:6px;background:var(--surface-tool)}.approval code {display:block;margin:6px 0;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text-muted)}.approval .actions {display:flex;gap:8px;justify-content:flex-end}
 
 .project-tile {position:relative;min-width:0}.project-tile .tile {width:100%;height:100%}
 .project-tile .forget-project {position:absolute;right:8px;top:8px;background:var(--surface-raised);opacity:0}.project-tile:hover .forget-project,.project-tile:focus-within .forget-project {opacity:1}
