@@ -253,27 +253,29 @@ export class Costs {
     if (!this.history || !(to > from)) return { available: false, runs: {}, series: null };
     await this.history.load();
     const show = !this.hidePrices;
-    // A finished run has no live price rule: what is stored was stored while its price was visible.
-    const priced = subject => show && (!subject.entry || subject.entry.price === 'visible');
     const fields = { elapsed: 'elapsedMs', idle: 'idleMs', work: 'workMs', tokens: 'tokens', usd: 'usd' };
-    const read = (subject, field, start, end) => (field === 'usd' && !priced(subject) ? null : this.history.delta(subject.key, fields[field], start, end));
-    const runs = {};
+    const period = [[from, to]];
     const step = (to - from) / Math.max(1, buckets);
     const slices = Array.from({ length: buckets }, (_, i) => [from + i * step, from + (i + 1) * step]);
+    const ranges = [...period, ...slices];
+    const runs = {};
     for (const subject of this.#subjects(to)) {
-      const run = runs[subject.key] = Object.fromEntries(Object.keys(fields).map(name => [name, read(subject, name, from, to)]));
+      // A finished run has no live price rule: what is stored was stored while its price was visible.
+      const priced = show && (!subject.entry || subject.entry.price === 'visible');
+      const readings = Object.fromEntries(Object.entries(fields).map(([name, field]) => [name,
+        name === 'usd' && !priced ? ranges.map(() => null) : this.history.deltas(subject.key, field, name === 'idle' ? period : ranges)]));
+      const run = runs[subject.key] = Object.fromEntries(Object.entries(readings).map(([name, [total]]) => [name, total]));
       run.meta = { name: subject.name, projectId: subject.projectId, startedAt: subject.startedAt, finished: subject.finished };
       // Since-start figures at `to` and when they were really read: the slider position is not an observation time.
       run.asOf = { elapsed: this.history.valueAt(subject.key, 'elapsedMs', to), idle: this.history.valueAt(subject.key, 'idleMs', to),
         work: this.history.valueAt(subject.key, 'workMs', to), tokens: this.history.valueAt(subject.key, 'tokens', to),
-        usd: priced(subject) ? this.history.valueAt(subject.key, 'usd', to) : null, ...this.history.observation(subject.key, to) };
+        usd: priced ? this.history.valueAt(subject.key, 'usd', to) : null, ...this.history.observation(subject.key, to) };
       if (!buckets) continue;
       // The values the slices lead up to come from the same snapshots: a reading newer than the history (one not
       // stored yet, or a clock still running) would move every earlier point of a cumulative line.
       run.anchors = { cost: run.asOf.usd, work: run.asOf.work };
-      run.buckets = { cost: show ? slices.map(([a, b]) => read(subject, 'usd', a, b)) : null,
-        tokens: slices.map(([a, b]) => read(subject, 'tokens', a, b)), time: slices.map(([a, b]) => read(subject, 'elapsed', a, b)),
-        work: slices.map(([a, b]) => read(subject, 'work', a, b)) };
+      run.buckets = { cost: show ? readings.usd.slice(1) : null, tokens: readings.tokens.slice(1),
+        time: readings.elapsed.slice(1), work: readings.work.slice(1) };
     }
     const series = buckets ? { from, to, buckets } : null;
     return { available: true, from, to, runs, series };

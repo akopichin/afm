@@ -180,25 +180,40 @@ export class CostsHistory {
   // `from` and the run did not start inside the period, or older snapshots were dropped; `gaps` counts the stretches
   // inside the period in which this field was not followed (see missedStretches), whose change is not counted.
   delta(key, field, from, to) {
-    const run = this.#runs.get(key);
-    const samples = run?.samples.filter(sample => sample.t <= to) ?? [];
-    const readings = samples.filter(sample => sample[field] != null);
-    if (!readings.length) return null;
-    const base = readings.findLast(sample => sample.t <= from);
-    let value = 0;
-    let previous = base;
-    let unobserved = false;
-    for (const sample of samples.filter(item => !base || item.t > base.t)) {
-      if (sample.gapFrom !== undefined) unobserved = true;
-      if (sample[field] == null) { unobserved = true; continue; }
-      if (previous && !unobserved && !sample.breaks?.includes(field)) value += sample[field] - previous[field];
-      previous = sample;
-      unobserved = false;
-    }
-    const gaps = missedStretches(run, field).filter(([start, end]) => start < to && end > from).length;
-    const covered = run.startedAt >= from && !run.truncated;
-    return { value, partial: !base && !covered, gaps, from: (base ?? readings[0]).t };
+    return this.deltas(key, field, [[from, to]])[0];
   }
+
+  deltas(key, field, ranges) {
+    const run = this.#runs.get(key);
+    if (!run) return ranges.map(() => null);
+    // Every chart slice uses the same gaps, including stretches ending after that slice.
+    const stretches = missedStretches(run, field);
+    return ranges.map(([from, to]) => deltaWithin(run, field, from, to, stretches));
+  }
+}
+
+function deltaWithin(run, field, from, to, stretches) {
+  let first, base;
+  for (const sample of run.samples) {
+    if (!(sample.t <= to) || sample[field] == null) continue;
+    first ??= sample;
+    if (sample.t <= from) base = sample;
+  }
+  if (!first) return null;
+  let value = 0;
+  let previous = base;
+  let unobserved = false;
+  for (const sample of run.samples) {
+    if (!(sample.t <= to) || (base && !(sample.t > base.t))) continue;
+    if (sample.gapFrom !== undefined) unobserved = true;
+    if (sample[field] == null) { unobserved = true; continue; }
+    if (previous && !unobserved && !sample.breaks?.includes(field)) value += sample[field] - previous[field];
+    previous = sample;
+    unobserved = false;
+  }
+  const gaps = stretches.filter(([start, end]) => start < to && end > from).length;
+  const covered = run.startedAt >= from && !run.truncated;
+  return { value, partial: !base && !covered, gaps, from: (base ?? first).t };
 }
 
 // Stretches in which `field` was not followed: unobserved time (including an outage still going on), snapshots without
