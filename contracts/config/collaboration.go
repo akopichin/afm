@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/akopichin/afm/contracts/assistants"
@@ -184,9 +185,11 @@ type ProfileConfig struct {
 	RuntimeContext *assistants.RuntimeContext `yaml:"runtime_context,omitempty"`
 	// Budget — лимит расхода по умолчанию для помощников этого профиля; nil — не задан.
 	Budget *budget.Spec `yaml:"budget,omitempty"`
+	// StageContext selects helper inputs; nil preserves the full root-stage context.
+	StageContext *assistants.StageContext `yaml:"stage_context,omitempty" json:"stage_context,omitempty"`
 }
 
-// UnmarshalYAML проверяет сырые узлы runtime_context и budget до превращения в указатель — как mode выше.
+// UnmarshalYAML checks optional settings before null values collapse into absent pointers.
 func (p *ProfileConfig) UnmarshalYAML(node *yaml.Node) error {
 	const field = "collaboration.profiles.*.runtime_context"
 	if err := validateRuntimeContextNode(field, node); err != nil {
@@ -198,6 +201,13 @@ func (p *ProfileConfig) UnmarshalYAML(node *yaml.Node) error {
 	}
 	if set && n.ShortTag() == yamlNullTag {
 		return fmt.Errorf("collaboration.profiles.*.budget must not be null (line %d): give tokens and/or money, or remove the key", n.Line)
+	}
+	contextNode, contextSet, err := budget.EffectiveYAMLValue(node, "stage_context")
+	if err != nil {
+		return err
+	}
+	if contextSet && contextNode.ShortTag() == yamlNullTag {
+		return fmt.Errorf("collaboration.profiles.*.stage_context must not be null (line %d)", contextNode.Line)
 	}
 	type plain ProfileConfig // no methods: decoding it does not recurse into UnmarshalYAML
 	return node.Decode((*plain)(p))
@@ -232,4 +242,13 @@ func validateCollaborationMaxTasks(layer string, v *int) error {
 		return fmt.Errorf("%s config: collaboration.limits.max_tasks: must not be negative, got %d", layer, *v)
 	}
 	return nil
+}
+
+// UnmarshalJSON rejects null before it can become an absent stage_context pointer.
+func (p *ProfileConfig) UnmarshalJSON(data []byte) error {
+	if err := assistants.RejectNullStageContext(data, "stage_context"); err != nil {
+		return err
+	}
+	type plain ProfileConfig
+	return json.Unmarshal(data, (*plain)(p))
 }
