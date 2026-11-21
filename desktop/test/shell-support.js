@@ -26,7 +26,7 @@ export async function loadShell(t, { demo = true, platform = 'MacIntel', native 
   w.nativeAFM = { version: async () => '0.0.1', models: async () => [], prefs: async () => ({ gitMode: 'current' }), sources: async () => [], assistant: fakeAssistant(), watch: fakeWatch(), liveLayout: async () => {}, focusShell: async () => {}, onLiveShortcut: () => {}, onNoticeOpen: () => {}, onWatchOpen: () => {}, reportSelection: async () => {}, onSSHKeyPrompt: () => {}, onSSHKeyClosed: () => {}, ...native };
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
-  const scripts = demo ? ['store', 'run-report', 'desktop', 'library', 'tasks', 'report', 'controls', 'attention', 'costs'] : ['store', 'run-report', 'desktop', 'library', 'assistant', 'tasks', 'report', 'controls', 'attention', 'inventory', 'costs', 'native'];
+  const scripts = demo ? ['store', 'run-report', 'project-path', 'desktop', 'library', 'tasks', 'report', 'controls', 'attention', 'costs'] : ['store', 'run-report', 'project-path', 'desktop', 'library', 'assistant', 'tasks', 'report', 'controls', 'attention', 'inventory', 'costs', 'native'];
   // Classic scripts in page order, so a name used before its script has loaded fails here as it would in a browser.
   const addScript = text => { const script = w.document.createElement('script'); script.textContent = text; w.document.body.append(script); };
   for (const name of scripts) addScript(await readFile(new URL(name + '.js', files), 'utf8'));

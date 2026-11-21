@@ -99,11 +99,34 @@ function stageLabel(r){
   const stage=attentionItems.find(item=>item.runKey===r.key)?.stageName;
   return stage?' / '+esc(stage):'';
 }
+const pinnedProjectIds=new Set(Array.isArray(state.pinnedProjects)?state.pinnedProjects:[]);
+const pinIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3 21 8 17.5 9.4 14 13l.5 3-2 2-6.5-6.5 2-2 3 .5 3.6-3.5L16 3ZM9 15l-6 6"/></svg>';
+function rememberProjectPins(){
+  state.pinnedProjects=[...pinnedProjectIds];
+  save();
+}
+function projectTile(p,index,compact=false){
+  const id=esc(p.id),name=esc(p.name),pinned=pinnedProjectIds.has(p.id);
+  const scope=compact?'pinned':'recent',pinLabel=`${pinned?'Unpin':'Pin'} ${name}`;
+  const running=p.runs.filter(active).length;
+  return `<article class="project-tile tile${compact?' compact-tile':''}" style="--tone:${p.tone}">
+    ${artwork(index)}${compact?'':`<div class="art project-cost-art" data-cost-project="${id}" hidden></div>`}
+    <div class="tile-body"><h3><button type="button" class="open-tile" data-project="${id}" data-tile="${scope}">${name}</button></h3>
+      <button type="button" class="path project-path" data-project-path="${id}" data-tile="${scope}" aria-controls="project-path-panel" aria-expanded="false">${esc(p.path)}</button></div>
+    <div class="cardfooter"><i class="dot"></i>${running?running+' active run'+(running===1?'':'s'):'No active runs'}</div>
+    <button type="button" class="pin-project icon" data-pin-project="${id}" data-tile="${scope}" aria-label="${pinLabel}" title="${pinLabel}" aria-pressed="${pinned}">${pinIcon}</button>
+    ${compact?'':`<button class="tile-cost-link action" data-cost-link="${id}" aria-label="Costs for ${name}" hidden>Costs ↗</button><button class="forget-project icon" data-forget="${id}" aria-label="Remove ${name} from recent projects" title="Remove from recent projects">×</button>`}
+  </article>`;
+}
 function renderHome(){
+  closeProjectPath();
   const runs=activeRuns();
+  const pinned=projects.map((project,index)=>({project,index})).filter(({project})=>pinnedProjectIds.has(project.id));
   $('screen').innerHTML=`<div class="home"><div class="heading"><div><h1>Projects</h1><p class="summary">${projects.length} recent projects · ${runs.length} active runs</p></div><div class="heading-actions"><button class="action" data-folder>Open folder…</button><button class="action primary" data-start>＋ New run</button></div></div>
-  <section><div class="section-title"><h2>Recent projects</h2></div><div class="tiles">${projects.map((p,i)=>`<div class="project-tile"><button class="tile" data-project="${p.id}" style="--tone:${p.tone}">${artwork(i)}<div class="art project-cost-art" data-cost-project="${esc(p.id)}" hidden></div><div class="tile-body"><h3>${esc(p.name)}</h3><p class="path">${esc(p.path)}</p></div><div class="cardfooter"><i class="dot"></i>${p.runs.some(active)?p.runs.filter(active).length+' active run'+(p.runs.filter(active).length===1?'':'s'):'No active runs'}</div></button><button class="tile-cost-link action" data-cost-link="${esc(p.id)}" aria-label="Costs for ${esc(p.name)}" hidden>Costs ↗</button><button class="forget-project icon" data-forget="${esc(p.id)}" aria-label="Remove ${esc(p.name)} from recent projects" title="Remove from recent projects">×</button></div>`).join('')}</div></section>
+  ${pinned.length?`<section aria-labelledby="pinned-projects-title"><div class="section-title"><h2 id="pinned-projects-title">Pinned projects</h2></div><div class="tiles pinned-tiles">${pinned.map(({project,index})=>projectTile(project,index,true)).join('')}</div></section>`:''}
+  <section aria-labelledby="recent-projects-title"><div class="section-title"><h2 id="recent-projects-title">Recent projects</h2></div><div class="tiles">${projects.map((p,i)=>projectTile(p,i)).join('')}</div></section>
   <section><div class="section-title"><h2>Active runs</h2><span class="total">${runs.length}</span></div><div class="active-list">${runs.map(({p,r})=>`<button class="row" data-project="${p.id}" data-run="${r.id}" style="--tone:${p.tone}"><span class="r-icon">${r.source==='Terminal'?'›_':'▷'}</span><span class="r-name"><strong>${esc(r.flow)}</strong><small>${esc(p.name)}${stageLabel(r)}</small></span><span class="origin">${r.source}</span><span class="mini-state"><i class="dot"></i>${label(r)}</span><small class="row-cost" data-cost-run-key="${esc(r.key||'')}"></small><span class="chev">→</span></button>`).join('')||'<p class="empty">No active runs</p>'}</div></section></div>`;
+  wireProjectPaths($('screen'));
   if(typeof paintHomeCosts==='function')paintHomeCosts();
 }
 function runURL(p,r){
@@ -119,6 +142,7 @@ function runTabStatus(run){
   return ['running','Running'];
 }
 function render(){
+  closeProjectPath();
   const {p,r,tab}=selection();
   const wantFocus=focusDashboard;focusDashboard=false;
   document.dispatchEvent(new Event("workspace-change"));
@@ -267,12 +291,23 @@ async function deleteRun(project, run) {
   }
 }
 document.addEventListener('click',e=>{
-  const el=e.target.closest('button');if(!el)return;
+  const el=e.target.closest('button')??e.target.closest('[data-cost-project]')?.parentElement.querySelector('.open-tile');if(!el)return;
   const {p,r}=selection();
+  if(el.dataset.pinProject){
+    const id=el.dataset.pinProject;
+    if(!pinnedProjectIds.delete(id))pinnedProjectIds.add(id);
+    rememberProjectPins();
+    const tile=el.dataset.tile;
+    renderHome();
+    const buttons=[...$('screen').querySelectorAll('[data-pin-project]')].filter(button=>button.dataset.pinProject===id);
+    (buttons.find(button=>button.dataset.tile===tile)??buttons[0])?.focus({preventScroll:true});
+    return;
+  }
   if(el.dataset.forget){
     const id=el.dataset.forget;
-    if(isDemo){const i=projects.findIndex(item=>item.id===id);if(i>=0)projects.splice(i,1);save();render()}
-    else nativeAFM.removeProject(id).then(refreshNative).catch(showNativeError);
+    const forgetPin=()=>{if(pinnedProjectIds.delete(id))rememberProjectPins()};
+    if(isDemo){const i=projects.findIndex(item=>item.id===id);if(i>=0)projects.splice(i,1);forgetPin();save();render()}
+    else nativeAFM.removeProject(id).then(()=>{forgetPin();return refreshNative()}).catch(showNativeError);
     return;
   }
   if(el.hasAttribute('data-switch'))showPicker();

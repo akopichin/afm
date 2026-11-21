@@ -27,7 +27,7 @@ kbd {font:11px var(--font-mono);color:var(--text-muted);margin-left:5px}
 .section-title {gap:10px;margin-bottom:14px}.section-title h2 {font-size:16px;font-weight:570;letter-spacing:-.02em}.total {color:var(--text-muted);font:12px var(--font-mono)}
 .tiles {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px;margin-bottom:38px}
 .tile {position:relative;overflow:hidden;border:1px solid var(--separator-subtle);border-radius:var(--radius-lg);background:var(--surface-raised);padding:0;display:flex;flex-direction:column;transition:transform .15s,border-color .15s}
-.tile:hover {transform:translateY(-2px);border-color:var(--tone)}
+.tile:hover,.tile:focus-within {border-color:var(--tone)}
 .art {width:100%;height:89px;position:relative;overflow:hidden;color:var(--tone);background:radial-gradient(ellipse at 68% 120%,color-mix(in srgb,var(--tone) 19%,transparent),transparent 76%),radial-gradient(circle,color-mix(in srgb,var(--tone) 26%,transparent) 1px,transparent 1.2px) 2px 2px/12px 12px,var(--surface-tool);border-bottom:1px solid var(--separator-subtle)}
 .art svg {width:100%;height:100%;display:block}.tile-body {padding:17px 19px 12px;width:100%}.tile h3 {font-size:22px;font-weight:600;letter-spacing:-.04em}.path,.mono {font:12px var(--font-mono);color:var(--text-muted)}.path {margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cardfooter {gap:8px;margin:8px 19px 16px;font-size:12px;color:var(--text-secondary)}.dot {display:inline-block;width:7px;height:7px;flex:none;border-radius:50%;background:var(--tone,var(--text-muted))}
@@ -143,8 +143,37 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 .bubble .tool-error-summary:hover {background:var(--surface-hover)}
 .bubble .approval {margin:8px 0 0;padding:8px;border:1px solid var(--attention);border-radius:6px;background:var(--surface-tool)}.approval code {display:block;margin:6px 0;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text-muted)}.approval .actions {display:flex;gap:8px;justify-content:flex-end}
 
-.project-tile {position:relative;min-width:0}.project-tile .tile {width:100%;height:100%}
-.project-tile .forget-project {position:absolute;right:8px;top:8px;background:var(--surface-raised);opacity:0}.project-tile:hover .forget-project,.project-tile:focus-within .forget-project {opacity:1}
+.project-tile {min-width:0;overflow:visible}
+.project-tile > .art {border-radius:calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0}
+.open-tile {max-width:100%;padding:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:inherit}
+.open-tile::after {content:'';position:absolute;inset:0;z-index:1;border-radius:inherit}
+.open-tile:focus-visible {outline:none}.project-tile:has(.open-tile:focus-visible) {outline:2px solid var(--focus-ring);outline-offset:3px}
+.project-path {position:relative;z-index:2;display:block;max-width:100%;padding:2px 0;cursor:help}
+.project-path:hover,.project-path[aria-expanded=true] {color:var(--text-primary);text-decoration:underline;text-underline-offset:3px}
+.pinned-tiles {grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:30px}
+.compact-tile .art {height:46px;background-size:auto,9px 9px,auto}
+.compact-tile .tile-body {padding:12px 13px 6px}.compact-tile h3 {font-size:16px;letter-spacing:-.025em}
+.compact-tile .path,.compact-tile .cardfooter {font-size:11px}.compact-tile .cardfooter {margin:4px 13px 12px}
+.project-tile .pin-project,.project-tile .forget-project {position:absolute;z-index:3;top:8px;background:var(--surface-raised)}
+.project-tile .pin-project {right:44px;border:1px solid transparent}
+.project-tile .pin-project:hover {background:var(--surface-hover)}
+.pin-project[aria-pressed=true] {color:var(--violet);border-color:color-mix(in srgb,var(--violet) 45%,transparent);background:color-mix(in srgb,var(--violet) 14%,var(--surface-raised))}
+.pin-project[aria-pressed=true] svg {fill:color-mix(in srgb,var(--violet) 25%,transparent)}
+.pin-project svg,.project-path-copy svg {width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.project-tile .forget-project {right:8px;opacity:0}.project-tile:hover .forget-project,.project-tile:focus-within .forget-project {opacity:1}
+.compact-tile .pin-project {width:26px;height:26px;right:5px;top:5px}
+.project-path-panel {position:fixed;z-index:6;display:flex;align-items:center;gap:10px;width:max-content;max-width:min(580px,calc(100vw - 24px));padding:6px 7px 6px 10px;border:1px solid var(--control-border);border-radius:10px;background:var(--surface-overlay);box-shadow:var(--shadow-overlay);animation:project-path-show .15s ease-out}
+.project-path-panel[hidden] {display:none}
+.project-path-panel::before {content:'';position:absolute;top:-7px;inset-inline:0;height:7px}.project-path-panel.above::before {top:auto;bottom:-7px}
+.project-path-panel code {min-width:0;font:12px/1.55 var(--font-mono);white-space:pre;overflow-x:auto;scrollbar-width:none;user-select:all}
+.project-path-copy {display:flex;align-items:center;justify-content:center;gap:5px;flex:none;min-width:72px;padding:5px 7px;border:1px solid var(--control-border);border-radius:6px;background:var(--surface-raised);color:var(--text-secondary);font-size:11px;transition:background .15s,color .15s}
+.project-path-copy:hover {color:var(--text-primary);background:var(--surface-hover)}
+.project-path-copy.copied {color:var(--success);border-color:color-mix(in srgb,var(--success) 52%,transparent);background:color-mix(in srgb,var(--success) 13%,var(--surface-raised));animation:project-path-copied .38s ease-out}
+@keyframes project-path-show {from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+@keyframes project-path-copied {from{box-shadow:0 0 0 0 color-mix(in srgb,var(--success) 42%,transparent)}to{box-shadow:0 0 0 7px transparent}}
+@media(max-width:760px){.pinned-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:500px){.pinned-tiles{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.project-path-panel,.project-path-copy.copied{animation:none}}
 @media(hover:none){.project-tile .forget-project{opacity:1}}
 .source-list>div>span {min-width:0;flex:1;overflow-wrap:anywhere}
 

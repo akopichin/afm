@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Pin projects on Home and copy their full paths from a compact popover on either card size.
 - Remove a custom Assistant provider directly from its card with confirmation.
 - Connect ACP agents to the Desktop Assistant and use their model and mode choices.
 - Give Assistant updates their own timestamped bubbles after a pause.

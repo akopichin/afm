@@ -74,7 +74,9 @@ version from the tag. Download the `afm-desktop-<version>-darwin-<arch>.zip` for
 Mac or `afm-desktop-<version>-linux-<arch>.tar.gz` for Linux and verify it with
 the accompanying `SHA256SUMS`. Extract the archive and open **AFM Desktop**.
 On Home, hover or focus a project tile and choose **×** to remove it from recent
-projects. Its files and running processes stay on disk and on the host. In
+projects. Its files and running processes stay on disk and on the host. Use the
+pin icon to keep a compact copy above Recent projects. Hover or
+focus a path on either card size and choose **Copy** to copy the full path. In
 Settings → Models or the quick model picker (Command+M on macOS, Ctrl+M on Linux),
 choose a provider default, a listed model, or **Custom model…** to enter an ID.
 In Settings → Models, choose **×** next to a custom provider and confirm to remove it.

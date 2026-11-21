@@ -144,6 +144,49 @@ test('a project can be removed from Home without opening it', async t => {
   assert.equal(w.location.hash,'');
 });
 
+test('Home pins a compact copy, persists the choice and keeps it distinct from opening a project', async t => {
+  const {w,d}=await openShell(t,twoProjects([]));
+  const pin=(id,scope)=>d.querySelector(`[data-pin-project="${id}"][data-tile="${scope}"]`);
+  const saved=()=>JSON.parse(w.localStorage.getItem('afm.desktop.workspace')).pinnedProjects;
+  assert.equal(d.querySelector('#pinned-projects-title'),null);
+  pin('a','recent').click();
+  assert.ok(d.querySelector('#pinned-projects-title').compareDocumentPosition(d.querySelector('#recent-projects-title'))&w.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(d.querySelectorAll('[data-project="a"].open-tile').length,2);
+  assert.equal(pin('a','recent').getAttribute('aria-pressed'),'true');
+  assert.deepEqual(saved(),['a']);
+  assert.equal(w.location.hash,'');
+  pin('a','pinned').click();
+  assert.equal(d.querySelector('#pinned-projects-title'),null);
+  assert.equal(d.activeElement,pin('a','recent'));
+  assert.deepEqual(saved(),[]);
+});
+
+test('both sizes of Home card reveal and copy the exact path without opening a project', async t => {
+  const project={...projectRow('a',[]),path:'/work/space & <folder>/another folder'};
+  const {w,d,get,key}=await openShell(t,snapshotOf([project]));
+  const copied=[];
+  Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async path=>copied.push(path)}});
+  d.querySelector('[data-pin-project="a"]').click();
+  for(const scope of ['recent','pinned']){
+    const anchor=d.querySelector(`[data-project-path="a"][data-tile="${scope}"]`);
+    anchor.dispatchEvent(new w.MouseEvent('pointerenter'));
+    const panel=get('project-path-panel');
+    assert.equal(panel.hidden,false);
+    assert.equal(anchor.nextElementSibling,panel);
+    assert.equal(panel.querySelector('code').textContent,project.path);
+    const copy=panel.querySelector('button');
+    copy.focus();
+    copy.click();
+    await tick();
+    assert.equal(copy.textContent,'Copied');
+    assert.equal(w.location.hash,'');
+    key('Escape','Escape',{},copy);
+    assert.equal(panel.hidden,true);
+    assert.equal(d.activeElement,anchor);
+  }
+  assert.deepEqual(copied,[project.path,project.path]);
+});
+
 test('Continue run waits and selects the replacement instance of the same run', async t => {
   const stopped = runRow('resume', {state:'finished', can:{resume:true, open:false}});
   const restarted = runRow('resume', {key:'new:resume', instanceId:'new'});
