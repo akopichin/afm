@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestProcessStartIsStableAndDistinguishesProcesses(t *testing.T) {
+func TestProcessStartIsStableForEachPID(t *testing.T) {
 	self, err := ProcessStart(os.Getpid())
 	if errors.Is(err, ErrUnsupported) {
 		t.Skip("process start marker is not supported on this platform")
@@ -29,8 +29,9 @@ func TestProcessStartIsStableAndDistinguishesProcesses(t *testing.T) {
 	if err != nil || child == "" {
 		t.Fatalf("ProcessStart(child) = %q, %v", child, err)
 	}
-	if child == self {
-		t.Error("two processes have the same start marker")
+	// Linux reports start times in clock ticks, so distinct PIDs may share a marker.
+	if again, err := ProcessStart(cmd.Process.Pid); err != nil || again != child {
+		t.Errorf("ProcessStart(child) = %q, %v, want %q", again, err, child)
 	}
 }
 
