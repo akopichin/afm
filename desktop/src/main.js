@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { desktopEnvironment, refreshEnvironment, stopEnvironmentImports } from './environment.js';
 import { PipelineOptions } from './pipeline-options.js';
 import { Desktop } from './desktop.js';
+import { LibraryLinks } from './library-links.js';
 import { LiveView } from './live-view.js';
 import { afmBinary } from './binary.js';
 import { DashboardViews } from './dashboard-views.js';
@@ -28,6 +29,22 @@ import { StageBrowsers } from './stage-browser/broker.js';
 import { createInspector } from './stage-browser/bind.js';
 import { electronBackend } from './stage-browser/electron-page.js';
 import { unlockSSHKey } from './ssh-key.js';
+
+const demo = process.argv.includes('--demo');
+if (app.isPackaged && !demo && !app.requestSingleInstanceLock()) app.exit(0);
+
+const libraryLinks = new LibraryLinks(input => desktop.sources.add(input));
+let readyForLinks = false;
+function receiveLibraryLink(url) {
+  if (demo || !libraryLinks.receive(url) || !readyForLinks) return;
+  showWindow().then(() => window?.webContents.send('library:link', libraryLinks.current())).catch(console.error);
+}
+app.on('open-url', (event, url) => { event.preventDefault(); receiveLibraryLink(url); });
+app.on('second-instance', (_event, argv) => {
+  argv.forEach(receiveLibraryLink);
+  if (readyForLinks) showWindow().catch(console.error);
+});
+process.argv.forEach(receiveLibraryLink);
 
 const home = os.homedir();
 const root = app.getAppPath();
@@ -62,7 +79,6 @@ const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? proc
 const pipelineOptions = new PipelineOptions({home, environment, unlockSSH, projects: desktop.projects, sources: desktop.sources,
   serveConfig: desktop.serveConfig, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined)});
 const entry = pathToFileURL(path.join(root, 'renderer/index.html')).href;
-const demo = process.argv.includes('--demo');
 const origins = new DashboardOrigins();
 // The run page the renderer shows right now (null on Live or Home); a banner for it would only repeat what is on screen.
 let shownRun = null;
@@ -197,6 +213,9 @@ handle('projects:add', async folder => projectSummary(await desktop.projects.add
 handle('projects:remove', async id => desktop.projects.remove(id, {active:(await desktop.runs.forProject(id)).some(r=>r.state==='running')}));
 handle('sources:list', () => desktop.sources.list());
 handle('sources:add', location => desktop.sources.add({location}));
+handle('library:link', () => libraryLinks.current());
+handle('library:confirm-link', id => libraryLinks.confirm(String(id)));
+handle('library:dismiss-link', id => libraryLinks.dismiss(String(id)));
 handle('sources:pick', async () => { const folder = await pickFolder(); return folder ? desktop.sources.add({location: folder}) : null; });
 handle('sources:remove', id => desktop.sources.remove(id));
 handle('sources:refresh', id => desktop.sources.refresh(id));
@@ -394,8 +413,27 @@ app.whenReady().then(async () => {
     reply({ cancel: !allowRequest(details.url, { appRoot: path.resolve(root), origins, allowGitHub: demo }) }));
   loadNotificationSettings().catch(error => console.error('Notification settings:', error));
   windowLoaded = openWindow();
+  readyForLinks = true;
   await windowLoaded;
   startStageBrowsers();
+  if (process.argv.includes('--desktop-library-link-check')) {
+    for (const label of ['cold', 'warm']) {
+      const repository = 'https://example.invalid/' + label;
+      const deadline = Date.now() + 12000;
+      let found = false;
+      while (!found && Date.now() < deadline) {
+        found = await window.webContents.executeJavaScript(`(() => {
+          const panel = document.querySelector('#settings[open] .library-link');
+          return !!panel?.querySelector('#library-link-confirm') && panel.textContent.includes(${JSON.stringify(repository)});
+        })()`);
+        if (!found) await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      if (!found) throw Error('Packaged Desktop did not review the ' + label + ' Library link.');
+      console.log('Library link ready: ' + label);
+    }
+    app.quit();
+    return;
+  }
   if (process.argv.includes('--desktop-launch-check')) {
     const ready = await window.webContents.executeJavaScript(`(async () => {
       if (!document.querySelector('#settings[open] #finish-setup')) return false;

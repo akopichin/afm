@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Open `afm://library/install` links to review and add Git pipeline sources in Library.
 - Send queued Assistant follow-ups immediately during a managed wait and keep background AFM runs working.
 - Switch between active and finished runs in Costs, with final report totals and recorded usage history for finished runs.
 - Schedule repeating Assistant prompts with a per-task model, result history, and optional Telegram delivery.

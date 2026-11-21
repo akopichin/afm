@@ -1,7 +1,7 @@
 import { statFile } from '@electron/asar';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afmBinary } from '../src/binary.js';
@@ -12,7 +12,7 @@ const bundle = path.resolve('dist', 'AFM Desktop-' + process.platform + '-' + pr
 const resources = process.platform === 'darwin' ? path.join(bundle, 'AFM Desktop.app/Contents/Resources') : path.join(bundle, 'resources');
 const binary = path.join(resources, process.platform === 'win32' ? 'afm.exe' : 'afm');
 const archive = path.join(resources, 'app.asar');
-for (const file of ['assets/afm-desktop.png', 'assets/afm-desktop-attention.png', 'src/main.js', 'src/preload.cjs', 'src/dashboard-keys.cjs', 'src/workspace.js', 'src/protocol.js',
+for (const file of ['assets/afm-desktop.png', 'assets/afm-desktop-attention.png', 'src/main.js', 'src/preload.cjs', 'src/dashboard-keys.cjs', 'src/workspace.js', 'src/protocol.js', 'src/library-links.js',
   'src/shortcuts.js', 'src/assistant/assistant.js', 'src/assistant/bridge.js', 'src/assistant/ipc.js', 'src/stage-browser/broker.js', 'src/stage-browser/companion-main.js', 'src/stage-browser/electron-page.js', 'renderer/assistant.js', 'renderer/index.html', 'renderer/inventory.js',
   'renderer/checkout.html', '.generated/editor/code-editor.js', '.generated/editor/code-editor.css', '.generated/run.html', '.generated/dashboard/skins/graphite/index.css',
   'node_modules/@modelcontextprotocol/sdk/package.json', 'node_modules/yaml/package.json']) {
@@ -23,6 +23,11 @@ if (process.platform === 'darwin') {
   const icon = execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIconFile', plist], {encoding: 'utf8'}).trim();
   const expected = await readFile('assets/afm-desktop.icns');
   if (!expected.equals(await readFile(path.join(resources, icon)))) throw Error('The Mac package does not carry the AFM Desktop icon.');
+  const scheme = execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0', plist], { encoding: 'utf8' }).trim();
+  if (scheme !== 'afm') throw Error('The Mac package does not declare the afm URL scheme.');
+} else if (process.platform === 'linux') {
+  const launcher = await stat(path.join(bundle, 'register-afm-links'));
+  if (!(launcher.mode & 0o111)) throw Error('The Linux package is missing an executable AFM link registrar.');
 }
 // The executable inside the package, not the one the build chose, must carry the stage browser hook and fit this machine.
 const sidecar = await verifySidecar(binary);

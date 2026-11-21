@@ -19,6 +19,34 @@ const projects = new Projects({ home, serveConfig: new ServeConfig(home) });
 const project = await projects.add(home);
 const host = spawn(path.join(contents, 'Resources/afm'), ['serve', '--port', '0'], {cwd: home, env, stdio: 'ignore'});
 const stopped = once(host, 'exit');
+const executable = path.join(contents, 'MacOS/AFM Desktop');
+
+async function checkLibraryLinks() {
+  const profile = '--user-data-dir=' + path.join(home, 'link-profile');
+  const link = label => 'afm://library/install?' + new URLSearchParams({ source: 'https://example.invalid/' + label });
+  const first = spawn(executable, [profile, '--desktop-library-link-check', link('cold')], { cwd: home, env });
+  const ended = once(first, 'close');
+  const cold = Promise.withResolvers();
+  let stdout = '', stderr = '';
+  first.stdout.setEncoding('utf8').on('data', chunk => {
+    stdout += chunk;
+    if (stdout.includes('Library link ready: cold')) cold.resolve();
+  });
+  first.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+  const timeout = setTimeout(() => first.kill('SIGKILL'), 30000);
+  try {
+    await Promise.race([cold.promise, ended.then(() => { throw Error('Cold Library link failed: ' + stderr); })]);
+    const second = spawnSync(executable, [profile, link('warm')], { cwd: home, env, encoding: 'utf8', timeout: 10000 });
+    if (second.error || second.status !== 0) throw Error('Could not forward the warm Library link: ' + (second.error ?? second.stderr));
+    const [code] = await ended;
+    if (code !== 0 || !stdout.includes('Library link ready: warm')) throw Error('Warm Library link failed: ' + stderr);
+    console.log(stdout.trim());
+  } finally {
+    clearTimeout(timeout);
+    if (first.exitCode === null && first.signalCode === null) first.kill('SIGKILL');
+    await ended.catch(() => {});
+  }
+}
 const client = new Host(home, async () => { throw Error('The isolated host is unavailable.'); });
 let run;
 try {
@@ -38,13 +66,14 @@ try {
     await delay(150);
   }
   if (!run) throw Error('Native dashboard test run failed to start.');
-  const result = spawnSync(path.join(contents, 'MacOS/AFM Desktop'), [
+  const result = spawnSync(executable, [
     '--user-data-dir=' + path.join(home, 'profile'), '--desktop-launch-check', '--desktop-check-run=' + run.run_id
   ], {cwd: home, env, encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL'});
   if (result.error) throw result.error;
   if (result.status !== 0 || !result.stdout.includes('AFM Desktop window and host ready'))
     throw Error('Native window failed to open (' + (result.signal || result.status) + '). ' + result.stderr);
   console.log(result.stdout.trim());
+  await checkLibraryLinks();
 } finally {
   if (run) await client.tool('afm_run_cancel', {run_id:run.run_id}).catch(()=>{});
   await client.close();

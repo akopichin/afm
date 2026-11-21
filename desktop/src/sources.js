@@ -125,6 +125,7 @@ export class Sources {
       }
     };
     const { source: git, commit, directories } = await json(['catalog', source.location]);
+    if (!directories?.length) throw Error('No pipeline manifests found in this Git source.');
     const entries = [];
     for (const dir of directories) {
       const base = git.location + (dir ? '//' + dir : '');

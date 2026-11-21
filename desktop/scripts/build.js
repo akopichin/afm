@@ -41,7 +41,7 @@ const electronZipDir = await findElectronZip();
 const identity = process.env.AFM_DESKTOP_SIGN_IDENTITY;
 const dirs = await packager({
   dir: '.', name: 'AFM Desktop', out: 'dist', overwrite: true, asar: { unpackDir: 'node_modules/chrome-devtools-mcp' },
-  ...(process.platform === 'darwin' ? {icon: 'assets/afm-desktop.icns'} : {}),
+  ...(process.platform === 'darwin' ? { icon: 'assets/afm-desktop.icns', protocols: [{ name: 'AFM Desktop', schemes: ['afm'] }] } : {}),
   appBundleId: 'dev.afm.desktop', ...(electronZipDir ? { electronZipDir } : {}), osxSign: identity ? {identity, continueOnError: false} : undefined, extraResource: [resource],
   ignore: [/^\/\.generated\/resources/, /^\/(dist|test|scripts|workflow|homebrew)(\/|$)/]
 });
@@ -50,6 +50,13 @@ if (process.platform === 'darwin') {
     const bundle = path.join(dir, 'AFM Desktop.app');
     if (!identity) execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], {stdio: 'inherit'});
     execFileSync('codesign', ['--verify', '--deep', bundle], {stdio: 'inherit'});
+  }
+}
+if (process.platform === 'linux') {
+  for (const dir of dirs) {
+    const launcher = path.join(dir, 'register-afm-links');
+    await copyFile('scripts/register-afm-links', launcher);
+    await chmod(launcher, 0o755);
   }
 }
 console.log(dirs.join('\n'));

@@ -140,3 +140,9 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 
 #launch-submit[aria-busy="true"] {opacity:1;cursor:progress}
 #launch-submit[aria-busy="true"]::before {border-top-color:currentColor}
+
+.library-link {margin:14px 0;padding:14px;border:1px solid var(--separator-subtle);border-radius:10px}
+.library-link h3 {margin:0 0 10px;font-size:15px}
+.library-link dl {display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 12px;margin:0}
+.library-link dt {color:var(--text-muted)}
+.library-link dd {margin:0;overflow-wrap:anywhere}

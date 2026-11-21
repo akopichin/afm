@@ -18,6 +18,26 @@ provider and use its login or a credential reference. Open a project folder to
 start a run. See the [Desktop release guide](../docs/releases.md#afm-desktop-releases)
 for archives, checksums and upgrades.
 
+## Add a pipeline from a link
+
+Open an `afm://library/install?source=…` link to review a repository in Library.
+Choose **Add to Library** to read its pipeline manifests and make them available
+in **New run**. Private repositories use Desktop's configured Git or SSH
+authentication. Use **Retry** after fixing a source or authentication problem.
+Adding a pipeline leaves run creation to the launcher.
+
+To create a link, put an AFM Git source in the URL-encoded `source` parameter:
+
+```js
+const source = 'https://github.com/akopichin/afm-pipelines//pipelines/dev-spec@main';
+const link = 'afm://library/install?' + new URLSearchParams({ source });
+```
+
+Use HTTPS or SSH and omit credentials. macOS registers the scheme through the
+application bundle. On Linux, run `./register-afm-links` from the extracted
+Desktop directory as your user to enable links in the desktop session. Run the
+same command again if you move or replace the extracted directory.
+
 ## Configure pipeline options
 
 Press **Command+,** on macOS or **Ctrl+,** on Linux to open Settings. Choose

@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+executable="$directory/AFM Desktop"
+test -x "$executable"
+command -v xdg-mime >/dev/null
+
+case "$executable" in
+  *'
+'*) printf '%s\n' 'AFM Desktop must be in a directory without a newline in its name.' >&2; exit 1 ;;
+esac
+# The desktop entry and its quoted Exec argument each have their own escaping.
+escaped=$(printf '%s' "$executable" | sed 's/%/%%/g; s/[\\"\`$]/\\&/g; s/\\/\\\\/g')
+applications="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$applications"
+entry=$(mktemp "$applications/.afm-desktop.XXXXXX")
+trap 'if [ -f "$entry" ]; then unlink "$entry"; fi' EXIT
+cat > "$entry" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=AFM Desktop
+Exec="$escaped" %u
+MimeType=x-scheme-handler/afm;
+NoDisplay=true
+DESKTOP
+chmod 644 "$entry"
+name=dev.afm.desktop.desktop
+mv "$entry" "$applications/$name"
+xdg-mime default "$name" x-scheme-handler/afm

@@ -314,9 +314,9 @@ $('workflows').onclick=e=>{
   const row=e.target.closest('[data-choice]');
   if(row){choice=Number(row.dataset.choice);updateWorkflows()}
 };
-function openSettings(first=false){
-  onboarding=first;settingsTab='models';sourceMessage='';drawSettings();
-  $('settings').showModal();
+function openSettings(first=false,tab='models'){
+  onboarding=first;settingsTab=tab;sourceMessage='';drawSettings();
+  if(!$('settings').open)$('settings').showModal();
   if(first)scanModels();
   loadSettingsData();
 }
@@ -363,12 +363,17 @@ function drawSettings(){
     };
     if(onboarding)$('finish-setup').onclick=()=>$('settings').close();
   }else if(settingsTab==='library'){
-    body.innerHTML=tabs+`<p class="muted">Flows and pipelines available in every project.</p><div class="source-list">${state.sources.map(s=>`<div><span><strong>${esc(s.name)}</strong><small>${s.error?esc(s.error):s.items.length+' workflows'}</small></span>${s.id!=='starter'?`<button class="icon" data-refresh="${esc(s.id)}" aria-label="Refresh ${esc(s.name)}">↻</button><button class="icon" data-remove="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">×</button>`:''}</div>`).join('')}</div>
+    body.innerHTML=tabs+libraryLinkHTML()+`<p class="muted">Flows and pipelines available in every project.</p><div class="source-list">${state.sources.map(s=>`<div><span><strong>${esc(s.name)}</strong><small>${s.error?esc(s.error):s.items.length+' workflows'}</small></span>${s.id!=='starter'?`<button class="icon" data-refresh="${esc(s.id)}" aria-label="Refresh ${esc(s.name)}">↻</button><button class="icon" data-remove="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">×</button>`:''}</div>`).join('')}</div>
       ${!isDemo?`<div class="source-list">${state.sources.flatMap(source=>source.items).map(item=>`<div><span>${esc(item.name)}</span><button data-pipeline-options="${esc(item.path)}">Pipeline options</button></div>`).join('')}</div>`:''}
       <div class="links"><button id="add-folder">＋ Local folder</button><button id="add-repo">＋ ${isDemo?'GitHub repository':'Git repository'}</button></div>
       <form id="repo-form" hidden><label>${isDemo?'Public GitHub repository':'Git repository URL'}<input name="repo" required placeholder="${isDemo?'owner/repository':'SSH or HTTPS URL'}"></label><div class="actions"><button class="primary">Connect repository</button></div></form><p class="hint" role="status">${esc(sourceMessage)}</p>`;
     for(const button of body.querySelectorAll('[data-pipeline-options]')){
       button.onclick=()=>openPipelineOptions(button.dataset.pipelineOptions,selection().p?.external?undefined:selection().p?.id);
+    }
+    if(libraryLink){
+      $('library-link-dismiss').onclick=dismissLibraryLink;
+      const accept=$('library-link-confirm');
+      if(accept)accept.onclick=confirmLibraryLink;
     }
     $('add-folder').onclick=()=>isDemo?importFolder('source'):changeSource(()=>nativeAFM.pickSource());
     $('add-repo').onclick=()=>{$('repo-form').hidden=false;$('repo-form').elements.repo.focus()};
