@@ -25,6 +25,9 @@
 
 ### Fix:
 
+- Keep Assistant tool errors in reply order and let readers collapse and reopen their details.
+- Keep Settings tabs visible in narrow windows and clarify credential and argument fields for custom providers.
+
 - Use AFM counters for runs within the selected Costs period and preserve readings across gaps.
 
 - Avoid late banners for questions already open when observation starts.

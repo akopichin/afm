@@ -224,6 +224,10 @@ agent sends. ACP providers supply their own file and terminal access. Queued cha
 A streamed reply starts a new timestamped bubble after a pause of 30 seconds
 or longer. The bubbles keep their timestamps when the chat reopens.
 
+Tool errors appear where the results arrive, with their local date and time.
+Use the cross to collapse an error and select its compact row to reopen it.
+Older tool errors with no recorded position are hidden in the chat.
+
 ## Costs
 
 Open **Costs** next to the logo, or the **Costs** link on a project tile that

@@ -525,8 +525,16 @@ export class Assistant {
       this.#emit({ ...base, type: 'tool', tool: { id: event.id, name: event.name, input: redactInput(redact, event.input) } });
     } else if (event.type === 'tool_result') {
       const tool = reply.tools.find(item => item.id === event.id);
-      if (tool) Object.assign(tool, { status: event.error ? 'error' : 'done', text: redact(event.text) });
-      this.#emit({ ...base, type: 'tool_result', id: event.id, error: event.error, text: redact(event.text) });
+      const text = redact(event.text);
+      const placement = event.error ? { offset: reply.text.length, at: new Date(Date.now()).toISOString() } : null;
+      if (tool) {
+        Object.assign(tool, { status: event.error ? 'error' : 'done', text });
+        if (event.error) {
+          const errors = reply.toolErrors ??= [];
+          if (!errors.some(item => item.id === event.id)) errors.push({ id: event.id, ...placement });
+        }
+      }
+      this.#emit({ ...base, type: 'tool_result', id: event.id, error: event.error, text, ...placement });
       this.#trackNativeTool(turn, event.id, false);
     } else if (event.type === 'result') {
       if (!event.ok) turn.failure = redact(event.error || 'The provider reported an error.');

@@ -90,6 +90,64 @@ test('tool calls, tool errors and approvals are shown, and the answer goes to th
   assert.match(d.querySelector('.tool.error').textContent, /out_of_scope/);
 });
 
+test('parallel tool errors stay ordered between text and keep their own collapse state', async t => {
+  const { w, get, d, assistant } = await openShell(t);
+  get('assistant-toggle').click();
+  const turnId = 'errors', box = get('messages');
+  const atB = '2026-11-21T13:00:02.000Z', atA = '2026-11-21T13:01:59.000Z';
+  const emit = event => assistant.emit({ ...event, turnId });
+  const paragraphsAndErrors = panel => [...panel.querySelectorAll('.assistant-text,.tool.error')].map(element =>
+    element.matches('.tool') ? element.querySelector('code').textContent : element.textContent);
+  const button = name => [...box.querySelectorAll('[data-tool-error]')].find(element => element.getAttribute('aria-label').endsWith(name));
+
+  assistant.emit(start(turnId, 'Check both'));
+  for (const id of ['a', 'b']) emit({ type: 'tool', tool: { id, name: 'tool_' + id } });
+  emit({ type: 'delta', text: 'Before' });
+  emit({ type: 'tool_result', id: 'b', error: true, text: '<MCP error -32603>', offset: 6, at: atB });
+  emit({ type: 'delta', text: 'Between' });
+  emit({ type: 'tool_result', id: 'a', error: true, text: 'A failed', offset: 13, at: atA });
+  await frames(w);
+  assert.deepEqual(paragraphsAndErrors(box), ['Before', 'tool_b', 'Between', 'tool_a']);
+  assert.match(box.querySelector('.tool-error').textContent, /<MCP error -32603>/);
+  button('tool_b').focus();
+  button('tool_b').click();
+  assert.equal(button('tool_b').getAttribute('aria-expanded'), 'false');
+  assert.equal(button('tool_a').getAttribute('aria-expanded'), 'true');
+  assert.equal(d.activeElement, button('tool_b'));
+  assert.doesNotMatch(box.textContent, /MCP error/);
+
+  const segments = [{ offset: 0, at: '2026-11-21T13:00:00Z' }, { offset: 13, at: '2026-11-21T13:02:00Z' }];
+  emit({ type: 'delta', text: 'After', segments });
+  await frames(w);
+  assert.equal(button('tool_b').getAttribute('aria-expanded'), 'false');
+  assert.equal(d.activeElement, button('tool_b'));
+  const reply = { ...start(turnId, '').reply, status: 'done', text: 'BeforeBetweenAfter', segments,
+    tools: [{ id: 'a', name: 'tool_a', status: 'error', text: 'A failed' }, { id: 'b', name: 'tool_b', status: 'error', text: '<MCP error -32603>' }],
+    toolErrors: [{ id: 'b', offset: 6, at: atB }, { id: 'a', offset: 13, at: atA }] };
+  emit({ type: 'done', reply });
+  await frames(w);
+  const expected = ['Before', 'tool_b', 'Between', 'tool_a', 'After'];
+  assert.deepEqual(paragraphsAndErrors(box), expected);
+  assert.equal(button('tool_b').getAttribute('aria-expanded'), 'false');
+  assert.equal(button('tool_b').querySelector('time').dateTime, atB);
+  assert.equal(box.querySelectorAll('.bubble').item(1).querySelectorAll('.tool.error').length, 2, 'a result before a new bubble stays in the earlier bubble');
+
+  const reopened = await openShell(t, { saved: [reply] });
+  assert.deepEqual(paragraphsAndErrors(reopened.get('messages')), expected);
+  assert.deepEqual([...reopened.get('messages').querySelectorAll('.tool-error-time')].map(time => time.dateTime), [atB, atA]);
+});
+
+test('old tool errors without positions are hidden while the original reply remains', async t => {
+  const saved = [{ id: 'legacy', role: 'assistant', status: 'cancelled', text: 'Saved text',
+    tools: [{ id: '1', status: 'error', name: 'afm_runs_list', text: 'MCP error -32603: fetch failed' },
+      { id: '2', status: 'done', name: 'afm_run_status' }] }];
+  const { get } = await openShell(t, { saved });
+  const box = get('messages');
+  assert.match(box.textContent, /Saved text.*afm_run_status/s);
+  assert.doesNotMatch(box.textContent, /afm_runs_list|fetch failed/);
+  assert.equal(box.querySelector('[data-tool-error]'), null);
+});
+
 test('stop cancels, a failure keeps the typed text and shows the reason, and cancelled replies say so', async t => {
   const { w, d, get, key, assistant } = await openShell(t);
   key('KeyA', 'a', { altKey: true });
@@ -303,6 +361,9 @@ test('a provider is added as a reference to its credential and can be tested and
   form.elements.location.value = 'http://127.0.0.1:11434/v1';
   form.elements.credential.value = 'env';
   form.elements.credential.dispatchEvent(new w.Event('change'));
+  assert.equal(get('acp-args').hidden, true);
+  assert.equal(form.elements.reference.placeholder, 'OPENAI_API_KEY');
+  assert.match(get('credential-help').textContent, /variable name only.*Settings → Environment/);
   form.elements.reference.value = 'LOCAL_KEY';
   form.dispatchEvent(new w.Event('submit', { cancelable: true }));
   await tick();
@@ -315,6 +376,31 @@ test('a provider is added as a reference to its credential and can be tested and
   get('remove-model').click();
   await tick();
   assert.deepEqual(assistant.calls.remove, ['custom-1']);
+});
+
+test('ACP arguments and the environment variable reference use separate fields', async t => {
+  const { w, get, assistant } = await openShell(t);
+  get('settings-toggle').click();
+  get('add-model').click();
+  assert.equal(get('acp-args').hidden, true);
+  const form = get('model-form');
+  const change = (control, value) => {
+    control.value = value;
+    control.dispatchEvent(new w.Event('change'));
+  };
+  change(form.elements.kind, 'acp');
+  change(form.elements.credential, 'env');
+  assert.equal(get('acp-args').hidden, false);
+  assert.match(get('acp-args-help').textContent, /Optional/);
+  assert.equal(form.elements.reference.pattern, '[A-Za-z_][A-Za-z0-9_]*');
+  form.elements.name.value = 'Codex ACP';
+  form.elements.location.value = '/opt/homebrew/bin/npx';
+  form.elements.args.value = '-y\n\n@agentclientprotocol/codex-acp';
+  form.elements.reference.value = 'OPENAI_API_KEY';
+  form.dispatchEvent(new w.Event('submit', { cancelable: true }));
+  await tick();
+  assert.deepEqual(assistant.calls.add.at(-1), { name: 'Codex ACP', kind: 'acp', executable: '/opt/homebrew/bin/npx',
+    args: ['-y', '@agentclientprotocol/codex-acp'], credential: { type: 'env', ref: 'OPENAI_API_KEY' } });
 });
 
 test('the composer takes the message at once and stays usable while the provider warms up', async t => {

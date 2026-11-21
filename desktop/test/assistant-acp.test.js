@@ -14,7 +14,8 @@ const settings = [
   { type: 'select', category: 'mode', id: 'access', name: 'Access', currentValue: 'readonly', options: [{ value: 'readonly', name: 'Read only' }] },
 ];
 let promptId;
-const update = text => send({ method: 'session/update', params: { sessionId: 'fake-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
+const notify = update => send({ method: 'session/update', params: { sessionId: 'fake-session', update } });
+const update = text => notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
 for await (const line of createInterface({ input: process.stdin })) {
   const msg = JSON.parse(line);
   const result = result => send({ id: msg.id, result });
@@ -32,12 +33,15 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     update('First ');
     update('update.');
+    for (const toolCallId of ['a', 'b']) notify({ sessionUpdate: 'tool_call', toolCallId, title: toolCallId, status: 'in_progress' });
+    notify({ sessionUpdate: 'tool_call_update', toolCallId: 'b', status: 'failed' });
     send({ id: 'permission', method: 'session/request_permission', params: { sessionId: 'fake-session', toolCall: { toolCallId: 'command', title: 'Read project', kind: 'read' }, options: [
       { optionId: 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
     ] } });
   }
   if (msg.id === 'permission' && msg.result?.outcome?.optionId === 'allow') {
     update(' Second update.');
+    notify({ sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'failed' });
     send({ id: promptId, result: { stopReason: 'end_turn' } });
   }
 }
@@ -73,6 +77,10 @@ test('ACP provider discovers controls, sends a selected model and image, and awa
   assert.equal(done.type, 'done', done.message);
   assert.equal(done.reply.text, 'First update. Second update.');
   const saved = (await assistant.history()).at(-1);
+  assert.deepEqual(saved.toolErrors, [
+    { id: 'b', offset: 'First update.'.length, at: new Date(now).toISOString() },
+    { id: 'a', offset: 'First update. Second update.'.length, at: new Date(now + 31000).toISOString() },
+  ]);
   assert.deepEqual(saved.segments, [
     { offset: 0, at: new Date(now).toISOString() }, { offset: 13, at: new Date(now + 31000).toISOString() },
   ]);

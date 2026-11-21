@@ -5,6 +5,8 @@ const assistantChat={messages:[],queue:[],images:[],busy:false,local:'',scanned:
 const MAX_QUEUED_MESSAGES=8, MAX_CHAT_IMAGES=4, MAX_CHAT_IMAGE_BYTES=5*1024*1024;
 const chatImageTypes=new Set(['image/png','image/jpeg','image/webp','image/gif']);
 let nextQueuedMessage=0;
+const toolErrorClock=new Intl.DateTimeFormat(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+const toolErrorOverrides=new Map(Array.isArray(state.assistantToolErrors)?state.assistantToolErrors:[]);
 let assistantInfo=null,chatDrawQueued=false;
 
 function authLabel(p){
@@ -56,9 +58,14 @@ function providerForm(){
   return `<form id="model-form" hidden><label>Name<input name="name" required maxlength="60" placeholder="My Claude, Local model…"></label>
     <label>Type<select name="kind"><option value="claude">Claude Code CLI</option><option value="codex">Codex CLI</option><option value="openai">OpenAI-compatible endpoint</option><option value="acp">ACP agent</option></select></label>
     <label id="location-label"><span>Executable path</span><input name="location" required placeholder="/opt/tools/claude"></label>
-    <label id="acp-args" hidden>Arguments (one per line)<textarea name="args" rows="3" spellcheck="false"></textarea></label>
+    <label id="acp-args" hidden>Arguments, one per line
+      <textarea name="args" rows="3" spellcheck="false" aria-describedby="acp-args-help" placeholder="-y
+@agentclientprotocol/codex-acp"></textarea>
+      <small class="field-help" id="acp-args-help">Optional. Leave blank when the adapter runs without arguments.</small></label>
     <label>Credential<select name="credential"><option value="cli">Existing CLI login</option><option value="env">Environment variable</option><option value="file">Key file</option></select></label>
-    <label id="reference-label" hidden><span>Variable name</span><input name="reference"></label>
+    <label id="reference-label" hidden><span>Environment variable name</span>
+      <input name="reference" autocomplete="off" spellcheck="false" aria-describedby="credential-help">
+      <small class="field-help" id="credential-help"></small></label>
     <div class="actions"><button class="primary">Add provider</button></div></form>`;
 }
 function wireProviderForm(){
@@ -66,15 +73,21 @@ function wireProviderForm(){
   const refresh=()=>{
     const kind=form.elements.kind.value,credential=form.elements.credential.value;
     $('location-label').querySelector('span').textContent=kind==='openai'?'Endpoint URL':'Executable path';
-    form.elements.location.placeholder=kind==='openai'?'http://127.0.0.1:11434/v1':'/opt/tools/'+kind;
+    form.elements.location.placeholder=kind==='openai'?'http://127.0.0.1:11434/v1':kind==='acp'?'/opt/homebrew/bin/codex-acp':'/opt/tools/'+kind;
     const cli=form.elements.credential.querySelector('[value=cli]');cli.disabled=kind==='openai';
     if(kind==='openai'&&credential==='cli')form.elements.credential.value='env';
     form.elements.credential.querySelector('[value=file]').disabled=kind==='acp';
     if(kind==='acp'&&credential==='file')form.elements.credential.value='cli';
     $('acp-args').hidden=kind!=='acp';
+    const reference=form.elements.reference;
+    const fromEnv=form.elements.credential.value==='env';
     $('reference-label').hidden=form.elements.credential.value==='cli';
-    form.elements.reference.required=!$('reference-label').hidden;
-    $('reference-label').querySelector('span').textContent=form.elements.credential.value==='env'?'Variable name':'Key file path';
+    reference.required=!$('reference-label').hidden;
+    $('reference-label').querySelector('span').textContent=fromEnv?'Environment variable name':'Key file path';
+    reference.placeholder=fromEnv?(kind==='claude'?'ANTHROPIC_API_KEY':'OPENAI_API_KEY'):'/absolute/path/to/key';
+    if(fromEnv)reference.pattern='[A-Za-z_][A-Za-z0-9_]*';else reference.removeAttribute('pattern');
+    $('credential-help').textContent=fromEnv?'Enter the variable name only. Set its value in Settings → Environment or import it from your shell.'
+      :'Enter the absolute path to the file that contains the key.';
   };
   form.elements.kind.onchange=refresh;form.elements.credential.onchange=refresh;refresh();
   $('add-model').onclick=()=>{form.hidden=!form.hidden;if(!form.hidden)form.elements.name.focus()};
@@ -134,6 +147,24 @@ function providerError(raw){
     return typeof detail?.message==='string' ? detail.message : raw;
   } catch {return raw}
 }
+function assistantToolHTML(msg,tool,at){
+  const summary=`<code>${esc(tool.name)}</code>`;
+  const input=tool.input?` <small>${esc(tool.input)}</small>`:'';
+  if(tool.status!=='error')return `<div class="tool ${esc(tool.status)}">${summary}${input}</div>`;
+  const key=JSON.stringify([msg.id,tool.id]);
+  const control=`data-tool-error="${esc(key)}"`;
+  const time=at?new Date(at):null;
+  const stamp=time&&Number.isFinite(+time)?`<time class="tool-error-time" datetime="${time.toISOString()}" title="${esc(chatDate.format(time))}">${esc(toolErrorClock.format(time))}</time>`:'';
+  if(toolErrorOverrides.get(key)){
+    return `<button type="button" class="tool error tool-error-summary" ${control} aria-expanded="false" aria-label="Expand error from ${esc(tool.name)}">${summary}<small>Error</small>${stamp}<span aria-hidden="true">›</span></button>`;
+  }
+  return `<div class="tool error"><div class="tool-error-heading">${summary}${stamp}
+    <button type="button" class="icon" ${control} aria-expanded="true" aria-label="Collapse error from ${esc(tool.name)}">×</button></div>
+    ${input}<p class="tool-error">${esc(tool.text||'Failed')}</p></div>`;
+}
+function assistantTextHTML(text){
+  return text.trim()?`<p class="assistant-text">${esc(text.trim())}</p>`:'';
+}
 function messageHTML(msg){
   if(msg.role==='user'){
     const status=msg.error?`<p class="bubble-error" role="alert">${esc(msg.error)}</p>`:msg.pending?'<small>Sending…</small>'
@@ -141,27 +172,44 @@ function messageHTML(msg){
     return `<div class="bubble mine${msg.queued?' queued':''}">${chatMetaHTML(msg.context,msg.at)}${msg.text?`<p>${esc(msg.text)}</p>`:''}
       ${msg.imageCount?`<small>${esc(msg.imageCount)} ${msg.imageCount===1?'image':'images'} attached</small>`:''}${status}</div>`;
   }
-  const tools=(msg.tools||[]).map(tool=>`<div class="tool ${tool.status}"><code>${esc(tool.name)}</code> <small>${esc(tool.input||'')}</small>${tool.status==='error'?`<p class="tool-error">${esc(tool.text||'Failed')}</p>`:''}</div>`).join('');
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
   const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='yielded'?'<small>Continued with your next message</small>':msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
   const context=[msg.context,msg.effective?.label].filter(Boolean).join(' · ');
+  const tools=new Map((msg.tools||[]).map(tool=>[tool.id,tool]));
+  const errors=(msg.toolErrors||[]).filter(error=>tools.get(error.id)?.status==='error');
   const sections=(msg.segments||[]).filter(section=>section.offset<msg.text.length);
-  const tail=sections.pop();
-  const earlier=sections.map((section,i)=>
-    `<div class="bubble">${chatMetaHTML(context,section.at)}<p>${esc(msg.text.slice(section.offset,(sections[i+1]||tail).offset).trim())}</p></div>`).join('');
-  const text=tail?msg.text.slice(tail.offset).trimStart():msg.text;
-  return earlier+`<div class="bubble ${msg.status}">${chatMetaHTML(context,tail?.at||msg.at)}${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${text?`<p>${esc(text)}</p>`:''}${tools}${approvals}${(msg.cards||[]).map(watchCardHTML).join('')}${end}</div>`;
+  if(!sections.length)sections.push({offset:0,at:msg.at});
+  let nextError=0;
+  return sections.map((section,i)=>{
+    const last=i===sections.length-1;
+    const boundary=last?msg.text.length:sections[i+1].offset;
+    let cursor=section.offset,body='';
+    while(nextError<errors.length&&(last||errors[nextError].offset<=boundary)){
+      const {id,offset,at}=errors[nextError++];
+      const position=Math.max(cursor,Math.min(boundary,offset));
+      body+=assistantTextHTML(msg.text.slice(cursor,position))+assistantToolHTML(msg,tools.get(id),at);
+      cursor=position;
+    }
+    body+=assistantTextHTML(msg.text.slice(cursor,boundary));
+    if(last){
+      body+=[...tools.values()].filter(tool=>tool.status!=='error').map(tool=>assistantToolHTML(msg,tool)).join('');
+      body+=approvals+(msg.cards||[]).map(watchCardHTML).join('')+end;
+      const notes=(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('');
+      body=notes+body;
+    }
+    return `<div class="bubble${last?' '+esc(msg.status):''}">${chatMetaHTML(context,section.at||msg.at)}${body}</div>`;
+  }).join('');
 }
 function drawAssistant(){
   $('chat-context').textContent=scopeText();
   $('chat-model').textContent=effectiveLine()||'Choose a provider';
-  const box=$('messages'),stick=box.scrollHeight-box.scrollTop-box.clientHeight<80;
+  const box=$('messages'),scrollTop=box.scrollTop,stick=box.scrollHeight-scrollTop-box.clientHeight<80;
   const messages=[...assistantChat.messages,...(assistantChat.pending?[assistantChat.pending]:[]),...assistantChat.queue];
   paintKeepingFocus('messages',()=>{
     box.innerHTML=(messages.length?messages.map(messageHTML).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>')
       +(assistantChat.local?`<div class="bubble error"><p class="bubble-error" role="alert">${esc(assistantChat.local)}</p></div>`:'');
   });
-  if(stick)scrollChatToEnd();
+  if(stick)scrollChatToEnd();else box.scrollTop=scrollTop;
   $('chat-stop').hidden=!assistantChat.busy;
   const send=document.querySelector('#chat-form .send');
   const sendLabel=assistantChat.busy?'Queue message':'Send message';
@@ -297,7 +345,16 @@ function handleAssistantEvent(event){
     const reply=replyFor(event);
     if(event.type==='delta'&&reply){reply.text+=event.text;if(event.segments)reply.segments=event.segments}
     else if(event.type==='tool'&&reply){reply.tools.push({...event.tool,status:'running'})}
-    else if(event.type==='tool_result'&&reply){const tool=reply.tools.find(t=>t.id===event.id);if(tool)Object.assign(tool,{status:event.error?'error':'done',text:event.text})}
+    else if(event.type==='tool_result'&&reply){
+      const tool=reply.tools.find(t=>t.id===event.id);
+      if(tool){
+        Object.assign(tool,{status:event.error?'error':'done',text:event.text});
+        if(event.error){
+          const errors=reply.toolErrors??=[];
+          if(!errors.some(error=>error.id===event.id))errors.push({id:event.id,offset:event.offset??reply.text.length,at:event.at??new Date().toISOString()});
+        }
+      }
+    }
     else if(event.type==='approval'&&reply){reply.approvals.push(event)}
     else if(event.type==='approval_done'&&reply){reply.approvals=reply.approvals.filter(a=>a.approvalId!==event.approvalId)}
     else if(event.type==='notice'&&reply){reply.notes.push(event.text)}
@@ -315,6 +372,17 @@ function handleAssistantEvent(event){
   queueChatDraw();
 }
 $('messages').addEventListener('click',e=>{
+  const error=e.target.closest('[data-tool-error]');
+  if(error){
+    const key=error.dataset.toolError;
+    toolErrorOverrides.delete(key);
+    toolErrorOverrides.set(key,error.getAttribute('aria-expanded')==='true');
+    if(toolErrorOverrides.size>1200)toolErrorOverrides.delete(toolErrorOverrides.keys().next().value);
+    state.assistantToolErrors=[...toolErrorOverrides];
+    save();
+    drawAssistant();
+    return;
+  }
   const queued=e.target.closest('[data-remove-queued]');
   if(queued){
     assistantChat.queue=assistantChat.queue.filter(message=>message.queueId!==Number(queued.dataset.removeQueued));

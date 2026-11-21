@@ -63,6 +63,12 @@ body:has(#dashboard-host:not([hidden])) #screen {flex:none}
 dialog {padding:24px;width:min(490px,94vw);max-height:90dvh;overflow:auto;border-color:var(--separator-subtle)}
 dialog input,dialog select {border-color:var(--separator-subtle);margin:5px 0 0}
 dialog label {font-size:13px;color:var(--text-secondary)}
+#settings {box-sizing:border-box;width:min(700px, calc(100% - 32px));max-width:none;padding:clamp(16px, 4vw, 24px)}
+#settings .segments,#settings .links {flex-wrap:wrap}
+#settings .workflow > span:nth-child(2) {min-width:0;overflow-wrap:anywhere}
+#model-form textarea {display:block;box-sizing:border-box;width:100%;margin-top:5px;padding:10px;resize:vertical;border:1px solid var(--separator-subtle);border-radius:6px;background:var(--surface-tool);color:var(--text-primary);font:12px var(--font-mono)}
+#model-form textarea:focus-visible {outline:2px solid var(--focus-ring);outline-offset:3px}
+#model-form .field-help {display:block;margin-top:6px;color:var(--text-muted);font-size:12px}
 dialog .actions {margin-top:18px}.actions kbd {margin-right:auto}
 .choices {display:grid;gap:4px;margin:12px 0;max-height:32vh;overflow:auto}
 .workflow {display:flex;gap:12px;align-items:center;padding:11px;width:100%;border-radius:8px;border:1px solid transparent}
@@ -119,9 +125,19 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 .model-tools {display:flex;align-items:center;justify-content:space-between;gap:6px}
 #quick-model-key {flex:none;font:11px var(--font-mono);padding:2px 5px;color:var(--text-muted);border:1px solid var(--separator-subtle);border-radius:4px}
 #native-error {padding:6px 16px;color:var(--attention);background:var(--surface-tool);font-size:12px}
-.bubble.streaming:last-child p::after {content:'▍';color:var(--accent-primary);margin-left:1px}
+.bubble.streaming:last-child > .assistant-text:last-of-type::after {content:'▍';color:var(--accent-primary);margin-left:1px}
 .bubble .tool {margin:8px 0 0;padding:6px 8px;border:1px solid var(--separator-subtle);border-radius:6px;background:var(--surface-tool);font-size:12px;overflow-wrap:anywhere}
 .bubble .tool.error {border-color:var(--attention)}.bubble .tool small {color:var(--text-muted)}.tool-error,.bubble-error {color:var(--attention);margin-top:6px}
+.assistant-text + .tool,.bubble .tool + .assistant-text {margin-top:8px}
+.tool-error-heading,.bubble .tool-error-summary {display:flex;align-items:center;gap:6px;text-align:left}
+.tool-error-heading code {min-width:0;margin-right:auto}
+.tool-error-time {min-width:0;color:var(--text-muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tool-error-heading .icon {width:20px;height:20px;flex:none}
+.bubble .tool-error-summary {width:100%;padding-block:2px;border-color:var(--separator-subtle)}
+.bubble .tool-error-summary code {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bubble .tool-error-summary small {margin-left:auto;color:var(--attention);flex:none}
+.bubble .tool-error-summary span {color:var(--text-muted)}
+.bubble .tool-error-summary:hover {background:var(--surface-hover)}
 .bubble .approval {margin:8px 0 0;padding:8px;border:1px solid var(--attention);border-radius:6px;background:var(--surface-tool)}.approval code {display:block;margin:6px 0;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text-muted)}.approval .actions {display:flex;gap:8px;justify-content:flex-end}
 
 .project-tile {position:relative;min-width:0}.project-tile .tile {width:100%;height:100%}
