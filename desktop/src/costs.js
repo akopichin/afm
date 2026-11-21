@@ -307,6 +307,15 @@ export class Costs {
         name === 'usd' && !priced ? ranges.map(() => null) : this.history.deltas(subject.key, field, name === 'idle' ? period : ranges)]));
       const run = runs[subject.key] = Object.fromEntries(Object.entries(readings).map(([name, [total]]) => [name, total]));
       run.meta = { name: subject.name, projectId: subject.projectId, startedAt: subject.startedAt, finished: subject.finished };
+      if (!finished) {
+        run.meta.wholeRun = subject.startedAt !== null && subject.startedAt >= from && subject.startedAt <= to;
+        if (run.meta.wholeRun && subject.entry && to >= this.now() - 1000) {
+          const entry = subject.entry;
+          const at = entry.stale ? Math.min(to, this.seenAt.get(subject.key) ?? to) : to;
+          run.windowTotals = { elapsed: liveMs(entry.elapsed, at), idle: liveMs(entry.idle, at),
+            work: entry.stageWork ? liveMs(entry.stageWork, at) : null, tokens: entry.tokens, usd: priced ? entry.money?.usd ?? null : null };
+        }
+      }
       if (finished) {
         run.meta.status = subject.status;
         run.meta.wholeRun = subject.wholeRun;
@@ -323,6 +332,8 @@ export class Costs {
       run.anchors = { cost: run.asOf.usd, work: run.asOf.work };
       run.buckets = { cost: show ? readings.usd.slice(1) : null, tokens: readings.tokens.slice(1),
         time: readings.elapsed.slice(1), work: readings.work.slice(1) };
+      const record = field => this.history.recorded(subject.key, field, from, to, buckets);
+      run.recorded = { cost: priced ? record('usd') : [], tokens: record('tokens'), time: record('elapsedMs'), work: record('workMs') };
     }
     const series = buckets ? { from, to, buckets } : null;
     return { available: true, from, to, runs, series };

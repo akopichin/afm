@@ -223,8 +223,9 @@ time, so Desktop shows Stage work (the time stages were working) or a dash.
   each run finished. Estimated prices use only saved observations. *As of* in
   Finished shows runs with a recorded end by the selected time.
 - **Range:** *Since start*, *24h* or *7d*. Growth ranges come from Desktop's
-  own history, so a run that started before Desktop watched it shows a note
-  that history starts later. A gap, a counter reset or a figure that was
+  own history. If an active run started within the range, its period totals
+  use AFM’s cumulative counters. Older runs show a note when history starts
+  later. A gap, a counter reset or a figure that was
   unavailable is labelled and never counted as zero.
 - **As of:** drag the slider up to seven days back. The label shows the local
   date, time and zone; each row also shows when its figures were really read.
@@ -235,8 +236,11 @@ time, so Desktop shows Stage work (the time stages were working) or a dash.
   and estimated cost with deltas, plus stages and overhead side by side.
 - **Hide prices:** removes every price from the page and from stored history.
   Runs whose prices AFM hides are never shown with money.
-- **Home tiles:** one cumulative 24-hour line per active run and the
-  since-start total; without prices the tiles show Stage work.
+- **Charts:** Costs and Home show time and value axes, a line for each run,
+  and a dashed total. Hover to see the value and timestamp or interval.
+  When no interval growth is known for active runs, Costs shows the saved
+  cumulative readings with gaps. Home uses cumulative readings over the
+  last 24 hours and shows Stage work when prices are unavailable or hidden.
 
 Desktop collects costs only while Home or Costs is shown and the window is
 visible, so background polling is unchanged. While the live range is open,

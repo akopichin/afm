@@ -4,6 +4,8 @@
 
 ### Improvement:
 
+- Label Costs and Home chart axes and show total and per-run series with values on hover.
+
 - Open `afm://library/install` links to review and add Git pipeline sources in Library.
 - Send queued Assistant follow-ups immediately during a managed wait and keep background AFM runs working.
 - Switch between active and finished runs in Costs, with final report totals and recorded usage history for finished runs.
@@ -19,6 +21,8 @@
 - Show a cumulative 24-hour cost line per active run on Home project tiles.
 
 ### Fix:
+
+- Use AFM counters for runs within the selected Costs period and preserve readings across gaps.
 
 - Avoid late banners for questions already open when observation starts.
 - Preserve interrupted watch summaries and link their events to the exact run.
