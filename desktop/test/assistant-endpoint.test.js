@@ -110,7 +110,7 @@ test('the window reaches the assistant only through narrow IPC calls that ignore
   t.after(off);
   const call = (name, ...args) => handlers.get(name)(...args);
   assert.deepEqual([...handlers.keys()].sort(), ['assistant:add-provider', 'assistant:approve', 'assistant:cancel', 'assistant:clear', 'assistant:configure',
-    'assistant:history', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider']);
+    'assistant:follow-up', 'assistant:history', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider']);
   await call('assistant:configure', { permission: 'read' });
   await assert.rejects(call('assistant:configure', { executable: '/bin/sh' }), /Invalid assistant setting/);
   await call('assistant:send', { text: 'hi', images: [SAMPLE_IMAGE], conversationId: 'other', scope: { projectId: undefined, extra: '/etc' }, settings: { permission: 'yolo' } });

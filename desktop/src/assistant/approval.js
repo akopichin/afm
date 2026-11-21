@@ -16,14 +16,16 @@ export class ApprovalServer {
     this.#dir = mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'afm-a-'));
     this.address = process.platform === 'win32' ? `\\\\.\\pipe\\afm-desktop-${path.basename(this.#dir)}` : path.join(this.#dir, 's');
     this.#server = net.createServer(socket => {
-      let buffer = '';
+      let buffer = '', received = false;
       socket.setEncoding('utf8');
       socket.on('error', () => {});
       socket.on('data', async chunk => {
+        if (received) return;
         buffer += chunk;
         if (buffer.length > MAX_LINE) return socket.destroy();
         const end = buffer.indexOf('\n');
         if (end < 0) return;
+        received = true;
         let reply = { approved: false };
         try {
           const answer = await this.onRequest(JSON.parse(buffer.slice(0, end)), socket);
@@ -46,11 +48,17 @@ export class ApprovalServer {
 }
 
 // Bridge side, for requests the app answers with data. Rejects with the app's reason, or when nobody answers.
-export function askLocal(address, request, timeout = 30 * 1000) {
+export function askLocal(address, request, timeout = 30 * 1000, signal) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(address);
     let buffer = '';
-    const finish = (error, value) => { clearTimeout(timer); socket.destroy(); error ? reject(error) : resolve(value); };
+    const finish = (error, value) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      socket.destroy();
+      error ? reject(error) : resolve(value);
+    };
+    const abort = () => finish(signal.reason);
     const timer = setTimeout(() => finish(Error('Desktop did not answer in time.')), timeout);
     socket.setEncoding('utf8');
     socket.on('connect', () => socket.write(JSON.stringify(request) + '\n'));
@@ -65,6 +73,8 @@ export function askLocal(address, request, timeout = 30 * 1000) {
     });
     socket.on('error', () => finish(Error('Desktop is not reachable.')));
     socket.on('close', () => finish(Error('Desktop closed the connection.')));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
   });
 }
 

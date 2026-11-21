@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createBridge } from '../src/assistant/bridge.js';
 import { Desktop } from '../src/desktop.js';
 import { afmBinary } from '../src/binary.js';
 import { makeAssistant, providerHome, settled } from './assistant-support.js';
@@ -43,7 +47,7 @@ async function world(t, kind = 'claude') {
     const text = events.filter(e => e.type === 'delta').map(e => e.text).join('');
     return { text, tools: text.match(/^tools: (.*)$/m)?.[1].split(',').filter(Boolean) ?? [], results: Object.fromEntries([...text.matchAll(/^(afm_\w+):(ok|error):(.*)$/gm)].map(m => [m[1], { status: m[2], body: m[3] }])), events: [...events] };
   };
-  return { desktop, projects, runs: byName, assistant, ask, approvals, decide: value => { decision = value; } };
+  return { desktop, projects, runs: byName, assistant, events, home: ctx.home, env: ctx.env, ask, approvals, decide: value => { decision = value; } };
 }
 
 const stillRunning = async (desktop, run) => (await desktop.runs.list()).find(item => item.key === run.key)?.state === 'running';
@@ -62,6 +66,77 @@ for (const kind of ['claude', 'codex']) {
     if (kind === 'claude') assert.deepEqual(shown, [false, true], 'a refused tool call is surfaced as an error in the feed');
   });
 }
+
+for (const kind of ['claude', 'codex']) {
+  test(`${kind}: a follow-up leaves the AFM run working and continues at a managed wait`, slow, async t => {
+    const w = await world(t, kind);
+    const run = w.runs.alpha;
+    const scope = { runId: run.runId, instanceId: run.instanceId };
+    const status = await w.desktop.host.tool('afm_run_status', { run_id: run.runId });
+    assert.ok(status.cursor);
+    w.env.FAKE_CALLS = JSON.stringify([{ name: 'afm_run_wait', args: { run_id: run.runId, cursor: status.cursor, timeout_seconds: 60 } }]);
+    const commandDone = w.env.FAKE_NATIVE_UNTIL = w.home + '/command-done';
+    const first = await w.assistant.send({ scope, text: 'Wait for alpha' });
+    const parked = () => w.assistant.active.get('main')?.parked;
+    await eventually(parked, { what: 'AFM wait at a checkpoint' });
+    w.assistant.setFollowUp('another-turn', true);
+    assert.ok(parked(), 'a stale signal leaves the wait parked');
+    w.assistant.setFollowUp(first.turnId, true);
+    assert.ok(parked(), 'the earlier shell command must finish before the handoff');
+    await writeFile(commandDone, '');
+    await eventually(() => w.events.find(event => event.type === 'yielded'), { what: 'assistant handoff', timeout: 5000 });
+    assert.equal(await stillRunning(w.desktop, run), true);
+    const reply = (await w.assistant.history()).at(-1);
+    assert.equal(reply.status, 'yielded');
+    w.env.FAKE_CALLS = '[]';
+    delete w.env.FAKE_NATIVE_UNTIL;
+    await w.assistant.send({ scope, text: 'Pause the plan here' });
+    await eventually(() => w.events.find(event => event.type === 'done'), { what: 'follow-up reply' });
+    assert.equal((await w.assistant.history()).at(-2).text, 'Pause the plan here');
+  });
+}
+
+test('an already queued message wakes a generic checkpoint as soon as it starts', slow, async t => {
+  const w = await world(t);
+  w.env.FAKE_CALLS = JSON.stringify([{ name: 'desktop_wait', args: { seconds: 60 } }]);
+  const first = await w.assistant.send({ text: 'Wait between CI status checks' });
+  w.assistant.setFollowUp(first.turnId, true);
+  await eventually(() => w.events.find(event => event.type === 'yielded'), { what: 'generic wait handoff' });
+});
+
+test('a managed wait offers the handoff after a concurrent bridge action has finished', async t => {
+  const action = Promise.withResolvers();
+  const calls = [];
+  const policy = { steering: true, mode: 'edit', scope: { kind: 'all' }, turnId: 'turn' };
+  const bridge = createBridge({ policy, approve: async () => true, host: {
+    listTools: async () => [{ name: 'afm_run_wait', annotations: { readOnlyHint: true } }, { name: 'afm_run_start' }],
+    async callTool(name, _args, signal) {
+      if (name === 'afm_runs_list') return { structuredContent: { runs: [] } };
+      calls.push(name);
+      if (name === 'afm_run_start') return action.promise;
+      return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    },
+  }, local: async ({ op }) => {
+    calls.push(op);
+    return op === 'park' ? { queued: true } : { accepted: true };
+  } });
+  const client = new Client({ name: 'test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  t.after(() => client.close());
+  t.after(() => bridge.close());
+  await bridge.connect(serverTransport);
+  await client.connect(clientTransport);
+  const start = client.callTool({ name: 'afm_run_start', arguments: {} });
+  await eventually(() => calls.includes('afm_run_start'));
+  const wait = client.callTool({ name: 'afm_run_wait', arguments: {} }).catch(error => error);
+  await eventually(() => calls.includes('afm_run_wait'));
+  assert.deepEqual(calls, ['afm_run_start', 'afm_run_wait']);
+  const started = { content: [{ type: 'text', text: 'Run accepted' }] };
+  action.resolve(started);
+  assert.deepEqual(await start, started);
+  assert.match(String(await wait), /abort/i);
+  assert.deepEqual(calls, ['afm_run_start', 'afm_run_wait', 'park', 'yield']);
+});
 
 test('ask mode waits for the user: a declined action does nothing, an approved one runs', slow, async t => {
   const w = await world(t);

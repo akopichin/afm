@@ -132,7 +132,7 @@ function messageHTML(msg){
   }
   const tools=(msg.tools||[]).map(tool=>`<div class="tool ${tool.status}"><code>${esc(tool.name)}</code> <small>${esc(tool.input||'')}</small>${tool.status==='error'?`<p class="tool-error">${esc(tool.text||'Failed')}</p>`:''}</div>`).join('');
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
-  const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
+  const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='yielded'?'<small>Continued with your next message</small>':msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
   const context=[msg.context,msg.effective?.label].filter(Boolean).join(' · ');
   return `<div class="bubble ${msg.status}">${chatMetaHTML(context,msg.at)}${(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('')}${msg.text?`<p>${esc(msg.text)}</p>`:''}${tools}${approvals}${(msg.cards||[]).map(watchCardHTML).join('')}${end}</div>`;
 }
@@ -193,6 +193,9 @@ function queueChatDraw(){
   chatDrawQueued=true;
   requestAnimationFrame(()=>{chatDrawQueued=false;drawAssistant()});
 }
+function notifyAssistantFollowUp(){
+  if(assistantChat.turnId)nativeAFM.assistant.followUp?.(assistantChat.turnId,assistantChat.queue.length>0).catch(showNativeError);
+}
 function sendAssistant(text,fromDraft){
   if(assistantChat.clearing||(fromDraft&&assistantChat.readingImages))return;
   const images=fromDraft?assistantChat.images:[];
@@ -210,7 +213,7 @@ function sendAssistant(text,fromDraft){
   }
   assistantChat.local='';
   assistantChat.queue.push(message);
-  if(assistantChat.busy)drawAssistant();
+  if(assistantChat.busy){notifyAssistantFollowUp();drawAssistant()}
   else drainAssistantQueue();
 }
 async function drainAssistantQueue(){
@@ -271,7 +274,8 @@ const replyFor=event=>assistantChat.messages.find(m=>m.turnId===event.turnId&&m.
 function handleAssistantEvent(event){
   const {messages}=assistantChat;
   if(event.type==='start'){
-    assistantChat.busy=true;assistantChat.local='';assistantChat.pending=null;
+    assistantChat.busy=true;assistantChat.local='';assistantChat.pending=null;assistantChat.turnId=event.turnId;
+    notifyAssistantFollowUp();
     if(!messages.some(m=>m.id===event.message.id))messages.push(event.message,{...event.reply,turnId:event.turnId,approvals:[],notes:[]});
   }else{
     const reply=replyFor(event);
@@ -282,11 +286,11 @@ function handleAssistantEvent(event){
     else if(event.type==='approval_done'&&reply){reply.approvals=reply.approvals.filter(a=>a.approvalId!==event.approvalId)}
     else if(event.type==='notice'&&reply){reply.notes.push(event.text)}
     else if(event.type==='watch_card'&&reply){(reply.cards??=[]).push(event.card)}
-    else if(['done','error','cancelled'].includes(event.type)){
+    else if(['done','error','cancelled','yielded'].includes(event.type)){
       const final={...event.reply,turnId:event.turnId,approvals:[],notes:reply?.notes??[],cards:reply?.cards??[]};
       const at=messages.indexOf(reply);
       if(at>=0)messages[at]=final;else messages.push(final);
-      assistantChat.busy=false;assistantChat.local='';
+      assistantChat.busy=false;assistantChat.local='';assistantChat.turnId=null;
       // Reply finished while the assistant was open: the input is ready for the next message.
       if(!$('assistant').hidden&&document.activeElement===document.body)$('chat-input').focus();
       drainAssistantQueue();
@@ -298,6 +302,7 @@ $('messages').addEventListener('click',e=>{
   const queued=e.target.closest('[data-remove-queued]');
   if(queued){
     assistantChat.queue=assistantChat.queue.filter(message=>message.queueId!==Number(queued.dataset.removeQueued));
+    notifyAssistantFollowUp();
     drawAssistant();
     $('chat-input').focus();
     return;

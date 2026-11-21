@@ -100,7 +100,7 @@ export const providerInfo = (id, extra = {}) => ({ id, name: id === 'claude' ? '
 // Objects built in the page belong to another realm; a JSON copy compares by value.
 const plain = value => JSON.parse(JSON.stringify(value ?? null));
 export function fakeAssistant() {
-  const fake = { listeners: new Set(), saved: [], calls: { scan: 0, send: [], cancel: 0, approve: [], configure: [], add: [], test: [], remove: [], clear: 0 },
+  const fake = { listeners: new Set(), saved: [], calls: { scan: 0, send: [], followUp: [], cancel: 0, approve: [], configure: [], add: [], test: [], remove: [], clear: 0 },
     info: { settings: { provider: 'claude', model: '', reasoning: 'default', permission: 'ask', providers: [] }, scanned: false, providers: [providerInfo('claude'), providerInfo('codex')] } };
   Object.assign(fake, {
     state: async () => fake.info,
@@ -110,6 +110,7 @@ export function fakeAssistant() {
     removeProvider: async id => { fake.calls.remove.push(id); return fake.info; },
     testProvider: async id => { fake.calls.test.push(id); return { id, found: true, ok: true, version: '1.0', auth: { state: 'ready', detail: 'ok' } }; },
     send: async request => { fake.calls.send.push(plain(request)); if (fake.rejectSend) throw Error(fake.rejectSend); return { turnId: 't' + fake.calls.send.length }; },
+    followUp: async (id, queued) => { fake.calls.followUp.push([id, queued]); },
     cancel: async () => { fake.calls.cancel++; return true; },
     approve: async (id, approved) => { fake.calls.approve.push([id, approved]); return true; },
     history: async () => fake.saved,

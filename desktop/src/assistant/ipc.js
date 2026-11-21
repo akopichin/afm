@@ -11,6 +11,7 @@ export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:send', request => assistant.send({
     conversationId: 'main', text: request?.text, images: request?.images,
     scope: { projectId: request?.scope?.projectId, runId: request?.scope?.runId, instanceId: request?.scope?.instanceId } }));
+  handle('assistant:follow-up', (turnId, queued) => assistant.setFollowUp(String(turnId), queued === true));
   handle('assistant:cancel', () => assistant.cancel('main'));
   handle('assistant:approve', (approvalId, approved) => assistant.approve(String(approvalId), approved === true));
   handle('assistant:history', () => assistant.history('main'));

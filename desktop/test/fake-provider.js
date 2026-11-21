@@ -1,6 +1,6 @@
 // A deterministic stand-in for the claude and codex CLIs. Behaviour comes from FAKE_* variables, and every
 // real invocation records its argv, working directory and stdin so tests can inspect them.
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const [kind, ...args] = process.argv.slice(2);
@@ -184,6 +184,19 @@ if (scenario === 'stream') {
   await client.connect(new StdioClientTransport({ command: spec.command, args: spec.args, env: { ...env, ...(spec.env ?? {}) } }));
   const names = (await client.listTools()).tools.map(tool => tool.name);
   say('tools: ' + names.filter(name => /^(afm_run(s_list|_start|_cancel|_attach)|desktop_watch_\w+)$/.test(name)).sort().join(',') + '\n');
+  if (env.FAKE_NATIVE_UNTIL) {
+    const id = 'native-command';
+    const command = type => out({ type, item: { id, type: 'command_execution' } });
+    if (kind === 'codex') command('item.started');
+    else out({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: {} }] } });
+    const check = setInterval(() => {
+      if (!existsSync(env.FAKE_NATIVE_UNTIL)) return;
+      clearInterval(check);
+      if (kind === 'codex') command('item.completed');
+      else out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'Done' }] } });
+    }, 20);
+    check.unref();
+  }
   let n = 0;
   for (const call of JSON.parse(env.FAKE_CALLS ?? '[]')) {
     const id = 'call-' + (++n);

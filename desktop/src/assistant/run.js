@@ -9,7 +9,7 @@ const KILL_GRACE_MS = 2000;
 export function runProcess({ command, args, cwd, env, input, parser, onEvent, grace = KILL_GRACE_MS }) {
   const posix = process.platform !== 'win32';
   const child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: posix, windowsHide: true });
-  let cancelled = false, stderr = '', spawnError = null, killTimer;
+  let cancelled = false, yielding = false, stderr = '', spawnError = null, killTimer;
   child.on('error', error => { spawnError = error; });
   child.stdin.on('error', () => {});
   child.stdin.end(input);
@@ -17,10 +17,27 @@ export function runProcess({ command, args, cwd, env, input, parser, onEvent, gr
   child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-STDERR_LIMIT); });
   const lines = createInterface({ input: child.stdout });
   lines.on('line', line => { for (const event of parser.parse(line)) onEvent(event); });
-  const signal = name => { try { process.kill(posix ? -child.pid : child.pid, name); } catch { /* Already gone. */ } };
+  const signal = (name, group) => {
+    if (!child.pid) return;
+    try { process.kill(posix && group ? -child.pid : child.pid, name); } catch { /* Already gone. */ }
+  };
+  const stop = group => {
+    if (cancelled) return;
+    cancelled = true;
+    signal('SIGTERM', group);
+    killTimer = setTimeout(() => signal('SIGKILL', group), grace);
+  };
   let linesClosed = false;
   lines.on('close', () => { linesClosed = true; });
   const done = new Promise(resolve => {
+    child.on('exit', (code, exitSignal) => {
+      if (!yielding) return;
+      // A command may still hold one of the inherited pipes after the provider exits.
+      clearTimeout(killTimer);
+      child.stdout.unref?.();
+      child.stderr.unref?.();
+      resolve({ code, signal: exitSignal, cancelled, stderr, error: spawnError });
+    });
     child.on('close', (code, exitSignal) => {
       clearTimeout(killTimer);
       const finish = () => resolve({ code, signal: exitSignal, cancelled, stderr, error: spawnError });
@@ -30,11 +47,8 @@ export function runProcess({ command, args, cwd, env, input, parser, onEvent, gr
   });
   return {
     done,
-    cancel() {
-      if (cancelled) return;
-      cancelled = true;
-      signal('SIGTERM');
-      killTimer = setTimeout(() => signal('SIGKILL'), grace);
-    },
+    cancel: () => stop(true),
+    // Yielding a provider must leave commands it already launched alone.
+    yield() { yielding = true; stop(false); },
   };
 }

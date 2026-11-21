@@ -138,9 +138,11 @@ test('messages wait in FIFO order and keep the scope where they were queued', as
   assert.deepEqual(assistant.calls.send, [{ text: 'first', scope: {} }]);
   assert.deepEqual([...d.querySelectorAll('.bubble.queued p')].map(el => el.textContent), ['second', 'third']);
   assert.equal(assistant.calls.cancel, 0);
+  assert.ok(assistant.calls.followUp.length > 0);
+  assert.deepEqual(assistant.calls.followUp.at(-1), ['t1', true]);
 
   const done = id => assistant.emit({ type: 'done', turnId: id, reply: { id: 'r'+id, role: 'assistant', text: 'Done', status: 'done' } });
-  done('t1');
+  assistant.emit({ type: 'yielded', turnId: 't1', reply: { id: 'rt1', role: 'assistant', text: 'Waiting for AFM', status: 'yielded' } });
   assert.deepEqual(assistant.calls.send[1], { text: 'second', scope: { runId: 'ra', instanceId: 'i-ra' } });
   assistant.emit(start('t2', 'second'));
   done('t2');

@@ -36,7 +36,10 @@ export class ClaudeParser {
       const out = [];
       for (const part of event.message?.content ?? []) {
         if (part.type === 'text' && part.text && !this.#streamed) out.push({ type: 'delta', text: part.text });
-        if (part.type === 'tool_use') out.push({ type: 'tool', id: part.id, name: String(part.name).replace(TOOL_PREFIX, ''), input: clip(JSON.stringify(part.input ?? {})) });
+        if (part.type === 'tool_use') {
+          const name = String(part.name);
+          out.push({ type: 'tool', id: part.id, name: name.replace(TOOL_PREFIX, ''), native: !TOOL_PREFIX.test(name), input: clip(JSON.stringify(part.input ?? {})) });
+        }
       }
       this.#streamed = false;
       return out;
@@ -65,10 +68,12 @@ export class CodexParser {
       return [{ type: 'delta', text: (this.#messages++ ? '\n\n' : '') + item.text }];
     }
     // Commands, file changes and searches have effects of their own; nothing may be replayed once one has started.
-    if (item && !['agent_message', 'reasoning', 'mcp_tool_call'].includes(item.type)) return [{ type: 'activity' }];
+    if (item && !['agent_message', 'reasoning', 'mcp_tool_call'].includes(item.type)) {
+      return [{ type: 'activity', ...(item.type === 'command_execution' && item.id ? { command: item.id, active: event.type !== 'item.completed' } : {}) }];
+    }
     if (item?.type === 'mcp_tool_call') {
       const name = String(item.tool ?? 'tool').replace(TOOL_PREFIX, '');
-      if (event.type === 'item.started') return [{ type: 'tool', id: item.id, name, input: clip(JSON.stringify(item.arguments ?? {})) }];
+      if (event.type === 'item.started') return [{ type: 'tool', id: item.id, name, native: Boolean(item.server && item.server !== 'afm'), input: clip(JSON.stringify(item.arguments ?? {})) }];
       if (event.type === 'item.completed') {
         const error = item.status === 'failed' || Boolean(item.error);
         return [{ type: 'tool_result', id: item.id, error, text: clip(item.error?.message ?? textOf(item.result?.content)) }];

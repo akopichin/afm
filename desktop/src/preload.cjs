@@ -66,6 +66,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
     removeProvider:id=>ipcRenderer.invoke('assistant:remove-provider',id),
     testProvider:id=>ipcRenderer.invoke('assistant:test-provider',id),
     send:request=>ipcRenderer.invoke('assistant:send',request),
+    followUp:(turnId,queued)=>ipcRenderer.invoke('assistant:follow-up',turnId,queued),
     cancel:()=>ipcRenderer.invoke('assistant:cancel'),
     approve:(id,approved)=>ipcRenderer.invoke('assistant:approve',id,approved),
     history:()=>ipcRenderer.invoke('assistant:history'),

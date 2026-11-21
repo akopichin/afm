@@ -114,9 +114,17 @@ full date on hover.
 
 Press Enter or click Send while the assistant is replying to queue a follow-up.
 Queued messages are sent in order using the project or run selected when each
-message was queued. Use the × on a queued message to remove it. The square
-button stops the current reply and lets the next queued message proceed.
-Queued messages are kept while Desktop is open.
+message was queued. If the assistant is waiting through AFM or Desktop, Send
+ends that wait and starts the next reply while background work continues. This
+works with Claude Code and Codex through their shared Desktop bridge. Tool
+actions already in flight through the bridge finish before the handoff. During
+ordinary replies and shell commands, follow-ups stay queued until the reply
+finishes or reaches a managed wait. Use the × on a queued message to remove it.
+The square button stops the current reply. Queued messages are kept while Desktop
+is open.
+
+The assistant can use `afm_run_wait` for AFM runs or `desktop_wait` between
+short status checks of other background jobs, such as GitHub Actions.
 
 Paste a screenshot or another image into the message field with
 Command+V on macOS or Ctrl+V on Linux. Preview or remove the attachment before
