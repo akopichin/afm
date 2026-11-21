@@ -571,7 +571,7 @@ func serveCancelRelease(t *testing.T, fx *serveFixture) {
 	}
 	cancelled := waitRow(t, session, "the cancelled launch to exit", launchExited(heldLaunch.LaunchID))
 	requireCleanExit(t, cancelled, "interrupted")
-	requireReportStatus(t, session, held.RunID, "interrupted", "failed")
+	requireReportStatus(t, session, held.RunID, "", "interrupted", "failed")
 
 	// Release: the workflow finishes, the core runtime holds its API until released.
 	fx.releaseAgents()
@@ -583,7 +583,7 @@ func serveCancelRelease(t *testing.T, fx *serveFixture) {
 	mustCall(t, session, "afm_run_release", map[string]any{"run_id": done.RunID}, nil)
 	released := waitRow(t, session, "the released launch to exit", launchExited(doneLaunch.LaunchID))
 	requireCleanExit(t, released, "finished")
-	requireReportStatus(t, session, done.RunID, "finished", "done")
+	requireReportStatus(t, session, done.RunID, done.InstanceID, "finished", "done")
 }
 
 // agentStarted reports whether the agent of runID logged its complete prompt.
@@ -608,10 +608,14 @@ func requireCleanExit(t *testing.T, row serveRow, runStatus string) {
 
 // requireReportStatus reads the report from the run's files and checks how the workflow and its only stage,
 // build, ended.
-func requireReportStatus(t *testing.T, s *sdkmcp.ClientSession, runID, want, buildStatus string) {
+func requireReportStatus(t *testing.T, s *sdkmcp.ClientSession, runID, instanceID, want, buildStatus string) {
 	t.Helper()
 	var report serveReport
-	mustCall(t, s, "afm_run_report", map[string]any{"run_id": runID}, &report)
+	args := map[string]any{"run_id": runID}
+	if instanceID != "" {
+		args["instance_id"] = instanceID
+	}
+	mustCall(t, s, "afm_run_report", args, &report)
 	if report.Run.Status != want {
 		t.Fatalf("report status of %s = %q, want %q", runID, report.Run.Status, want)
 	}

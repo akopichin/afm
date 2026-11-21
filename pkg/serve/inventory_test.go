@@ -255,6 +255,32 @@ func TestFindResolvesEarlierCyclesFromTheReceiptAfterExit(t *testing.T) {
 	}
 }
 
+func TestReportFindSelectsTheExactInstance(t *testing.T) {
+	inv, h, _ := newInventory(t, &fakeWorld{})
+	ctx := context.Background()
+	for _, request := range []string{"first", "second"} {
+		if _, _, err := h.CreateReceipt(request, baseParams, LaunchIdentity{}, now0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.UpdateReceipt(LaunchID(request), now0, func(r *Receipt) {
+			r.State, r.RunID, r.RunsDir = StateExited, "shared-run", "/work/"+request+"/.afm/runs"
+			r.InstanceID = InstanceIDFor(LaunchID(request))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, request := range []string{"first", "second"} {
+		id := InstanceIDFor(LaunchID(request))
+		view, err := inv.find(ctx, "shared-run", id)
+		if err != nil || view.RunsDir != "/work/"+request+"/.afm/runs" {
+			t.Errorf("find(shared-run, %s) = %+v, %v", id, view, err)
+		}
+	}
+	if _, err := inv.find(ctx, "shared-run", "unknown"); !errors.Is(err, ErrRunNotFound) {
+		t.Errorf("find with unknown instance = %v, want %v", err, ErrRunNotFound)
+	}
+}
+
 // An active run the host neither launched nor attached still needs an explicit attach.
 func TestResolveActiveDiscoveredNeedsAttach(t *testing.T) {
 	w := &fakeWorld{markers: map[int]string{100: "m1"}}

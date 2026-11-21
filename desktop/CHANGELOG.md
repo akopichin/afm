@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Show an outcome and run report in finished run tabs after the dashboard closes.
 - Use Command on macOS or Ctrl on Linux for Desktop Home, notification navigation,
   the quick model chooser, and numbered run tabs. Open the project picker with Shift+K and the same modifier.
 - Add a Costs screen with spend, tokens, Elapsed, Idle and Stage work for

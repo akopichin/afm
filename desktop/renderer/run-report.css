@@ -1,0 +1,28 @@
+.run-report {flex:1;min-height:0;overflow:auto;padding:clamp(16px,4vw,40px);background:var(--surface-canvas);color:var(--text-primary)}
+.run-report-page {max-width:980px;margin:0 auto;overflow-wrap:anywhere}
+.run-report-head {display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:22px}
+.run-report-head h1 {font-size:clamp(23px,4vw,34px);font-weight:650;letter-spacing:-.035em}
+.run-report-id {margin-top:5px}
+.run-outcome {flex:none;color:var(--text-secondary);background:var(--surface-raised);border:1px solid var(--separator-subtle);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600}
+.run-outcome::before {content:"";display:inline-block;width:6px;height:6px;margin-right:7px;vertical-align:middle;border-radius:50%;background:currentColor}
+.run-outcome[data-outcome="finished"],.run-report-table [data-stage-outcome="done"] {color:var(--success)}
+.run-outcome[data-outcome="failed"],.run-report-table [data-stage-outcome="failed"],.run-report-table [data-stage-outcome="hook_failed"] {color:var(--danger)}
+.run-outcome[data-outcome="interrupted"] {color:var(--attention)}
+.run-report-metrics {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(165px,100%),1fr));gap:10px;margin:0}
+.run-report-metrics > div,.run-report-section {background:var(--surface-raised);border:1px solid var(--separator-subtle);border-radius:var(--radius-lg)}
+.run-report-metrics > div {padding:14px 16px}
+.run-report-metrics dt {color:var(--text-secondary);font-size:12px}
+.run-report-metrics dd {margin:4px 0 0;font-size:21px;font-weight:600;font-variant-numeric:tabular-nums}
+.run-report-dates {margin-top:12px}
+.run-report-section {margin-top:20px;overflow:hidden}
+.run-report-section h2,.run-report-notes summary {padding:12px 16px;font-size:14px;font-weight:600}
+.run-report-table {overflow-x:auto}
+.run-report-table table {width:100%;border-collapse:collapse;font-size:13px;text-align:left}
+.run-report-table :is(th,td) {padding:9px 16px;border-top:1px solid var(--separator-subtle);font-variant-numeric:tabular-nums}
+.run-report-table thead {background:var(--surface-tool);color:var(--text-secondary)}
+.run-report-table th {font-weight:550}
+.run-report-table td {color:var(--text-secondary);white-space:nowrap}
+.run-report-table tbody th {min-width:100px}
+.run-report-notes summary {cursor:pointer}
+.run-report-notes ul {margin:0;padding:0 16px 14px 34px;color:var(--text-secondary);font-size:13px}
+.run-report-error {margin:6px 0 12px}

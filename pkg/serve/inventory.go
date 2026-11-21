@@ -188,11 +188,18 @@ func (inv *Inventory) Resolve(ctx context.Context, runID string) (RunView, error
 // Find returns a run the host owns (started or attached) whatever its liveness, for reading what it left on
 // disk. An earlier run of a repeating process matches too: its directory is a sibling of the current one.
 func (inv *Inventory) Find(ctx context.Context, runID string) (RunView, error) {
+	return inv.find(ctx, runID, "")
+}
+
+func (inv *Inventory) find(ctx context.Context, runID, instanceID string) (RunView, error) {
 	views, err := inv.List(ctx)
 	if err != nil {
 		return RunView{}, err
 	}
 	for _, v := range views {
+		if instanceID != "" && v.InstanceID != instanceID {
+			continue
+		}
 		if v.Ownership != OwnershipDiscovered && (v.RunID == runID || slices.Contains(v.PreviousRunIDs, runID)) {
 			return v, nil
 		}

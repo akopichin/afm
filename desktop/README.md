@@ -63,6 +63,12 @@ uses AFM's existing override behavior. The Start run button shows a spinner and 
 pipeline and waits for AFM to report readiness. The launcher offers the launch log when an early failure occurs.
 Missing environment variable names from preflight are shown in the launcher.
 
+When a run's dashboard closes, its tab shows a report if the AFM host still
+knows where its files are. The report shows the outcome, elapsed time, stage
+statuses and timings, and available agent time and token counts. Expand
+**Data notes** to see gaps in the saved data. For a command-line copy, run
+`afm report <run-id>` from the project.
+
 To continue the latest interrupted or failed Desktop run in its saved worktree,
 open the run's tab and choose **Continue run**. Desktop reuses the saved launch
 source and worktree. A pipeline continues from its recorded snapshot, and the

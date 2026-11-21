@@ -18,6 +18,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   resume:(id,instance,confirm=false)=>ipcRenderer.invoke('runs:resume',id,instance,confirm),
   deleteRun:(id,instance)=>ipcRenderer.invoke('runs:delete',id,instance),
   release:(id,instance)=>ipcRenderer.invoke('runs:release',id,instance),
+  runReport:(id,instance)=>ipcRenderer.invoke('runs:report',id,instance),
   attach:endpoint=>ipcRenderer.invoke('runs:attach',endpoint),
   version:()=>ipcRenderer.invoke('app:version'),
   workspace:()=>ipcRenderer.invoke('workspace:get'),

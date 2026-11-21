@@ -12,7 +12,7 @@ function uiRunState(run,kind){
   return kind==='approval'?'review':kind==='question'?'question':'running';
 }
 function runSignature(run,state,live){
-  return [run.key,run.name,run.origin,run.mode,run.state,run.status,state,run.can.open,run.can.cancel,run.can.release,run.can.resume,run.can.delete,live?.handle,live?.stageId,live?.url,live?.title].join('|');
+  return [run.key,run.name,run.origin,run.mode,run.state,run.status,state,run.can.open,run.can.cancel,run.can.release,run.can.report,run.can.resume,run.can.delete,live?.handle,live?.stageId,live?.url,live?.title].join('|');
 }
 function toRun(run,state,signature,live){
   return {id:encodeURIComponent(run.key),key:run.key,rawId:run.runId,instance:run.instanceId,flow:run.name||run.runId,

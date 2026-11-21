@@ -146,7 +146,11 @@ function render(){
       :'<div class="livebar"><i class="dot"></i><code>Checkout</code><small>Demo browser</small></div><div id="native-live-tab" class="view"></div>';
     return
   }
-  if(!isDemo&&!r.can.open){area.innerHTML=`<p class="empty">${esc(unavailable(r))}</p>`;return}
+  if(!isDemo&&!r.can.open){
+    if(r.hostState==='finished'&&r.can.report)area.append(finishedRunReport(r));
+    else area.innerHTML=`<p class="empty">${esc(unavailable(r))}</p>`;
+    return
+  }
   let frame=dashboards.touch(r.id);
   if(!frame){
     frame=document.createElement(isDemo ? 'iframe' : 'div');
