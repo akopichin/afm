@@ -245,7 +245,7 @@ func runDirOf(v RunView, runID string) string {
 }
 
 func (g *Gateway) report(ctx context.Context, in reportInput) (*runreport.Report, error) {
-	v, err := g.cfg.Inventory.find(ctx, in.RunID, in.InstanceID)
+	v, err := g.cfg.Inventory.findReportRun(ctx, in.RunID, in.InstanceID)
 	if err != nil {
 		return nil, err
 	}

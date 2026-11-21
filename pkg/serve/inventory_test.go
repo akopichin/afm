@@ -271,12 +271,12 @@ func TestReportFindSelectsTheExactInstance(t *testing.T) {
 	}
 	for _, request := range []string{"first", "second"} {
 		id := InstanceIDFor(LaunchID(request))
-		view, err := inv.find(ctx, "shared-run", id)
+		view, err := inv.findReportRun(ctx, "shared-run", id)
 		if err != nil || view.RunsDir != "/work/"+request+"/.afm/runs" {
 			t.Errorf("find(shared-run, %s) = %+v, %v", id, view, err)
 		}
 	}
-	if _, err := inv.find(ctx, "shared-run", "unknown"); !errors.Is(err, ErrRunNotFound) {
+	if _, err := inv.findReportRun(ctx, "shared-run", "unknown"); !errors.Is(err, ErrRunNotFound) {
 		t.Errorf("find with unknown instance = %v, want %v", err, ErrRunNotFound)
 	}
 }
