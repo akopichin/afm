@@ -354,6 +354,11 @@ npm run build && npm run check:package
 
 For the Docker check, run `./scripts/docker-check.sh` in the desktop directory. It cross-compiles the Linux AFM sidecar on the host using the checkout’s pinned Go modules, copies the inputs into a disposable container and installs Linux dependencies there. It runs JS checks, keyboard tests, an actual temporary AFM host/launch/dashboard/cancel integration, the inventory benchmark, and native-to-container packaging. The container exits after verifying the artifact. The Mac build is generated on the Mac. Finder startup, native focus, accessibility, compositor behavior and end-to-end stage browsing need native verification.
 
+The Desktop release workflow cross-compiles the Intel macOS AFM sidecar on
+Ubuntu and checks its SHA-256 after downloading the same-commit artifact on
+Intel macOS. The Intel runner still tests and packages Desktop and opens the
+resulting application for the native smoke check.
+
 Production run dashboards open in sandboxed top-level Electron views. Each view connects to the verified origin for its run and respects the AFM dashboard’s framing policy.
 
 The Mac launcher finishes with `npm run smoke:mac`. It opens the packaged production window in a temporary profile, checks first-run setup, assistant focus and a real stage row served by the bundled AFM host, then closes the window and cancels the temporary run. Successful package inspection alone does not pass this gate.

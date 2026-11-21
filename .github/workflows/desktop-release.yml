@@ -21,14 +21,10 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || format('ds-v{0}', inputs.version) }}
 
 jobs:
-  build:
-    name: Test and archive on ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+  afm-intel:
+    name: Build AFM for Intel macOS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GOPRIVATE: github.com/akopichin/afm-engine
       GOWORK: 'off'
@@ -37,66 +33,60 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify desktop release tag
-        shell: bash
-        run: |
-          number='(0|[1-9][0-9]*)'
-          [[ "$RELEASE_TAG" =~ ^ds-v${number}\.${number}\.${number}$ ]]
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-          fi
+      - name: Verify the AFM source revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build the AFM dashboard and install Desktop
+      - name: Build the AFM dashboard
         run: |
           npm ci --prefix pkg/web/dashboard
           npm run build --prefix pkg/web/dashboard
-          npm ci --prefix desktop
-          npm pkg set --prefix desktop "version=${RELEASE_TAG#ds-v}"
       - uses: ./.github/actions/private-go
         with:
           token: ${{ secrets.ENGINE_READ_TOKEN }}
-      - name: Build the native AFM executable
+      - name: Cross-build the Intel AFM executable
+        env:
+          GOOS: darwin
+          GOARCH: amd64
         run: npm run sidecar --prefix desktop
       - name: Remove module credentials
         if: always()
         run: rm -f "$HOME/.netrc"
-      - name: Test and package Desktop
-        working-directory: desktop
-        run: |
-          export TMPDIR="$(cd -P "${TMPDIR:-/tmp}" && pwd -P)"
-          npm run check
-          npm test
-          npm run perf
-          npm run build
-          npm run check:package
-      - name: Open the packaged app and verify an AFM run
-        if: runner.os == 'macOS'
-        run: npm run smoke:mac --prefix desktop
-      - name: Archive application bundle
-        working-directory: desktop/dist
-        shell: bash
-        run: |
-          target=$(node -p 'process.platform + "-" + process.arch')
-          bundle="AFM Desktop-$target"
-          out="$RUNNER_TEMP/release"
-          mkdir -p "$out"
-          if [[ "$RUNNER_OS" == macOS ]]; then
-            ditto -c -k --keepParent "$bundle/AFM Desktop.app" "$out/afm-desktop-${RELEASE_TAG#ds-v}-$target.zip"
-          else
-            tar -czf "$out/afm-desktop-${RELEASE_TAG#ds-v}-$target.tar.gz" "$bundle"
-          fi
+      - name: Hash the Intel executable
+        working-directory: desktop/dist/sidecars/darwin-x64
+        run: sha256sum afm > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: afm-desktop-${{ matrix.os }}
-          path: ${{ runner.temp }}/release/afm-desktop-*
+          name: afm-darwin-amd64-${{ github.sha }}
+          path: |
+            desktop/dist/sidecars/darwin-x64/afm
+            desktop/dist/sidecars/darwin-x64/SHA256SUMS
           if-no-files-found: error
-          compression-level: 0
+          retention-days: 7
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04, ubuntu-24.04-arm]
+    uses: ./.github/workflows/desktop-build.yml
+    with:
+      os: ${{ matrix.os }}
+      release_tag: ${{ github.event_name == 'push' && github.ref_name || format('ds-v{0}', inputs.version) }}
+    secrets:
+      ENGINE_READ_TOKEN: ${{ secrets.ENGINE_READ_TOKEN }}
+
+  build-intel:
+    needs: afm-intel
+    uses: ./.github/workflows/desktop-build.yml
+    with:
+      os: macos-15-intel
+      release_tag: ${{ github.event_name == 'push' && github.ref_name || format('ds-v{0}', inputs.version) }}
 
   publish:
     if: github.event_name == 'push'
-    needs: build
+    needs: [build, build-intel]
     environment: afm-release
     runs-on: ubuntu-latest
     permissions:

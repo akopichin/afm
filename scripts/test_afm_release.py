@@ -97,13 +97,45 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         build = wf["jobs"]["build"]
         self.assertNotIn("permissions", build)
         self.assertEqual(set(build["strategy"]["matrix"]["os"]),
-                         {"macos-15", "macos-15-intel", "ubuntu-24.04", "ubuntu-24.04-arm"})
+                         {"macos-15", "ubuntu-24.04", "ubuntu-24.04-arm"})
+        intel = wf["jobs"]["build-intel"]
+        self.assertEqual(intel["with"]["os"], "macos-15-intel")
+        self.assertEqual(intel["uses"], build["uses"])
+        self.assertNotIn("needs", build)
         publish = wf["jobs"]["publish"]
-        self.assertEqual(publish["needs"], "build")
+        self.assertEqual(set(publish["needs"]), {"build", "build-intel"})
         self.assertEqual(publish["if"], "github.event_name == 'push'")
         self.assertEqual(publish["permissions"], {"contents": "write"})
         self.assertNotIn("ENGINE_READ_TOKEN", json.dumps(publish))
         self.assertIn("--latest=false", json.dumps(publish))
+
+    def test_intel_desktop_consumes_only_its_same_run_afm_artifact(self):
+        workflows = pathlib.Path(__file__).parents[1] / ".github/workflows"
+        jobs = yaml.safe_load((workflows / "desktop-release.yml").read_text())["jobs"]
+        producer = jobs["afm-intel"]
+        consumer = jobs["build-intel"]
+        self.assertEqual(producer["runs-on"], "ubuntu-latest")
+        self.assertEqual(consumer["needs"], "afm-intel")
+        self.assertNotIn("secrets", consumer)
+        cross = next(step for step in producer["steps"] if step.get("name") == "Cross-build the Intel AFM executable")
+        self.assertEqual(cross["env"], {"GOOS": "darwin", "GOARCH": "amd64"})
+        upload = next(step for step in producer["steps"] if step.get("uses") == "actions/upload-artifact@v4")
+        steps = yaml.safe_load((workflows / "desktop-build.yml").read_text())["jobs"]["build"]["steps"]
+        download = next(step for step in steps if step.get("uses") == "actions/download-artifact@v4")
+        self.assertEqual(download["with"]["name"], "afm-darwin-amd64-${{ github.sha }}")
+        self.assertEqual(download["with"]["name"], upload["with"]["name"])
+        self.assertNotIn("run-id", download["with"])
+        self.assertEqual(set(upload["with"]["path"].split()), {
+            download["with"]["path"] + "/afm", download["with"]["path"] + "/SHA256SUMS",
+        })
+        verify = next(step for step in steps if step.get("name") == "Verify the Intel AFM artifact")
+        self.assertIn("shasum -a 256 -c SHA256SUMS", verify["run"])
+        self.assertLess(steps.index(download), steps.index(verify))
+        package = next(step for step in steps if step.get("name") == "Test and package Desktop")
+        self.assertLess(steps.index(verify), steps.index(package))
+        for step in steps:
+            if step.get("uses") == "./.github/actions/private-go" or "npm run sidecar" in step.get("run", ""):
+                self.assertEqual(step["if"], "inputs.os != 'macos-15-intel'")
 
 
     def test_desktop_cask_matches_both_mac_archives(self):

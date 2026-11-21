@@ -1,0 +1,102 @@
+name: Build AFM Desktop
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        required: true
+    secrets:
+      ENGINE_READ_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and archive on ${{ inputs.os }}
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 25
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      GOPRIVATE: github.com/akopichin/afm-engine
+      GOWORK: 'off'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify desktop release tag
+        shell: bash
+        run: |
+          number='(0|[1-9][0-9]*)'
+          [[ "$RELEASE_TAG" =~ ^ds-v${number}\.${number}\.${number}$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the AFM dashboard and install Desktop
+        run: |
+          npm ci --prefix pkg/web/dashboard
+          npm run build --prefix pkg/web/dashboard
+          npm ci --prefix desktop
+          npm pkg set --prefix desktop "version=${RELEASE_TAG#ds-v}"
+      - uses: ./.github/actions/private-go
+        if: inputs.os != 'macos-15-intel'
+        with:
+          token: ${{ secrets.ENGINE_READ_TOKEN }}
+      - name: Build the native AFM executable
+        if: inputs.os != 'macos-15-intel'
+        run: npm run sidecar --prefix desktop
+      - name: Remove module credentials
+        if: always() && inputs.os != 'macos-15-intel'
+        run: rm -f "$HOME/.netrc"
+      - name: Download the AFM executable built for Intel macOS
+        if: inputs.os == 'macos-15-intel'
+        uses: actions/download-artifact@v4
+        with:
+          name: afm-darwin-amd64-${{ github.sha }}
+          path: desktop/dist/sidecars/darwin-x64
+      - name: Verify the Intel AFM artifact
+        if: inputs.os == 'macos-15-intel'
+        working-directory: desktop/dist/sidecars/darwin-x64
+        run: |
+          shasum -a 256 -c SHA256SUMS
+          chmod +x afm
+      - name: Test and package Desktop
+        working-directory: desktop
+        run: |
+          export TMPDIR="$(cd -P "${TMPDIR:-/tmp}" && pwd -P)"
+          npm run check
+          npm test
+          npm run perf
+          npm run build
+          npm run check:package
+      - name: Open the packaged app and verify an AFM run
+        if: runner.os == 'macOS'
+        run: npm run smoke:mac --prefix desktop
+      - name: Archive application bundle
+        working-directory: desktop/dist
+        shell: bash
+        run: |
+          target=$(node -p 'process.platform + "-" + process.arch')
+          bundle="AFM Desktop-$target"
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            ditto -c -k --keepParent "$bundle/AFM Desktop.app" "$out/afm-desktop-${RELEASE_TAG#ds-v}-$target.zip"
+          else
+            tar -czf "$out/afm-desktop-${RELEASE_TAG#ds-v}-$target.tar.gz" "$bundle"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: afm-desktop-${{ inputs.os }}
+          path: ${{ runner.temp }}/release/afm-desktop-*
+          if-no-files-found: error
+          compression-level: 0

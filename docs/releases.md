@@ -66,8 +66,12 @@ Desktop tags, and pushes a single annotated tag for the published main commit.
 To preview it, use `./scripts/release.sh --dry-run --desktop patch --branch main`.
 
 The Desktop workflow builds the dashboard, the pinned AFM executable and Electron
-on macOS and Linux (arm64 and x64). It runs the Desktop tests, performance checks
-and package inspection on each runner, and opens the packaged app on macOS. After
+for macOS and Linux (arm64 and x64). An Ubuntu job cross-compiles the AFM executable
+for Intel macOS from the Desktop commit and uploads it with a SHA-256 checksum.
+The Intel job downloads that artifact from the same workflow run, verifies its
+checksum and uses it for native tests and packaging. It needs neither a Go setup
+nor access to the private engine module. Each platform runs Desktop tests,
+performance checks and package inspection, and both macOS jobs open the packaged app. After
 all four builds pass it publishes a GitHub Release named **AFM Desktop** with the
 version from the tag. Download the `afm-desktop-<version>-darwin-<arch>.zip` for
 Mac or `afm-desktop-<version>-linux-<arch>.tar.gz` for Linux and verify it with
