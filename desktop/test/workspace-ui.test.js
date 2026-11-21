@@ -15,6 +15,47 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
+test('run Changes opens by shortcut, filters the tree, and remembers the diff layout', async t => {
+  const calls=[];
+  const {w,d,key,native}=await openShell(t,twoProjects([]),{
+    runChanges:async (...args)=>{
+      calls.push(args);
+      return {token:'snapshot',branch:'feature',kind:'worktree',base:'a'.repeat(40),working:true,
+        comparison:args[2],choices:{start:true,main:true},files:[{path:'pkg/a.go',status:'M'},{path:'docs/b.md',status:'A'}]};
+    },
+    runChangePatch:async (_token,path)=>({path,patch:'@@ -1 +1 @@\n-old\n+new\n'}),
+  });
+  d.querySelector('[data-project="a"]').click();
+  await tick();
+  assert.deepEqual(calls,[],'opening a run leaves Git idle');
+  native.emitDashboard(ra.key,{navigate:'changes'});
+  await tick();
+  assert.deepEqual(calls,[[ra.runId,ra.instanceId,'start']]);
+  const layout=name=>d.querySelector(`[data-diff-layout="${name}"]`);
+  assert.equal(layout('unified').getAttribute('aria-pressed'),'true');
+  assert.match(d.querySelector('.run-diff-scroll').textContent,/\+new/);
+  layout('split').click();
+  assert.ok(d.querySelector('.run-diff-pair'));
+  const search=d.querySelector('.run-change-search input');
+  search.value='docs/';
+  search.dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.deepEqual([...d.querySelectorAll('[data-diff-file]')].map(file=>file.dataset.diffFile),['docs/b.md']);
+  d.querySelector('[data-diff-file]').click();
+  await tick();
+  assert.equal(d.querySelector('.run-change-file-name').textContent,'docs/b.md');
+  key('KeyD','d',{metaKey:true});
+  await tick();
+  assert.equal(d.querySelector('.run-changes'),null);
+  assert.equal(calls.length,1);
+  key('KeyD','d',{metaKey:true});
+  await tick();
+  assert.equal(layout('split').getAttribute('aria-pressed'),'true');
+  assert.equal(JSON.parse(w.localStorage.getItem('afm.desktop.workspace')).runDiffLayout,'split');
+  d.querySelector('[data-diff-mode="main"]').click();
+  await tick();
+  assert.equal(calls.at(-1)[2],'main');
+});
+
 test('run tabs show status dots and update when a run starts waiting', async t => {
   const finished = runRow('finished', { state: 'finished', status: 'finished', can: { open: false, report: false } });
   const rows = [ra, rb, finished];

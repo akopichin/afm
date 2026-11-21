@@ -94,7 +94,7 @@ if(!isDemo){
   let reportedRun;
   const reportSelection=()=>{
     const {r,tab}=selection();
-    const runKey=r&&tab!=='live'?r.key:null;
+    const runKey=r&&tab==='run'?r.key:null;
     if(runKey===reportedRun)return;
     reportedRun=runKey;
     nativeAFM.reportSelection(runKey).catch(showNativeError);

@@ -9,6 +9,7 @@ import { HostError, dashboardURL } from './host.js';
 import { belongsTo } from './projects.js';
 import { configFilesFor, effectivePolicy, inspectGit, prepareBranch, resolveMode, validWorktreeName } from './git-mode.js';
 import { projectFlows } from './sources.js';
+import { captureRunGit, listRunChanges, readRunPatch } from './run-changes.js';
 
 const MAX_LEDGER = 200;
 const FINISHED = ['finished', 'failed', 'interrupted'];
@@ -70,6 +71,7 @@ export class Runs {
     this.inflight = new Map();
     this.resuming = new Map();
     this.deleting = new Set();
+    this.changeSnapshots = new Map();
   }
 
   async #ledger() { return (await readJSON(this.ledgerFile, { launches: {} })).launches; }
@@ -130,6 +132,46 @@ export class Runs {
     return this.host.tool('afm_run_report', { run_id: runId, instance_id: instanceId });
   }
 
+  async changes(runId, instanceId, mode) {
+    const row = await this.#find(runId, instanceId);
+    const launchId = row.launch?.launch_id;
+    if (row.liveness === 'identity_mismatch') {
+      throw Error('This run has no verified local checkout.');
+    }
+    const [receipt, issued, registry] = await Promise.all([
+      /^[a-f0-9]{64}$/.test(launchId ?? '') ? readJSON(path.join(this.home, '.afm', 'serve', 'launches', launchId + '.json'), null) : null,
+      launchId ? this.#issued() : {},
+      LIVE.includes(row.liveness) && /^[a-f0-9]{32}$/.test(instanceId) ? readJSON(path.join(this.home, '.afm', 'active-runs', instanceId + '.json'), null) : null,
+    ]);
+    const launch = issued[launchId];
+    const saved = receipt?.run_id === runId && receipt.instance_id === instanceId ? receipt : null;
+    const observed = registry?.schema_version === 1 && registry.run_id === runId && registry.instance_id === instanceId &&
+      registry.pid === row.pid && registry.project?.root === row.project_root ? registry.project.worktree : null;
+    const root = observed || saved?.identity?.checkout;
+    const inWorktree = typeof root === 'string' && (observed || path.basename(path.dirname(root)) === '.worktrees');
+    const worktree = inWorktree ? path.basename(root) : saved?.params?.worktree;
+    const kind = worktree ? 'worktree' : launch?.effective?.mode;
+    const projectRoot = launch?.projectRoot ?? row.project_root;
+    const branch = worktree ?? launch?.effective?.branch;
+    if (typeof root !== 'string' || !path.isAbsolute(root) || typeof projectRoot !== 'string' || !path.isAbsolute(projectRoot) ||
+      !['worktree','branch'].includes(kind) || !validWorktreeName(branch)) {
+      throw Error('Changes is available for a run with a verified local worktree or branch.');
+    }
+    let start = launch?.gitStart;
+    if (kind === 'worktree' && start?.checkout !== root) start = null;
+    const {checkout, head, tip, files, ...summary} = await listRunChanges({ root, projectRoot, branch, kind, start, mode });
+    const token = randomUUID();
+    this.changeSnapshots.set(token, {checkout, head, tip, files, ...summary});
+    while (this.changeSnapshots.size > 8) this.changeSnapshots.delete(this.changeSnapshots.keys().next().value);
+    return {...summary, token, files:files.map(({path,status})=>({path,status}))};
+  }
+
+  changePatch(token, file) {
+    const snapshot = this.changeSnapshots.get(token);
+    if (!snapshot) throw Error('The file list expired. Refresh and try again.');
+    return readRunPatch(snapshot, file);
+  }
+
   async cancel(runId, instanceId) {
     const row = await this.#find(runId, instanceId);
     if (!row.actions?.includes('cancel')) throw new HostError('not_supported', 'This run cannot be cancelled from Desktop.');
@@ -178,7 +220,7 @@ export class Runs {
     const hostArgs = { request_id: requestId, project, mode, worktree, ...(pipeline ? {pipeline} : {flow}) };
     const effective = previous.effective;
     await this.#updateLedger(all => ({ ...all, [requestId]: {at:new Date().toISOString(), projectId:project,
-      projectRoot:row.project_root || previous.projectRoot, hostArgs, effective, resumedFrom:oldId, resumeRunId:runId} }));
+      projectRoot:row.project_root || previous.projectRoot, hostArgs, effective, gitStart:previous.gitStart, resumedFrom:oldId, resumeRunId:runId} }));
     const launch = await this.#send(requestId, hostArgs, effective, null, confirmHostRestart);
     const result = await this.waitForLaunch(launch);
     if (result.run_id && result.run_id !== runId) {
@@ -331,8 +373,9 @@ export class Runs {
       ...(plan.effective.noWorktree ? { no_worktree: true } : {}),
       ...(task ? { task } : {}),
     };
+    const gitStart = await captureRunGit(plan).catch(() => null);
     await this.#updateLedger(all => ({ ...all, [requestId]: { ...all[requestId], fingerprint, at: all[requestId]?.at ?? new Date().toISOString(),
-      projectId, projectRoot: plan.project.path, hostArgs, effective: plan.effective } }));
+      projectId, projectRoot: plan.project.path, hostArgs, effective: plan.effective, gitStart } }));
     return this.#send(requestId, hostArgs, plan.effective, undo, confirmHostRestart);
   }
 

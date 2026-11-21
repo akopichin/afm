@@ -14,7 +14,8 @@ const binary = path.join(resources, process.platform === 'win32' ? 'afm.exe' : '
 const archive = path.join(resources, 'app.asar');
 for (const file of ['assets/afm-desktop.png', 'assets/afm-desktop-attention.png', 'src/main.js', 'src/preload.cjs', 'src/dashboard-keys.cjs', 'src/workspace.js', 'src/protocol.js', 'src/library-links.js',
   'src/shortcuts.js', 'src/assistant/assistant.js', 'src/assistant/bridge.js', 'src/assistant/ipc.js', 'src/stage-browser/broker.js', 'src/stage-browser/companion-main.js', 'src/stage-browser/electron-page.js', 'renderer/assistant.js', 'renderer/index.html', 'renderer/inventory.js',
-  'renderer/checkout.html', '.generated/editor/code-editor.js', '.generated/editor/code-editor.css', '.generated/run.html', '.generated/dashboard/skins/graphite/index.css',
+  'renderer/checkout.html', 'renderer/run-changes.js', 'renderer/run-changes.css', 'src/run-changes.js',
+  '.generated/editor/code-editor.js', '.generated/editor/code-editor.css', '.generated/run.html', '.generated/dashboard/skins/graphite/index.css',
   'node_modules/@modelcontextprotocol/sdk/package.json', 'node_modules/yaml/package.json']) {
   if (!statFile(archive, file).size) throw Error('Empty package entry: ' + file);
 }

@@ -300,6 +300,8 @@ handle('runs:delete', (id, instanceId) => desktop.runs.delete(id, instanceId, as
 }));
 handle('runs:release', (id, instanceId) => desktop.runs.release(id, instanceId));
 handle('runs:report', (id, instanceId) => desktop.runs.report(id, instanceId));
+handle('runs:changes', (id, instanceId, mode) => desktop.runs.changes(id, instanceId, mode));
+handle('runs:change-patch', (token, file) => desktop.runs.changePatch(token, file));
 handle('runs:attach', endpoint => desktop.runs.attach(endpoint));
 registerAssistantIpc(handle, assistant, event => window?.webContents.send('assistant:event', event));
 publishWatch = registerWatchIpc(handle, watchTasks, tasks => window?.webContents.send('watch:changed', tasks));

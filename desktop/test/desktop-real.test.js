@@ -104,6 +104,61 @@ test('Continue run reuses a saved worktree and pipeline snapshot after Desktop r
   await eventually(async () => (await reopened.runs.forProject(project.id)).some(run=>run.can.resume), {what:'resumed process exit'});
 });
 
+test('Changes follows the verified worktree and includes committed, staged and untracked files', fast, async t => {
+  const ctx = await tempHome(t);
+  const root = await makeProject(ctx.home,'changes',{git:true,flows:{'changes.yaml':sleepFlow('changes',60)}});
+  const base = git(root,'rev-parse','HEAD');
+  if (git(root,'branch','--show-current') !== 'main') git(root,'branch','-f','main',base);
+  const desktop = await open(t,ctx);
+  const project = await desktop.projects.add(root);
+  const worktree = 'desktop-changes';
+  const started = await desktop.runs.start({requestId:'changes',projectId:project.id,kind:'Flow',file:'changes.yaml',explicit:'worktree',worktree});
+  const live = await desktop.runs.waitForLaunch(started);
+  const folder = path.join(root,'.worktrees',worktree);
+  await writeFile(path.join(folder,'committed.txt'),'committed edit\n');
+  git(folder,'add','committed.txt');
+  git(folder,'-c','user.name=Test','-c','user.email=test@example.com','commit','-m','fixture');
+  await writeFile(path.join(folder,'staged.txt'),'staged edit\n');
+  git(folder,'add','staged.txt');
+  await writeFile(path.join(folder,':(glob)new [file].txt'),'local edit\n');
+  const view = await desktop.runs.changes(live.run_id,live.instance_id,'start');
+  assert.equal(view.base,base);
+  assert.equal(view.branch,worktree);
+  assert.equal(view.working,true);
+  for (const [file, line] of [['committed.txt','committed edit'],['staged.txt','staged edit'],[':(glob)new [file].txt','local edit']]) {
+    assert.ok(view.files.some(item=>item.path===file));
+    assert.ok((await desktop.runs.changePatch(view.token,file)).patch.includes('+'+line));
+  }
+  await assert.rejects(desktop.runs.changePatch(view.token,'../outside'),/changed-files list/);
+  await assert.rejects(desktop.runs.changes(live.run_id,'wrong','start'),/no longer known/);
+  const against = await desktop.runs.changes(live.run_id,live.instance_id,'main');
+  assert.equal(against.comparison,'main');
+  assert.equal(against.base,base);
+  await desktop.runs.cancel(live.run_id,live.instance_id);
+  await eventually(async ()=>(await desktop.runs.list()).some(run=>run.runId===live.run_id&&run.state==='finished'),{what:'cancelled diff fixture'});
+});
+
+test('Changes leaves another branch’s working files out of a branch run', fast, async t => {
+  const ctx = await tempHome(t);
+  const root = await makeProject(ctx.home,'branch-changes',{git:true,flows:{'changes.yaml':sleepFlow('changes',60)}});
+  const original = git(root,'branch','--show-current');
+  const desktop = await open(t,ctx);
+  const project = await desktop.projects.add(root);
+  const started = await desktop.runs.start({requestId:'branch-diff',projectId:project.id,kind:'Flow',file:'changes.yaml',explicit:'branch',branch:'run-diff'});
+  const live = await desktop.runs.waitForLaunch(started);
+  await writeFile(path.join(root,'branch.txt'),'branch edit\n');
+  git(root,'add','branch.txt');
+  git(root,'-c','user.name=Test','-c','user.email=test@example.com','commit','-m','fixture');
+  git(root,'switch',original);
+  await writeFile(path.join(root,'outside.txt'),'another branch\n');
+  const view = await desktop.runs.changes(live.run_id,live.instance_id,'start');
+  assert.equal(view.working,false);
+  assert.deepEqual(view.files,[{path:'branch.txt',status:'A'}]);
+  assert.match((await desktop.runs.changePatch(view.token,'branch.txt')).patch,/\+branch edit/);
+  await desktop.runs.cancel(live.run_id,live.instance_id);
+  await eventually(async ()=>(await desktop.runs.list()).some(run=>run.runId===live.run_id&&run.state==='finished'),{what:'cancelled branch diff fixture'});
+});
+
 test('Delete run removes a stopped run and its clean dedicated worktree after confirmation', fast, async t => {
   const ctx = await tempHome(t);
   const root = await makeProject(ctx.home,'repo',{git:true,flows:{'delete.yaml':sleepFlow('delete',60)}});

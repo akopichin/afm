@@ -47,6 +47,12 @@ for running, yellow for attention, and gray for stopped runs.
 Use **Tasks → New repeating task** to schedule a prompt with its own model
 and optional Telegram delivery.
 
+From a run with a local branch or worktree, open **Changes** from its toolbar
+or press Command+D on macOS (Ctrl+D on Linux). Search the file tree by name or
+path and choose a file to see its diff. **Since run start** uses the commit
+recorded at launch. **Against main** uses the merge base with the locally
+available main branch. Unified is the default. Desktop remembers your layout.
+
 Install the macOS app with `brew install --cask akopichin/afm/afm-desktop`.
 When the tap is already installed, use `brew install --cask afm-desktop`.
 Update it with `brew upgrade --cask afm-desktop`. Homebrew selects the correct

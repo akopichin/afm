@@ -112,6 +112,7 @@ function navigateApp(command){
   }
   if(command==='settings'){closeQueue();closeFocus();openSettings();return}
   if(command==='model'){showQuickModel();return}
+  if(command==='changes'){toggleRunChanges();return}
   if(command==='live'){
     // The native Live view is outside the page's tab order; this opens the run's Live tab if needed and hands it the keyboard.
     closeFocus();
@@ -146,7 +147,7 @@ document.addEventListener('keydown',e=>{
     if(command){e.preventDefault();navigateApp(command)}return;
   }
   if(primary(e)&&!e.altKey&&!e.shiftKey){
-    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model'}[e.code]
+    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyD:selection().r&&!isDemo?'changes':null}[e.code]
       ?? (/^[1-9]$/.test(e.key)&&runTab(Number(e.key))?Number(e.key):null);
     if(command){e.preventDefault();navigateApp(command)}
     return;
@@ -180,7 +181,7 @@ onDashboardMessage((frame,msg)=>{
     document.body.classList.toggle('desktop-focus',Boolean(focusedFrame));
     if(focusedFrame)frame.focus();
   }
-  if(Number.isInteger(msg?.navigate)||['home','next','previous','model','assistant','live','settings'].includes(msg?.navigate))navigateApp(msg.navigate);
+  if(Number.isInteger(msg?.navigate)||['home','next','previous','model','assistant','live','settings','changes'].includes(msg?.navigate))navigateApp(msg.navigate);
   if(msg==='stage-ready')deliverStage();
   if(msg==='stage-opened')pendingStage=null;
 });

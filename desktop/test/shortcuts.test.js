@@ -9,7 +9,7 @@ const PLATFORMS = ['MacIntel', 'Linux x86_64'];
 
 test('Electron reserves only the Desktop navigation bindings from the run view', () => {
   const key = (input, platform = 'darwin') => dashboardShortcutMessage({type: 'keyDown', ...input}, platform);
-  for (const [code, name] of [['KeyH','home'], ['KeyJ','next'], ['KeyK','previous'], ['KeyM','model']]) {
+  for (const [code, name] of [['KeyH','home'], ['KeyJ','next'], ['KeyK','previous'], ['KeyM','model'], ['KeyD','changes']]) {
     assert.deepEqual(key({meta:true, code}), {navigate:name});
   }
   assert.deepEqual(key({alt:true, code:'KeyA'}), {navigate:'assistant'});

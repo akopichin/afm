@@ -1,5 +1,5 @@
 const ALT_ACTIONS = { KeyA: 'assistant', KeyL: 'live' };
-const PRIMARY_ACTIONS = { KeyH: 'home', KeyJ: 'next', KeyK: 'previous', KeyM: 'model' };
+const PRIMARY_ACTIONS = { KeyH: 'home', KeyJ: 'next', KeyK: 'previous', KeyM: 'model', KeyD: 'changes' };
 
 // Window-wide shortcuts that native views forward to the Desktop shell.
 // Option/Alt is matched by physical key because Option changes the typed character on a Mac.

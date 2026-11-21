@@ -20,6 +20,8 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   deleteRun:(id,instance)=>ipcRenderer.invoke('runs:delete',id,instance),
   release:(id,instance)=>ipcRenderer.invoke('runs:release',id,instance),
   runReport:(id,instance)=>ipcRenderer.invoke('runs:report',id,instance),
+  runChanges:(id,instance,mode)=>ipcRenderer.invoke('runs:changes',id,instance,mode),
+  runChangePatch:(token,file)=>ipcRenderer.invoke('runs:change-patch',token,file),
   attach:endpoint=>ipcRenderer.invoke('runs:attach',endpoint),
   version:()=>ipcRenderer.invoke('app:version'),
   workspace:()=>ipcRenderer.invoke('workspace:get'),

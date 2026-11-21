@@ -81,7 +81,7 @@ function openProject(p,r,tab){
   const last=remembered.get(p.id);
   const run=r||p.runs.find(item=>item.id===last?.id)||p.runs.at(-1);
   const view=tab||(run?.id===last?.id?last?.tab:'run');
-  location.hash=[p.id, run?.id, run?.live&&view==='live'?'live':'run'].filter(Boolean).join('/');
+  location.hash=[p.id, run?.id, view==='changes'?'changes':run?.live&&view==='live'?'live':'run'].filter(Boolean).join('/');
 }
 function artwork(index){
   const paths = [
@@ -144,6 +144,7 @@ function runTabStatus(run){
 function render(){
   closeProjectPath();
   const {p,r,tab}=selection();
+  if(tab!=='changes'||!r)closeRunChanges();
   const wantFocus=focusDashboard;focusDashboard=false;
   document.dispatchEvent(new Event("workspace-change"));
   const onCosts=location.hash==='#costs';
@@ -157,7 +158,7 @@ function render(){
   if(onCosts){renderCosts();return}
   if(!p){renderHome();return}
   const liveTab=r?.live&&tab==='live';
-  if(r)remembered.set(p.id,{id:r.id,tab:liveTab?'live':'run'});
+  if(r)remembered.set(p.id,{id:r.id,tab:liveTab?'live':tab==='changes'?'changes':'run'});
   const tabs=p.runs.map((run,index)=>{
     const [status,statusLabel]=runTabStatus(run);
     const title=p.runs.length>1&&index<9?`${statusLabel} · ${modKey} ${index+1}`:statusLabel;
@@ -171,9 +172,11 @@ function render(){
     ?`<button class="action" data-delete-run ${deleting||continuing?'disabled':''}>${deleting?'Deleting…':'Delete run…'}</button>`:'';
   const resumeButton=r?.can?.resume||continuing
     ?`<button class="action" data-resume ${continuing?'disabled aria-busy="true"':deleting?'disabled':''}>${continuing?'Resuming…':'Continue run'}</button>`:'';
-  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${resumeButton}${deleteButton}${r?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
+  const changesButton=r&&!isDemo?`<button type="button" class="action" data-run-changes aria-pressed="${tab==='changes'}" aria-keyshortcuts="${ariaModKey}+D" title="Changes (${modKey} D)">${changesLabel(r)}</button>`:'';
+  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${changesButton}${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${resumeButton}${deleteButton}${r?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
   const area=$('content');
   if(!r){area.innerHTML=`<div class="project-idle"><h1>${esc(p.name)}</h1><p class="path">${esc(p.path)}</p><h2>No runs yet</h2><p class="muted">Choose a flow or pipeline to start in this folder.</p><button class="action primary" data-start>＋ New run</button></div>`;return}
+  if(!isDemo&&tab==='changes'){mountRunChanges(r,area);return}
   if(liveTab){
     const stage=r.liveStage;
     area.innerHTML=stage
@@ -294,6 +297,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('.project-path-panel'))return;
   const el=e.target.closest('button')??e.target.closest('.project-tile')?.querySelector('.open-tile');if(!el)return;
   const {p,r}=selection();
+  if(el.hasAttribute('data-run-changes')){toggleRunChanges();return}
   if(el.dataset.pinProject){
     const id=el.dataset.pinProject;
     if(!pinnedProjectIds.delete(id))pinnedProjectIds.add(id);
