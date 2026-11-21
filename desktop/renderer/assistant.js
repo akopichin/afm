@@ -1,7 +1,10 @@
 'use strict';
 // The real assistant. Providers, settings and the conversation live in the main process; this page shows them,
 // streams the reply as events arrive and sends the user's choices back. The demo keeps its own sample replies.
-const assistantChat={messages:[],busy:false,local:'',scanned:false,scanning:null};
+const assistantChat={messages:[],queue:[],images:[],busy:false,local:'',scanned:false,scanning:null};
+const MAX_QUEUED_MESSAGES=8, MAX_CHAT_IMAGES=4, MAX_CHAT_IMAGE_BYTES=5*1024*1024;
+const chatImageTypes=new Set(['image/png','image/jpeg','image/webp','image/gif']);
+let nextQueuedMessage=0;
 let assistantInfo=null,chatDrawQueued=false;
 
 function authLabel(p){
@@ -122,8 +125,10 @@ function providerError(raw){
 }
 function messageHTML(msg){
   if(msg.role==='user'){
-    const status=msg.error?`<p class="bubble-error" role="alert">${esc(msg.error)}</p>`:msg.pending?'<small>Sending…</small>':'';
-    return `<div class="bubble mine"><small>${esc(msg.context||'')}</small><p>${esc(msg.text)}</p>${status}</div>`;
+    const status=msg.error?`<p class="bubble-error" role="alert">${esc(msg.error)}</p>`:msg.pending?'<small>Sending…</small>'
+      :msg.queued?`<div class="chat-queue-state"><small>Queued</small><button type="button" class="icon" data-remove-queued="${msg.queueId}" aria-label="Remove queued message">×</button></div>`:'';
+    return `<div class="bubble mine${msg.queued?' queued':''}"><small>${esc(msg.context||'')}</small>${msg.text?`<p>${esc(msg.text)}</p>`:''}
+      ${msg.imageCount?`<small>${esc(msg.imageCount)} ${msg.imageCount===1?'image':'images'} attached</small>`:''}${status}</div>`;
   }
   const tools=(msg.tools||[]).map(tool=>`<div class="tool ${tool.status}"><code>${esc(tool.name)}</code> <small>${esc(tool.input||'')}</small>${tool.status==='error'?`<p class="tool-error">${esc(tool.text||'Failed')}</p>`:''}</div>`).join('');
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
@@ -134,16 +139,52 @@ function drawAssistant(){
   $('chat-context').textContent=scopeText();
   $('chat-model').textContent=effectiveLine()||'Choose a provider';
   const box=$('messages'),stick=box.scrollHeight-box.scrollTop-box.clientHeight<80;
-  const messages=assistantChat.pending ? [...assistantChat.messages, assistantChat.pending] : assistantChat.messages;
+  const messages=[...assistantChat.messages,...(assistantChat.pending?[assistantChat.pending]:[]),...assistantChat.queue];
   paintKeepingFocus('messages',()=>{
     box.innerHTML=(messages.length?messages.map(messageHTML).join(''):'<div class="chat-empty"><span>✧</span><h3>What’s running?</h3><p>Explore your projects or launch a workflow.</p></div>')
       +(assistantChat.local?`<div class="bubble error"><p class="bubble-error" role="alert">${esc(assistantChat.local)}</p></div>`:'');
   });
   if(stick)box.scrollTop=box.scrollHeight;
+  $('chat-stop').hidden=!assistantChat.busy;
   const send=document.querySelector('#chat-form .send');
-  send.textContent=assistantChat.busy?'■':'↑';
-  send.setAttribute('aria-label',assistantChat.busy?'Stop reply':'Send message');
-  $('chat-input').required=!assistantChat.busy;
+  const sendLabel=assistantChat.busy?'Queue message':'Send message';
+  send.setAttribute('aria-label',sendLabel);
+  send.title=sendLabel;
+  send.disabled=Boolean(assistantChat.readingImages||assistantChat.clearing);
+}
+function drawChatImages(){
+  const list=$('chat-images');
+  list.hidden=!assistantChat.images.length;
+  list.innerHTML=assistantChat.images.map(({type,data},index)=>`<div class="chat-image">
+    <img src="data:${esc(type)};base64,${esc(data)}" alt="Attachment ${index+1}">
+    <button type="button" class="icon" data-remove-image="${index}" aria-label="Remove image ${index+1}">×</button></div>`).join('');
+}
+function imageData(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(Error('Could not read the pasted image.'));
+    reader.onload=()=>resolve({type:file.type,data:reader.result.split(',')[1]});
+    reader.readAsDataURL(file);
+  });
+}
+async function pasteAssistantImages(event){
+  const files=[...(event.clipboardData?.files??[])].filter(file=>file.type.startsWith('image/'));
+  if(!files.length)return;
+  event.preventDefault();
+  if(assistantChat.readingImages||assistantChat.clearing)return;
+  if(files.length+assistantChat.images.length>MAX_CHAT_IMAGES)assistantChat.local='Attach up to four images per message.';
+  else if(files.some(file=>!chatImageTypes.has(file.type)))assistantChat.local='Attach PNG, JPEG, WebP or GIF images.';
+  else if(files.some(file=>file.size>MAX_CHAT_IMAGE_BYTES))assistantChat.local='Each image must be at most 5 MiB.';
+  else{
+    assistantChat.local='';
+    assistantChat.readingImages=true;
+    drawAssistant();
+    try{assistantChat.images.push(...await Promise.all(files.map(imageData)))}
+    catch(error){assistantChat.local=error.message}
+    assistantChat.readingImages=false;
+    drawChatImages();
+  }
+  drawAssistant();
 }
 // Streaming events arrive faster than the page needs to repaint.
 function queueChatDraw(){
@@ -151,24 +192,49 @@ function queueChatDraw(){
   chatDrawQueued=true;
   requestAnimationFrame(()=>{chatDrawQueued=false;drawAssistant()});
 }
-async function sendAssistant(text){
-  if(assistantChat.busy||assistantChat.clearing)return;
-  const input=$('chat-input');
+function sendAssistant(text,fromDraft){
+  if(assistantChat.clearing||(fromDraft&&assistantChat.readingImages))return;
+  const images=fromDraft?assistantChat.images:[];
+  if(!text.trim()&&!images.length)return;
+  if(assistantChat.queue.length>=MAX_QUEUED_MESSAGES){
+    assistantChat.local='The message queue is full.';
+    drawAssistant();return;
+  }
+  const message={role:'user',text,images,imageCount:images.length,scope:currentScope(),context:scopeText().slice(7),
+    queueId:++nextQueuedMessage,queued:true,restoreDraft:fromDraft&&!assistantChat.busy};
+  if(fromDraft){
+    $('chat-input').value='';
+    assistantChat.images=[];
+    drawChatImages();
+  }
   assistantChat.local='';
+  assistantChat.queue.push(message);
+  if(assistantChat.busy)drawAssistant();
+  else drainAssistantQueue();
+}
+async function drainAssistantQueue(){
+  if(assistantChat.busy||assistantChat.clearing||!assistantChat.queue.length)return;
+  const message=assistantChat.queue.shift();
+  const {text,images,scope}=message;
+  const pending={...message,pending:true,queued:false};
+  const input=$('chat-input');
   assistantChat.busy=true;
-  assistantChat.pending={role:'user',text,context:scopeText().slice(7),pending:true};
-  input.value='';
+  assistantChat.pending=pending;
   drawAssistant();
   try{
-    await nativeAFM.assistant.send({text,scope:currentScope()});
+    await nativeAFM.assistant.send({text,scope,...(images.length?{images}:{})});
   }catch(error){
+    if(assistantChat.pending!==pending)return;
     assistantChat.busy=false;
-    if(assistantChat.pending){
-      assistantChat.messages.push({...assistantChat.pending,pending:false,error:error.message});
-      assistantChat.pending=null;
+    assistantChat.pending=null;
+    assistantChat.messages.push({role:'user',text,context:message.context,imageCount:images.length,error:ipcMessage(error)});
+    if(message.restoreDraft&&!input.value&&!assistantChat.images.length&&!assistantChat.readingImages){
+      input.value=text;
+      assistantChat.images=images;
+      drawChatImages();
     }
-    if(!input.value)input.value=text;
     drawAssistant();
+    drainAssistantQueue();
   }
 }
 // `/clear` is handled here, never sent to a provider: the main process drops the transcript and the provider session together.
@@ -176,20 +242,30 @@ const isClearCommand=text=>text.trim()==='/clear';
 // Electron prefixes errors thrown in the main process.
 const ipcMessage=error=>String(error?.message||error).replace(/^Error invoking remote method '[^']+': (Error: )?/,'');
 async function clearAssistant(){
-  if(assistantChat.clearing)return;
+  if(assistantChat.clearing||assistantChat.readingImages)return;
   assistantChat.local='';
   if(assistantChat.busy){assistantChat.local='A reply is still running. Stop it first, then clear the chat.';drawAssistant();return}
   // Nothing is sent while the main process rewrites the chat, and the first history load can no longer fill it back in.
   assistantChat.clearing=true;
   try{
     await nativeAFM.assistant.clear();
-    Object.assign(assistantChat,{messages:[],pending:null,cleared:true});
+    Object.assign(assistantChat,{messages:[],pending:null,queue:[],images:[],cleared:true});
     $('chat-input').value='';
+    drawChatImages();
   }catch(error){assistantChat.local=ipcMessage(error)}
   assistantChat.clearing=false;
   drawAssistant();
 }
 function stopAssistant(){nativeAFM.assistant.cancel().catch(showNativeError)}
+$('chat-stop').onclick=stopAssistant;
+$('chat-input').addEventListener('paste',pasteAssistantImages);
+$('chat-images').addEventListener('click',event=>{
+  const button=event.target.closest('[data-remove-image]');
+  if(!button)return;
+  assistantChat.images.splice(Number(button.dataset.removeImage),1);
+  drawChatImages();
+  $('chat-input').focus();
+});
 const replyFor=event=>assistantChat.messages.find(m=>m.turnId===event.turnId&&m.role==='assistant');
 function handleAssistantEvent(event){
   const {messages}=assistantChat;
@@ -212,11 +288,19 @@ function handleAssistantEvent(event){
       assistantChat.busy=false;assistantChat.local='';
       // Reply finished while the assistant was open: the input is ready for the next message.
       if(!$('assistant').hidden&&document.activeElement===document.body)$('chat-input').focus();
+      drainAssistantQueue();
     }
   }
   queueChatDraw();
 }
 $('messages').addEventListener('click',e=>{
+  const queued=e.target.closest('[data-remove-queued]');
+  if(queued){
+    assistantChat.queue=assistantChat.queue.filter(message=>message.queueId!==Number(queued.dataset.removeQueued));
+    drawAssistant();
+    $('chat-input').focus();
+    return;
+  }
   const button=e.target.closest('[data-approve]');
   if(button)nativeAFM.assistant.approve(button.dataset.approve,button.dataset.yes==='yes').catch(showNativeError);
 });

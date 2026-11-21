@@ -49,6 +49,7 @@ export function claudeCapabilities(help) {
   return {
     print: hasFlag(help, '-p') || hasFlag(help, '--print'),
     streaming: help.includes('stream-json') && hasFlag(help, '--include-partial-messages'),
+    image: flagSection(help, '--input-format').includes('stream-json'),
     permissionModes: modes,
     skipPermissions: hasFlag(help, '--dangerously-skip-permissions'),
     model: hasFlag(help, '--model'),
@@ -70,6 +71,7 @@ export function codexCapabilities(help, resumeHelp = '') {
     config: hasFlag(help, '--config') || hasFlag(help, '-c'),
     model: hasFlag(help, '--model') || hasFlag(help, '-m'),
     skipGitCheck: hasFlag(help, '--skip-git-repo-check'),
+    image: hasFlag(help, '--image'),
     resume: hasFlag(resumeHelp, '--json') && hasFlag(resumeHelp, '--sandbox') && (hasFlag(resumeHelp, '--config') || hasFlag(resumeHelp, '-c')),
     // A resumed session accepts only what its own help lists, which can be fewer flags than a fresh `exec`.
     resumeFlags: {
@@ -77,6 +79,7 @@ export function codexCapabilities(help, resumeHelp = '') {
       model: hasFlag(resumeHelp, '--model') || hasFlag(resumeHelp, '-m'),
       bypass: hasFlag(resumeHelp, '--dangerously-bypass-approvals-and-sandbox'),
       skipGitCheck: hasFlag(resumeHelp, '--skip-git-repo-check'),
+      image: hasFlag(resumeHelp, '--image'),
     },
   };
 }

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { Assistant } from '../src/assistant/assistant.js';
 import { desktopEnvironment, refreshEnvironment, stopEnvironmentImports } from '../src/environment.js';
 import { Prefs } from '../src/prefs.js';
-import { API_KEYS, makeAssistant, providerHome, settled, stubContext, until } from './assistant-support.js';
+import { API_KEYS, makeAssistant, providerHome, SAMPLE_IMAGE, settled, stubContext, until } from './assistant-support.js';
 import { eventually } from './support.js';
 
 const SECRET = 'sk-ant-secret-value-1234567890';
@@ -71,6 +71,36 @@ test('a missing CLI and a missing login are reported with what to do', async t =
   await assert.rejects(assistant.send({ text: 'hi' }), { code: 'missing_credentials' });
   assert.deepEqual(await ctx.invocations(), [], 'no provider process was started without credentials');
 });
+
+for (const kind of ['claude', 'codex']) {
+  test(`a pasted image reaches the ${kind} CLI and the Desktop transcript stores only its count`, async t => {
+    const ctx = await providerHome(t, { ...API_KEYS, FAKE_PAUSE: '5' });
+    const { assistant, events } = makeAssistant(t, ctx);
+    await assistant.configure({ provider: kind, permission: 'read' });
+    await assert.rejects(assistant.send({ images: [{ ...SAMPLE_IMAGE, data: 'aGVsbG8=' }] }), /invalid/);
+    await assistant.send({ images: [SAMPLE_IMAGE] });
+    await settled(events);
+    assert.equal(events.find(event => event.type === 'start').message.imageCount, 1);
+    assert.equal((await assistant.history())[0].imageCount, 1);
+    assert.equal(JSON.stringify(await assistant.history()).includes(SAMPLE_IMAGE.data), false);
+    assert.equal(events.at(-1).type, 'done');
+    const [call] = await ctx.invocations();
+    assert.equal(call.args.some(arg => arg.includes(SAMPLE_IMAGE.data)), false);
+    if (kind === 'claude') {
+      const at = call.args.indexOf('--input-format');
+      assert.ok(at >= 0);
+      assert.equal(call.args[at + 1], 'stream-json');
+      const [image, text] = JSON.parse(call.stdin).message.content;
+      assert.deepEqual(image, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: SAMPLE_IMAGE.data } });
+      assert.match(text.text, /attached image/);
+    } else {
+      assert.deepEqual(call.images, [SAMPLE_IMAGE.data]);
+      assert.match(call.stdin, /attached image/);
+      const file = call.args.find(arg => arg.startsWith('--image=')).slice('--image='.length);
+      await eventually(async () => await access(file).then(() => false, () => true), { what: 'temporary attachment removed' });
+    }
+  });
+}
 
 test('a reply streams to the window before the provider finishes, and is kept as history', async t => {
   const ctx = await providerHome(t, { FAKE_SCENARIO: 'stream', FAKE_PAUSE: '200' });

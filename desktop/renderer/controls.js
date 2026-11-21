@@ -600,9 +600,9 @@ function toggleChat(open){
   $('assistant-toggle').setAttribute('aria-expanded',String(open));
   if(open){drawChat();$('chat-input').focus();if(!isDemo)ensureAssistantScan()}else $('assistant-toggle').focus();
 }
-function sendMessage(text){
+function sendMessage(text, fromDraft=false){
+  if(!isDemo)return isClearCommand(text)&&(!fromDraft||!assistantChat.images.length)?clearAssistant():sendAssistant(text,fromDraft);
   if(!text.trim())return;
-  if(!isDemo)return isClearCommand(text)?clearAssistant():sendAssistant(text);
   const {p,r}=selection(),context=p?[p.name,r?.flow].filter(Boolean).join(' / '):'All projects';
   state.chat.push({role:'user',text,context});$('chat-input').value='';
   const reply={role:'assistant',text:''};
@@ -634,8 +634,8 @@ function sendMessage(text){
 }
 $('assistant-toggle').onclick=()=>toggleChat($('assistant').hidden);
 $('close-chat').onclick=()=>toggleChat(false);
-$('chat-form').onsubmit=e=>{e.preventDefault();if(!isDemo&&assistantChat.busy)stopAssistant();else sendMessage($('chat-input').value)};
-$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!isDemo&&assistantChat.busy&&!isClearCommand(e.target.value))return;sendMessage(e.target.value)}};
+$('chat-form').onsubmit=e=>{e.preventDefault();sendMessage($('chat-input').value,true)};
+$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendMessage(e.target.value,true)}};
 document.querySelector('.suggestions').onclick=e=>{if(e.target.dataset.prompt)sendMessage(e.target.dataset.prompt)};
 document.addEventListener('workspace-change',drawChat);
 $('launch-hint').title=`${modKey} Shift Enter`;

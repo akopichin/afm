@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Queue Assistant messages during a reply and paste images into the composer.
 - Show an outcome and run report in finished run tabs after the dashboard closes.
 - Use Command on macOS or Ctrl on Linux for Desktop Home, notification navigation,
   the quick model chooser, and numbered run tabs. Open the project picker with Shift+K and the same modifier.

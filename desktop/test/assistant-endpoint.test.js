@@ -5,7 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { registerAssistantIpc } from '../src/assistant/ipc.js';
-import { API_KEYS, makeAssistant, providerHome, settled, until } from './assistant-support.js';
+import { API_KEYS, makeAssistant, providerHome, SAMPLE_IMAGE, settled, until } from './assistant-support.js';
 import { eventually } from './support.js';
 
 const KEY = 'endpoint-key-abcdefgh';
@@ -42,13 +42,17 @@ async function withProvider(t, server, credential, vars = {}) {
 test('an endpoint provider streams its reply with a key read from the referenced variable, never from argv or settings', async t => {
   const server = await endpoint(t);
   const { assistant, events, ctx } = await withProvider(t, server, { type: 'env', ref: 'LOCAL_KEY' }, { LOCAL_KEY: KEY });
-  await assistant.send({ text: 'hello' });
+  await assistant.send({ text: 'hello', images: [SAMPLE_IMAGE] });
   await settled(events);
   assert.deepEqual(events.filter(e => e.type === 'delta').map(e => e.text), ['One ', 'two ', 'three']);
   assert.equal(server.seen[0].url, '/v1/chat/completions');
   assert.equal(server.seen[0].auth, 'Bearer ' + KEY);
   assert.equal(server.seen[0].body.model, 'tiny-model');
   assert.equal(server.seen[0].body.stream, true);
+  assert.deepEqual(server.seen[0].body.messages.at(-1), { role: 'user', content: [
+    { type: 'image_url', image_url: { url: `data:image/png;base64,${SAMPLE_IMAGE.data}` } },
+    { type: 'text', text: 'hello' },
+  ] });
   assert.equal((await readFile(path.join(ctx.home, '.afm/desktop/assistant.json'), 'utf8')).includes(KEY), false);
   assert.equal(JSON.stringify(await assistant.state()).includes(KEY), false);
   assert.equal((await assistant.state()).effective.flags, 'Chat only: no files and no AFM tools');
@@ -109,10 +113,11 @@ test('the window reaches the assistant only through narrow IPC calls that ignore
     'assistant:history', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider']);
   await call('assistant:configure', { permission: 'read' });
   await assert.rejects(call('assistant:configure', { executable: '/bin/sh' }), /Invalid assistant setting/);
-  await call('assistant:send', { text: 'hi', conversationId: 'other', scope: { projectId: undefined, extra: '/etc' }, settings: { permission: 'yolo' } });
+  await call('assistant:send', { text: 'hi', images: [SAMPLE_IMAGE], conversationId: 'other', scope: { projectId: undefined, extra: '/etc' }, settings: { permission: 'yolo' } });
   await eventuallyDone(published);
   assert.equal((await call('assistant:history')).length, 2);
   assert.deepEqual((await call('assistant:history')).map(m => m.role), ['user', 'assistant']);
+  assert.equal((await call('assistant:history'))[0].imageCount, 1);
   assert.equal((await call('assistant:state')).settings.permission, 'read');
 });
 const eventuallyDone = async published => { for (let i = 0; i < 100 && !published.includes('done'); i++) await delay(100); assert.ok(published.includes('done')); };

@@ -103,6 +103,21 @@ Dock icon until the last pending request resolves. A new batch makes the icon
 bounce briefly while the app is in the background. Requests already pending at
 startup show the dot immediately after discovery.
 
+## Assistant chat
+
+Press Enter or click Send while the assistant is replying to queue a follow-up.
+Queued messages are sent in order using the project or run selected when each
+message was queued. Use the × on a queued message to remove it. The square
+button stops the current reply and lets the next queued message proceed.
+Queued messages are kept while Desktop is open.
+
+Paste a screenshot or another image into the message field with
+Command+V on macOS or Ctrl+V on Linux. Preview or remove the attachment before
+sending. A message can contain up to four PNG, JPEG, WebP or GIF images, each up
+to 5 MiB. The selected CLI or endpoint model must support image input.
+Desktop sends the images with the message and records the attachment count in
+its chat history.
+
 ## Background watch tasks
 
 Ask the assistant to watch work in the background, for example "tell me when

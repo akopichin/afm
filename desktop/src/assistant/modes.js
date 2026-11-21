@@ -38,7 +38,7 @@ export const PERMISSION_LABELS = { ask: 'Ask before actions', read: 'Read only',
 // The prompt itself goes through stdin so it never appears in argv.
 // `resume` is the provider's own id of the earlier session to continue, or null for a fresh one.
 // `isolated` (Desktop's own replies) has no tools at all (MCP servers and native ones); a CLI that cannot do that is refused.
-export function buildInvocation({ provider, settings, bridge, systemPrompt, resume = null, isolated = false }) {
+export function buildInvocation({ provider, settings, bridge, systemPrompt, resume = null, isolated = false, hasImages = false, imageFiles = [] }) {
   const { capabilities: caps } = provider;
   const { permission, model, reasoning } = settings;
   if (!provider.permissions.includes(permission))
@@ -50,6 +50,7 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
   let flags;
   if (provider.kind === 'claude') {
     args.push('-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages');
+    if (hasImages) args.push('--input-format', 'stream-json');
     if (!caps.streaming) throw new SettingsError('The installed Claude Code cannot stream partial output.');
     if (model) args.push('--model', model);
     if (reasoning !== 'default') args.push('--effort', reasoning);
@@ -90,6 +91,7 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
       args.push('-c', `mcp_servers.afm.command=${toml(bridge.command)}`, '-c', `mcp_servers.afm.args=${toml(bridge.args)}`);
       if (Object.keys(bridge.env).length) args.push('-c', `mcp_servers.afm.env={${Object.entries(bridge.env).map(([k, v]) => `${k}=${toml(v)}`).join(',')}}`);
     }
+    for (const file of imageFiles) args.push(`--image=${file}`);
     if (resume) args.push(resume);
     args.push('-');
   }

@@ -45,3 +45,4 @@ export function makeAssistant(t, ctx, options = {}) {
 
 export const until = (events, type, what = type) => eventually(() => events.find(event => event.type === type), { timeout: 15000, what });
 export const settled = events => eventually(() => events.find(event => ['done', 'error', 'cancelled'].includes(event.type)), { timeout: 15000, what: 'end of the reply' });
+export const SAMPLE_IMAGE = { type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTbEAAAAASUVORK5CYII=' };

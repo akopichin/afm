@@ -39,6 +39,10 @@ The commands use the same project configuration and run directories as `afm`.
 
 The top bar shows the running Desktop version next to Settings.
 
+In Assistant chat, sending during a reply queues a follow-up in the selected
+run or project. Paste a screenshot into the message field to attach it to a
+message for a provider with image input.
+
 Install the macOS app with `brew install --cask akopichin/afm/afm-desktop`.
 When the tap is already installed, use `brew install --cask afm-desktop`.
 Update it with `brew upgrade --cask afm-desktop`. Homebrew selects the correct

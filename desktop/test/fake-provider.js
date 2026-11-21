@@ -21,6 +21,7 @@ const noResume = old || env.FAKE_NO_RESUME === '1';
 const CLAUDE_HELP = `Usage: claude [options] [command] [prompt]
   -p, --print                           Print response and exit
   --output-format <format>              Output format (choices: "text", "json", "stream-json")
+  --input-format <format>               Input format (choices: "text", "stream-json")
   --include-partial-messages            Include partial message chunks as they arrive
   --permission-mode <mode>              Permission mode to use for the session
                                         (choices: "acceptEdits", "auto",
@@ -41,6 +42,7 @@ const CODEX_HELP = `Usage: codex exec [OPTIONS] [PROMPT]
   -s, --sandbox <SANDBOX_MODE>          Select the sandbox policy
 ${old ? '' : '      --dangerously-bypass-approvals-and-sandbox\n                                        Skip all confirmation prompts\n'}      --skip-git-repo-check             Allow running outside a Git repo
       --json                            Print events to stdout as JSONL
+      --image <FILE>                    Attach an image
 `;
 
 // `codex exec resume` lists fewer flags than `exec`; FAKE_RESUME_STRICT=1 makes it list the fewest. The fake refuses what its help omits.
@@ -48,6 +50,7 @@ const CODEX_RESUME_HELP = `Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROM
   -c, --config <key=value>              Override a configuration value
   -s, --sandbox <SANDBOX_MODE>          Select the sandbox policy
       --json                            Print events to stdout as JSONL
+      --image <FILE>                    Attach an image
 ${env.FAKE_RESUME_STRICT === '1' ? '' : '  -m, --model <MODEL>                   Model the agent should use\n      --skip-git-repo-check             Allow running outside a Git repo\n      --dangerously-bypass-approvals-and-sandbox\n                                        Skip all confirmation prompts\n'}`;
 const loggedIn = env.FAKE_AUTH !== 'none';
 if (args.includes('--version')) { console.log('9.9.9 (fake)'); process.exit(0); }
@@ -57,7 +60,11 @@ if (kind === 'codex' && args[0] === 'exec' && args[1] === 'resume' && args.inclu
 if (args.includes('--help')) { process.stdout.write(kind === 'codex' ? CODEX_HELP : CLAUDE_HELP); process.exit(0); }
 
 const stdin = await new Promise(resolve => { let data = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => { data += chunk; }); process.stdin.on('end', () => resolve(data)); });
-if (env.FAKE_RECORD) appendFileSync(env.FAKE_RECORD, JSON.stringify({ kind, args, cwd: process.cwd(), stdin, hasSecret: Object.values(env).includes(env.FAKE_SECRET ?? '\0'), secretVars: Object.keys(env).filter(name => env[name] === env.FAKE_SECRET) }) + '\n');
+if (env.FAKE_RECORD) {
+  const images = args.filter(arg => arg.startsWith('--image=')).map(arg => readFileSync(arg.slice('--image='.length), 'base64'));
+  appendFileSync(env.FAKE_RECORD, JSON.stringify({ kind, args, cwd: process.cwd(), stdin, ...(images.length ? { images } : {}),
+    hasSecret: Object.values(env).includes(env.FAKE_SECRET ?? '\0'), secretVars: Object.keys(env).filter(name => env[name] === env.FAKE_SECRET) }) + '\n');
+}
 
 // A resumed session keeps its id; a fresh one gets a new one (FAKE_SESSION fixes it for a test).
 const resumed = kind === 'codex' ? (args[0] === 'exec' && args[1] === 'resume' ? args.at(-2) : null) : (args.includes('--resume') ? args[args.indexOf('--resume') + 1] : null);

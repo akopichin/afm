@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Queue follow-ups and paste image attachments in the AFM Desktop Assistant.
 - Show a report in finished AFM Desktop run tabs. The host report accepts an instance ID to select the exact run.
 - Use Command on macOS or Ctrl on Linux for Desktop Home, notification navigation,
   the quick model chooser, and numbered run tabs. Open the project picker with Shift+K and the same modifier.
