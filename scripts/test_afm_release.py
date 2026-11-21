@@ -29,13 +29,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("needs", self.jobs["artifacts"])
         self.assertEqual(self.jobs["docker"]["needs"], "artifacts")
         publish = self.jobs["publish"]
-        self.assertEqual(set(publish["needs"]), {"validate", "artifacts", "docker"})
+        self.assertEqual(set(publish["needs"]), {"validate", "artifacts", "macos-intel", "docker"})
         self.assertNotIn("if", publish)
         self.assertEqual(publish["environment"], "afm-release")
         self.assertEqual(self.workflow[True], {"push": {"tags": ["v*.*.*"]}})
 
     def test_preparation_cannot_publish_or_access_publisher_secrets(self):
-        for name in ("validate", "artifacts", "docker"):
+        for name in ("validate", "artifacts", "macos-intel", "docker"):
             self.assertNotIn("environment", self.jobs[name])
             self.assertNotIn("RELEASE_TOKEN", json.dumps(self.jobs[name]))
             self.assertNotIn("DOCKERHUB_TOKEN", json.dumps(self.jobs[name]))
@@ -63,7 +63,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_publisher_consumes_artifacts_without_recompiling(self):
         upload = next(s for s in self.jobs["artifacts"]["steps"] if s.get("uses") == "actions/upload-artifact@v4")
-        for job in ("docker", "publish"):
+        for job in ("macos-intel", "docker", "publish"):
             download = next(s for s in self.jobs[job]["steps"] if s.get("uses") == "actions/download-artifact@v4")
             self.assertEqual(download["with"]["name"], upload["with"]["name"])
             self.assertNotIn("go build", json.dumps(self.jobs[job]))
@@ -76,6 +76,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertTrue(publish["with"]["push"])
         self.assertEqual(publish["with"]["cache-from"], "type=gha,scope=afm-runtime")
 
+    def test_intel_binary_is_run_on_intel_before_release_publication(self):
+        job = self.jobs["macos-intel"]
+        self.assertEqual(job["runs-on"], "macos-15-intel")
+        self.assertEqual(job["needs"], "artifacts")
+        smoke = next(step for step in job["steps"] if step.get("name") == "Execute the archived Intel binary")
+        self.assertIn('scripts/stage-afm-release-binary.py dist darwin amd64 "$binary"', smoke["run"])
+        self.assertIn('arch -x86_64 "$binary" --version', smoke["run"])
+
     def test_existing_distribution_gate_and_least_privilege_are_preserved(self):
         publish = self.jobs["publish"]
         self.assertEqual(publish["permissions"], {"contents": "write"})
@@ -85,6 +93,40 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("ENGINE_READ_TOKEN", json.dumps(publish))
         for name in ("validate", "artifacts", "docker"):
             self.assertNotIn("permissions", self.jobs[name])
+
+
+class StageReleaseBinaryTests(unittest.TestCase):
+    def test_only_a_verified_regular_binary_is_staged(self):
+        script = pathlib.Path(__file__).with_name("stage-afm-release-binary.py")
+        stage = runpy.run_path(str(script))["stage"]
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            archive = root / "afm_darwin_amd64.tar.gz"
+            binary = root / "stage" / "afm"
+            manifest = root / "build-manifest.json"
+
+            def write_archive(member, body=None):
+                with tarfile.open(archive, "w:gz") as output:
+                    output.addfile(member, io.BytesIO(body) if body else None)
+                manifest.write_text(json.dumps({"artifacts_sha256": {
+                    archive.name: hashlib.sha256(archive.read_bytes()).hexdigest(),
+                }}))
+
+            member = tarfile.TarInfo("afm")
+            member.size = 4
+            write_archive(member, b"test")
+            stage(root, "darwin", "amd64", binary)
+            self.assertEqual(binary.read_bytes(), b"test")
+            self.assertEqual(binary.stat().st_mode & 0o777, 0o755)
+            archive.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                stage(root, "darwin", "amd64", binary)
+            link = tarfile.TarInfo("afm")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "elsewhere"
+            write_archive(link)
+            with self.assertRaisesRegex(ValueError, "exactly one regular AFM executable"):
+                stage(root, "darwin", "amd64", binary)
 
 
 class DesktopReleaseWorkflowTests(unittest.TestCase):

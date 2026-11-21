@@ -129,9 +129,13 @@ No vendor directory or private module cache is uploaded. Dashboard dependencies
 use the ordinary npm cache.
 
 Explicit version tag pushes run the same product checks alongside archive
-builds. Docker preparation uses only verified archives and public runtime files.
-Publication waits for validation, archives, and Docker preparation, then consumes
-those artifacts without recompiling. Only the publication job has Contents write
+builds. AFM publishes CLI archives for macOS, Linux, and Windows on arm64 and
+x64. Before publication, an Intel Mac runner verifies the checksum of
+`afm_darwin_amd64.tar.gz`, signs a local copy as Homebrew does, and runs it to
+check the version.
+Docker preparation uses only verified archives and public runtime files.
+Publication waits for validation, archives, the Intel check, and Docker
+preparation, then consumes those artifacts without recompiling. Only the publication job has Contents write
 permission and uses publisher secrets. It uses AFM's `afm-release` environment;
 configure any release protection rules there and set its environment variable
 `AFM_DISTRIBUTION_APPROVED=true` after resolving engine distribution. The existing

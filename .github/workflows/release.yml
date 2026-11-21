@@ -75,6 +75,25 @@ jobs:
         run: |
           rm -f "$HOME/.netrc"
 
+  macos-intel:
+    name: Verify the AFM release binary on Intel macOS
+    needs: artifacts
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: afm-${{ github.sha }}
+          path: dist
+      - name: Execute the archived Intel binary
+        run: |
+          binary="$RUNNER_TEMP/afm-verify/afm"
+          python3 scripts/stage-afm-release-binary.py dist darwin amd64 "$binary"
+          codesign --force --sign - "$binary"
+          test "$(arch -x86_64 "$binary" --version)" = "afm version ${RELEASE_TAG#v}"
+
   docker:
     name: Prepare Docker image
     needs: artifacts
@@ -112,7 +131,7 @@ jobs:
 
   publish:
     name: Publish validated release
-    needs: [validate, artifacts, docker]
+    needs: [validate, artifacts, macos-intel, docker]
     runs-on: ubuntu-latest
     environment: afm-release
     permissions:

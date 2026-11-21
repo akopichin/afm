@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Verify and run the archived Intel macOS AFM executable before publishing a CLI release.
 - Add repeating Assistant tasks with model selection, result history, and Telegram delivery to AFM Desktop.
 - Show message times and run tab status dots in AFM Desktop.
 - Queue follow-ups and paste image attachments in the AFM Desktop Assistant.
