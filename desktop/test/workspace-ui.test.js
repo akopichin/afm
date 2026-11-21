@@ -173,7 +173,9 @@ test('both sizes of Home card reveal and copy the exact path without opening a p
     const panel=get('project-path-panel');
     assert.equal(panel.hidden,false);
     assert.equal(anchor.nextElementSibling,panel);
-    assert.equal(panel.querySelector('code').textContent,project.path);
+    const text=panel.querySelector('code');
+    assert.equal(text.textContent,project.path);
+    text.click();
     const copy=panel.querySelector('button');
     copy.focus();
     copy.click();

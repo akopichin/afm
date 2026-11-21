@@ -291,7 +291,8 @@ async function deleteRun(project, run) {
   }
 }
 document.addEventListener('click',e=>{
-  const el=e.target.closest('button')??e.target.closest('[data-cost-project]')?.parentElement.querySelector('.open-tile');if(!el)return;
+  if(e.target.closest('.project-path-panel'))return;
+  const el=e.target.closest('button')??e.target.closest('.project-tile')?.querySelector('.open-tile');if(!el)return;
   const {p,r}=selection();
   if(el.dataset.pinProject){
     const id=el.dataset.pinProject;
