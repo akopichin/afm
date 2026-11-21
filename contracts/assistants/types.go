@@ -41,6 +41,8 @@ type Profile struct {
 	ReadonlyEnforcement ReadonlyEnforcement
 	// Budget — лимит расхода по умолчанию для помощников профиля; nil — не задан.
 	Budget *budget.Spec `json:",omitempty"`
+	// StageContext is frozen in the task snapshot so later profile edits affect only new tasks.
+	StageContext *StageContext `json:",omitempty" yaml:"stage_context,omitempty"`
 }
 
 // Capabilities — что разрешено помощнику этого профиля.
@@ -300,8 +302,11 @@ type Continuation struct {
 // Proposal's full definition (type/status lifecycle/payload/etc.) lives in proposal.go (T6.4) — this file
 // originally carried a narrow, uncalled placeholder of the same name; proposal.go supersedes it entirely.
 
-// UnmarshalJSON rejects an explicit null budget, which a *budget.Spec field would read as absent.
+// UnmarshalJSON rejects null optional settings before pointers collapse them into absence.
 func (r *Profile) UnmarshalJSON(data []byte) error {
+	if err := RejectNullStageContext(data, "StageContext"); err != nil {
+		return err
+	}
 	if err := budget.RejectNullField(data, "Budget"); err != nil {
 		return err
 	}

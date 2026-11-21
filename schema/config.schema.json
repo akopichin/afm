@@ -162,6 +162,7 @@
       "description": "One locally configured assistant role.",
       "properties": {
         "budget": { "$ref": "#/definitions/budget" },
+        "stage_context": { "$ref": "#/definitions/stageContext" },
         "title": { "type": "string", "description": "Title shown in the UI." },
         "command": { "type": "string", "description": "An already-configured command/recipe name to run this profile with (not a new binary/transport). Optional: a profile without a command runs with the executor of the stage it is attached to (or client.command)." },
         "instructions": { "type": "string", "description": "System instructions for this role." },
@@ -171,6 +172,19 @@
           "description": "Overrides collaboration.runtime_context for this profile: isolated or wrapper."
         },
         "delegate": { "type": "boolean", "description": "Allow this profile to create its own child tasks (recursive delegation). Default false — delegation is opt-in per profile because it spawns additional helper subprocesses." }
+      }
+    },
+    "stageContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputs"],
+      "description": "Explicit helper context: omit the root-stage plan and include only the selected stage inputs. Omit this block to preserve the full stage context.",
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-][A-Za-z0-9._-]*$" },
+          "description": "Root-stage input references in stage.artifact form. An empty list selects no stage inputs."
+        }
       }
     },
     "collaborationLimits": {
