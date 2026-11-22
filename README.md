@@ -23,6 +23,20 @@ Stop and resume: AFM preserves the run's recorded progress.
 
 [Documentation ↓](#documentation)
 
+## Run a task in AFM Desktop
+
+Connect a GitHub repository in **Settings → Library**. Open a project,
+choose an imported pipeline in **New run**, and give the ACP Assistant a
+task. The Assistant starts and watches the run. The pipeline's agents work
+through the stages. Answer a stage's question, review the worktree diff and
+test results, then compare usage across projects in **Costs**.
+
+![AFM Desktop demo: import pipelines from GitHub, launch Checkout Delivery with ACP Assistant, answer a stage question, review the patch and compare project costs](docs/assets/afm-desktop.gif)
+
+The demo uses a local Git fixture, synthetic projects, scripted agents and
+simulated prices.
+See the [Desktop setup guide](desktop/README.md#install-and-open-desktop).
+
 ## What a long run looks like
 
 A real `dev-pipeline` run: **7 stages, 235 agent jobs and over 35 hours elapsed**,

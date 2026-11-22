@@ -4,6 +4,20 @@ A local Electron app for AFM projects. Releases are available for macOS and Linu
 
 See the [Desktop changelog](CHANGELOG.md) for recent changes.
 
+## From pipeline import to a verified change
+
+Connect a GitHub repository in **Settings → Library**. Open a project and
+choose an imported pipeline in **New run**. In this demo, the ACP Assistant
+takes the task, starts the run after approval, and watches it in **Tasks**.
+The pipeline's agents ask which errors to retry, update the code in a
+worktree, and run the checkout tests. **Changes** shows the diff and
+**Costs** compares usage across projects.
+
+![AFM Desktop demo: import pipelines, start a run with ACP Assistant, review a worktree diff and compare project costs](../docs/assets/afm-desktop.gif)
+
+The demo uses a local Git fixture, synthetic projects, scripted agents and
+simulated prices.
+
 ## Install and open Desktop
 
 On macOS, install via Homebrew and open **AFM Desktop** from Applications:
