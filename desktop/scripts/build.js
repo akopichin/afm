@@ -17,6 +17,11 @@ console.log('Bundling AFM from', source);
 await copyFile(source, resource);
 await chmod(resource, 0o755);
 
+const adapter = path.resolve('.generated/resources/codex-acp.mjs');
+const adapterLicense = path.resolve('.generated/resources/codex-acp.LICENSE');
+await copyFile('node_modules/@agentclientprotocol/codex-acp/dist/index.js', adapter);
+await copyFile('node_modules/@agentclientprotocol/codex-acp/LICENSE', adapterLicense);
+
 // Electron's zip is looked up locally first so the build needs no network: ELECTRON_ZIP_DIR, a copy kept in dist/,
 // then Electron's own download cache. A zip found in the cache is kept in dist/ for runs with another HOME.
 const electronVersion = (await import('electron/package.json', { with: { type: 'json' } })).default.version;
@@ -42,7 +47,7 @@ const identity = process.env.AFM_DESKTOP_SIGN_IDENTITY;
 const dirs = await packager({
   dir: '.', name: 'AFM Desktop', out: 'dist', overwrite: true, asar: { unpackDir: 'node_modules/chrome-devtools-mcp' },
   ...(process.platform === 'darwin' ? { icon: 'assets/afm-desktop.icns', protocols: [{ name: 'AFM Desktop', schemes: ['afm'] }] } : {}),
-  appBundleId: 'dev.afm.desktop', ...(electronZipDir ? { electronZipDir } : {}), osxSign: identity ? {identity, continueOnError: false} : undefined, extraResource: [resource],
+  appBundleId: 'dev.afm.desktop', ...(electronZipDir ? { electronZipDir } : {}), osxSign: identity ? {identity, continueOnError: false} : undefined, extraResource: [resource, adapter, adapterLicense],
   ignore: [/^\/\.generated\/resources/, /^\/(dist|test|scripts|workflow|homebrew)(\/|$)/]
 });
 if (process.platform === 'darwin') {

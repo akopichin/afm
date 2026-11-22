@@ -1,10 +1,11 @@
-import { probeAcp } from './acp.js';
+import { endpointModels, isAgentEndpoint } from './deep-agent.js';
+import { codexAcpModes, probeAcp } from './acp.js';
 import { createInterface } from 'node:readline';
 import { spawn, execFile } from 'node:child_process';
 import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import { REASONING_LEVELS, supportedPermissions } from './modes.js';
+import { PERMISSION_LABELS, REASONING_LEVELS, supportedPermissions } from './modes.js';
 
 // A Finder-launched app gets a minimal PATH, so the usual install locations are searched as well.
 export function searchDirs({ home, env = process.env, loginPath = '', systemDirs = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'] }) {
@@ -154,21 +155,60 @@ export function codexModels(executable, env) {
 }
 
 // One provider as the UI shows it: where it is, what it can do and whether it can sign in.
-export async function detectProvider(provider, { home, env, dirs }) {
+export async function detectProvider(provider, { home, env, dirs, secret }) {
   const base = { id: provider.id, name: provider.name, kind: provider.kind, builtIn: !provider.credential, credential: provider.credential ?? { type: 'cli' },
     reasoning: REASONING_LEVELS[provider.kind] ?? [] };
+  if (isAgentEndpoint(provider.kind)) {
+    const configured = { ...base, endpoint: provider.endpoint, found: true, capabilities: { image: true },
+      permissions: Object.keys(PERMISSION_LABELS) };
+    try {
+      const key = await secret(provider, env);
+      if (!key) return { ...configured, auth: missing('Set an API key for this endpoint.') };
+      const models = await endpointModels(provider, key);
+      return { ...configured, models, auth: ready(provider.credential.type, 'API key configured') };
+    } catch (error) {
+      const detail = /^(The endpoint rejected|The model catalog returned)/.test(error.message)?error.message:'Could not reach the model catalog.';
+      return { ...configured, auth: missing(detail) };
+    }
+  }
   if (provider.kind === 'openai') {
     const auth = await referencedAuth(provider.credential, env);
     return { ...base, endpoint: provider.endpoint, found: true, capabilities: {}, permissions: supportedPermissions('openai', {}), auth };
   }
-  const executable = await findExecutable(provider.executable, dirs);
+  if (provider.kind === 'acp' && provider.endpoint) {
+    const configured = { ...base, endpoint: provider.endpoint, remoteCwd: provider.remoteCwd, workspaceRevision: provider.workspaceRevision, found: true, permissions: ['ask'] };
+    try {
+      const token = provider.credential.type === 'cli' ? '' : await secret(provider, env);
+      if (!token && provider.credential.type !== 'cli') return { ...configured, capabilities: {}, auth: missing('Set the ACP bridge token.') };
+      const { authRequired, ...result } = await probeAcp(configured, env, token, { confirmWorkspace: Boolean(provider.workspaceRevision) });
+      return { ...configured, ...result, auth: authRequired ? missing('Sign in to Claude Code inside the container.') : ready('acp', 'Remote ACP connected') };
+    } catch {
+      return { ...configured, capabilities: {}, auth: missing('Could not connect to the ACP bridge. Check the address, bridge token, and remote workspace.') };
+    }
+  }
+  const executable = await findExecutable(provider.codexAdapter ? 'codex' : provider.executable, dirs);
   if (!executable) return { ...base, found: false, capabilities: {}, permissions: [], auth: missing(`${provider.name} was not found. Install it or set its executable path.`) };
   if (provider.kind === 'acp') {
     const configured = { ...base, executable, args: provider.args, found: true, permissions: ['ask'] };
+    if (provider.codexAdapter) Object.assign(configured, { builtIn: true, localCodex: executable, executable: provider.codexAdapter.runtime,
+      args: [provider.codexAdapter.script], transport: 'acp' });
     if (provider.credential.type === 'env' && !env[provider.credential.ref])
       return { ...configured, capabilities: {}, auth: missing('Set ' + provider.credential.ref + ' in the Desktop environment.') };
     try {
       const { authRequired, ...result } = await probeAcp(configured, { ...env, HOME: home });
+      if (provider.codexAdapter && !authRequired) {
+        const catalog = await codexModels(executable, env);
+        const directIds = new Set(catalog.map(model => model.id));
+        const available = result.models.filter(model => directIds.has(model.id));
+        if (available.length) {
+          const preferred = catalog.find(model => model.default && directIds.has(model.id)
+            && available.some(choice => choice.id === model.id))?.id;
+          result.models = available.map(model => ({ ...model, default: preferred ? model.id === preferred : model.default }));
+        }
+      }
+      if (provider.codexAdapter) {
+        configured.permissions = Object.entries(codexAcpModes).filter(([, mode]) => result.agentModes?.some(item => item.id === mode)).map(([permission]) => permission);
+      }
       return { ...configured, ...result, auth: authRequired ? missing('Sign in using the agent’s CLI.')
         : ready(provider.credential.type === 'env' ? 'env' : 'acp', provider.credential.ref ?? 'ACP connected') };
     } catch {

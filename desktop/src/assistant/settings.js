@@ -1,8 +1,9 @@
 import path from 'node:path';
+import { isAgentEndpoint } from './deep-agent.js';
 import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 
 export const PERMISSIONS = ['ask', 'read', 'edit', 'yolo'];
-export const KINDS = ['claude', 'codex', 'openai', 'acp'];
+export const KINDS = ['claude', 'codex', 'openai', 'openai-agent', 'anthropic-agent', 'acp'];
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MODEL = /^[A-Za-z0-9][\w.:/@+-]{0,119}$/;
 
@@ -14,11 +15,12 @@ export const BUILT_IN = [
   { id: 'codex', name: 'Codex', kind: 'codex', executable: 'codex' },
 ];
 
-const DEFAULTS = { provider: 'claude', model: '', reasoning: 'default', permission: 'ask', providers: [] };
+const DEFAULTS = { codexTransport: 'cli', provider: 'claude', model: '', reasoning: 'default', permission: 'ask', providers: [] };
 
 // A credential is only ever a reference: the CLI's own login, an environment variable name or a key file path.
 function credential(value) {
   const type = value?.type ?? 'cli';
+  if (type === 'stored' && /^custom-[a-f0-9]{8}$/.test(value.ref ?? '')) return { type, ref: value.ref };
   if (type === 'cli') return { type };
   if (type === 'env' && ENV_NAME.test(value.ref ?? '')) return { type, ref: value.ref };
   if (type === 'file' && path.isAbsolute(value.ref ?? '') && !value.ref.includes('\0')) return { type, ref: value.ref };
@@ -39,9 +41,20 @@ export function validateProvider(input) {
   if (!name || name.length > 60) throw new SettingsError('Provider needs a name.');
   if (!KINDS.includes(input.kind)) throw new SettingsError('Unknown provider kind.');
   const base = { id: input.id, name, kind: input.kind, credential: credential(input.credential) };
-  if (input.kind === 'openai') {
+  if (input.kind === 'openai' || isAgentEndpoint(input.kind)) {
     if (base.credential.type === 'cli') throw new SettingsError('An endpoint needs an environment variable or key file for its key.');
     return { ...base, endpoint: endpoint(input.endpoint) };
+  }
+  if (input.kind === 'acp' && input.endpoint) {
+    let url;
+    try { url = new URL(input.endpoint); } catch { throw new SettingsError('Enter the ACP bridge URL.'); }
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if (url.username || url.password || url.hash || url.search || !(url.protocol === 'wss:' || (url.protocol === 'ws:' && loopback)))
+      throw new SettingsError('Use wss, or ws on this machine, with credentials in the token field.');
+    const remoteCwd = String(input.remoteCwd ?? '').trim();
+    if (!path.posix.isAbsolute(remoteCwd) || remoteCwd.includes('\0')) throw new SettingsError('Enter the absolute workspace directory in the container.');
+    return { ...base, endpoint: url.href, remoteCwd: path.posix.normalize(remoteCwd),
+      ...(typeof input.workspaceRevision === 'string' ? { workspaceRevision: input.workspaceRevision } : {}) };
   }
   const executable = String(input.executable ?? '').trim();
   if (!path.isAbsolute(executable) || executable.includes('\0')) throw new SettingsError('Executable must be an absolute path.');
@@ -60,6 +73,7 @@ export function validateSelection(changes) {
   for (const [key, value] of Object.entries(changes)) {
     if (typeof value !== 'string') throw new SettingsError(`Invalid assistant setting ${key}.`);
     if (key === 'provider' && /^[a-z0-9][a-z0-9-]{0,40}$/.test(value)) out.provider = value;
+    else if (key === 'codexTransport' && ['cli', 'acp'].includes(value)) out.codexTransport = value;
     else if (key === 'model' && (value === '' || MODEL.test(value))) out.model = value;
     else if (key === 'reasoning' && MODEL.test(value)) out.reasoning = value;
     else if (key === 'acpMode' && (value === '' || MODEL.test(value))) out.acpMode = value;
@@ -80,7 +94,7 @@ export class AssistantSettings {
       try { providers.push(validateProvider(item)); } catch { /* A hand-edited entry that no longer validates is ignored. */ }
     }
     const selection = {};
-    for (const key of ['provider', 'model', 'reasoning', 'permission', 'acpMode'].filter(name => typeof stored[name] === 'string')) {
+    for (const key of ['provider', 'model', 'reasoning', 'permission', 'acpMode', 'codexTransport'].filter(name => typeof stored[name] === 'string')) {
       try { Object.assign(selection, validateSelection({ [key]: stored[key] })); } catch { /* Fall back to the default. */ }
     }
     return { ...DEFAULTS, ...selection, providers };
@@ -99,8 +113,10 @@ export class AssistantSettings {
     // A model name belongs to one provider; switching providers drops it unless the caller names one.
     return this.#update(current => {
       const switched = valid.provider && valid.provider !== current.provider;
+      const transportChanged = valid.codexTransport && valid.codexTransport !== current.codexTransport
+        && (valid.provider ?? current.provider) === 'codex';
       const acp = switched && current.providers.some(item => item.id === valid.provider && item.kind === 'acp');
-      const defaults = switched ? { acpMode: '', ...(acp ? { permission: 'ask' } : {}),
+      const defaults = switched || transportChanged ? { acpMode: '', ...(acp ? { permission: 'ask' } : {}),
         ...(!('model' in valid) ? { model: '', reasoning: 'default' } : {}) } : {};
       return { ...current, ...defaults, ...valid };
     });
@@ -111,6 +127,16 @@ export class AssistantSettings {
     return this.#update(current => {
       if (BUILT_IN.some(item => item.id === id) || current.providers.some(item => item.id === id)) throw new SettingsError('Provider id already exists.');
       return { ...current, providers: [...current.providers, provider] };
+    });
+  }
+
+  updateWorkspace(id, previous, remoteCwd, workspaceRevision) {
+    return this.#update(current => {
+      const provider = current.providers.find(item => item.id === id);
+      if (!provider?.endpoint || provider.kind !== 'acp') throw new SettingsError('Remote ACP provider no longer exists.');
+      if (provider.workspaceRevision !== previous) throw new SettingsError('Workspace changed. Reopen the editor and try again.');
+      const updated = validateProvider({ ...provider, remoteCwd, workspaceRevision });
+      return { ...current, providers: current.providers.map(item => item.id === id ? updated : item) };
     });
   }
 

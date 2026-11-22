@@ -1,8 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, session, WebContentsView } from 'electron';
+import { desktopDir, writeAtomic } from './files.js';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, session, safeStorage, WebContentsView } from 'electron';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
-import { realpath } from 'node:fs/promises';
+import { realpath, readFile, rm } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { desktopEnvironment, refreshEnvironment, stopEnvironmentImports } from './environment.js';
 import { PipelineOptions } from './pipeline-options.js';
@@ -104,7 +105,21 @@ const loadNotificationSettings = () => desktop.prefs.get().then(prefs => notifie
 stageBrowsers.on('change', () => workspace.refresh().catch(() => {}));
 // A Finder-launched app lacks the login shell's PATH; it is read once, when the assistant first needs it.
 let loginPath;
+const assistantKeyFile = id => path.join(desktopDir(home), 'assistant', 'secrets', id + '.bin');
 const assistant = new Assistant({
+  migrateHistory: true,
+  codexAdapter: { runtime: process.execPath, script: app.isPackaged
+    ? path.join(process.resourcesPath, 'codex-acp.mjs')
+    : path.join(root, 'node_modules', '@agentclientprotocol', 'codex-acp', 'dist', 'index.js') },
+  secrets: {
+    set: (id, token) => {
+      if (!safeStorage.isEncryptionAvailable() || safeStorage.getSelectedStorageBackend?.() === 'basic_text')
+        throw Error('Secure storage is unavailable. Choose Environment variable or Key file.');
+      return writeAtomic(assistantKeyFile(id), safeStorage.encryptString(token));
+    },
+    get: async id => safeStorage.decryptString(await readFile(assistantKeyFile(id))),
+    remove: id => rm(assistantKeyFile(id), { force: true }),
+  },
   home, env: environment, watch: { ...watchTasks.tools(), schedule: createRepeatingTask }, loginPath: () => (loginPath ??= loginShellPath(process.env)),
   context: {
     endpoint: async () => { await desktop.host.connect(); return desktop.host.state.endpoint; },

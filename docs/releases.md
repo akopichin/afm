@@ -87,6 +87,12 @@ Settings → Models or the quick model picker (Command+M on macOS, Ctrl+M on Lin
 choose a provider default, a listed model, or **Custom model…** to enter an ID.
 In Settings → Models, choose **×** next to a custom provider and confirm to remove it.
 Codex suggestions come from the installed client's account-specific model list.
+In **Settings → Models**, switch local Codex between CLI and ACP, or add a
+Claude Code container as **Claude Code · Remote ACP**. Use **Edit** on the
+remote provider's card to change its workspace within the bridge's configured
+root. OpenAI- and Anthropic-compatible endpoints can run as Deep Agents.
+In chat, use `/resume` to search saved conversations and `/backlog list` to
+see saved plans. See the [Desktop Assistant guide](https://github.com/akopichin/afm/blob/main/desktop/README.md#assistant-chat).
 The macOS app uses an ad-hoc signature and may require manual approval.
 The repository’s Latest release continues to track the CLI. Release any new AFM
 capabilities Desktop depends on before tagging Desktop. The `afm-release` environment publishes

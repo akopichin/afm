@@ -1,3 +1,4 @@
+import { isAgentEndpoint } from './deep-agent.js';
 import { SettingsError } from './settings.js';
 
 export const REASONING_LEVELS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['minimal', 'low', 'medium', 'high', 'xhigh'], openai: [] };
@@ -48,9 +49,9 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
   if (model && caps.model === false) throw new SettingsError(`${provider.name} cannot select a model.`);
   if (provider.kind === 'acp') {
     if (isolated) throw new SettingsError('This ACP agent cannot run a tool-free report.');
-    if (settings.acpMode && !provider.agentModes?.some(item => item.id === settings.acpMode))
+    if (!provider.localCodex && settings.acpMode && !provider.agentModes?.some(item => item.id === settings.acpMode))
       throw new SettingsError('This ACP agent does not offer the selected mode.');
-    return { effective: { permission, label: 'AFM · Ask before actions', flags: 'ACP agent permissions apply to its own tools',
+    return { effective: { permission, label: provider.localCodex ? PERMISSION_LABELS[permission] : 'AFM · Ask before actions', flags: 'ACP agent permissions apply to its own tools',
       model: model || null, reasoning } };
   }
   const args = [];
@@ -107,6 +108,7 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
 
 // Flags shown to the user for a provider and mode before anything runs.
 export function describeMode(provider, permission) {
+  if (isAgentEndpoint(provider.kind)) return PERMISSION_LABELS[permission];
   if (provider.kind === 'openai') return 'Chat only: no files and no AFM tools';
   try { return buildInvocation({ provider, settings: { permission, model: '', reasoning: 'default' }, bridge: null }).effective.flags; }
   catch (error) { return error.message; }

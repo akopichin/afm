@@ -22,11 +22,17 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "2.9.1",
+    "@langchain/anthropic": "1.6.6",
+    "@langchain/core": "1.5.0",
+    "@langchain/openai": "1.8.5",
     "@modelcontextprotocol/sdk": "1.32.2",
     "chrome-devtools-mcp": "1.12.0",
+    "deepagents": "1.17.0",
+    "ws": "8.23.0",
     "yaml": "2.9.1"
   },
   "devDependencies": {
+    "@agentclientprotocol/codex-acp": "2.9.0",
     "@electron/asar": "4.3.2",
     "@electron/packager": "20.3.0",
     "electron": "45.4.1",

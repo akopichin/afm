@@ -375,6 +375,49 @@ test('a provider is added as a reference to its credential and can be tested', a
   assert.deepEqual(assistant.calls.test, ['custom-1']);
 });
 
+test('a remote ACP card edits the workspace in place', async t => {
+  const assistant = fakeAssistant();
+  const remote = providerInfo('custom-remote', { name: 'Clodik', builtIn: false, kind: 'acp', remoteCwd: '/workspace' });
+  assistant.info.providers.push(remote);
+  const updates = [];
+  const update = Promise.withResolvers();
+  assistant.updateProviderWorkspace = async (id, cwd) => {
+    updates.push({ id, cwd });
+    if (cwd === '/outside') throw Error('Workspace is outside the bridge root.');
+    await update.promise;
+    remote.remoteCwd = cwd;
+    return assistant.info;
+  };
+  const { w, d, get } = await openShell(t, { assistant });
+  get('settings-toggle').click();
+  await tick();
+  const edit = d.querySelector('[data-edit-workspace]');
+  assert.equal(d.querySelectorAll('[data-edit-workspace]').length, 1);
+  edit.click();
+  const form = get('workspace-custom-remote');
+  assert.equal(form.elements.workspace.value, '/workspace');
+  form.elements.workspace.value = '/outside';
+  form.dispatchEvent(new w.Event('submit', { cancelable: true }));
+  await tick();
+  assert.equal(form.elements.workspace.value, '/outside');
+  assert.match(form.querySelector('[role="status"]').textContent, /outside/);
+  form.elements.workspace.value = '/workspace/project';
+  form.dispatchEvent(new w.Event('submit', { cancelable: true }));
+  const save = form.querySelector('button[type="submit"]');
+  assert.equal(save.disabled, true);
+  assert.equal(save.getAttribute('aria-busy'), 'true');
+  assert.equal(save.textContent, 'Saving…');
+  form.dispatchEvent(new w.Event('submit', { cancelable: true }));
+  assert.equal(updates.length, 2);
+  assert.equal(form.hidden, false);
+  update.resolve();
+  await tick();
+  assert.deepEqual(updates.at(-1), { id: 'custom-remote', cwd: '/workspace/project' });
+  assert.equal(get('workspace-custom-remote').hidden, true);
+  assert.equal(get('workspace-custom-remote').elements.workspace.value, '/workspace/project');
+  assert.equal(d.querySelector('.workspace-saved').textContent, 'Saved');
+});
+
 test('only custom provider rows offer removal, and confirmation targets the clicked provider', async t => {
   const assistant = fakeAssistant();
   assistant.info.providers.push(providerInfo('custom-1', { name: 'Mine', builtIn: false }));
@@ -525,6 +568,7 @@ test('/clear is handled in the window: the main process drops the chat, nothing 
   assert.match(get('messages').textContent, /old answer/);
   type(w, get, '  /clear ');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   assert.equal(assistant.calls.clear, 1);
   assert.deepEqual(assistant.calls.send, [], '/clear is never a message to the provider');
@@ -539,6 +583,7 @@ test('/clear while a reply is running explains itself, keeps the chat and does n
   key('KeyA', 'a', { altKey: true });
   type(w, get, 'question');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   assistant.emit(start('t1', 'question'));
   await frames(w);
@@ -554,6 +599,7 @@ test('/clear while a reply is running explains itself, keeps the chat and does n
   await frames(w);
   assert.doesNotMatch(get('messages').textContent, /Stop it first/, 'the refusal is gone once the reply ended');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   assert.equal(assistant.calls.clear, 1, 'once the reply ended the same command clears');
   assert.equal(d.querySelectorAll('.bubble.mine').length, 0);
@@ -568,6 +614,7 @@ test('a refused /clear from the main process shows why and keeps the messages', 
   await tick();
   type(w, get, '/clear');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   assert.match(get('messages').textContent, /Stop the running reply before clearing the chat/);
   assert.match(get('messages').textContent, /keep me/);
@@ -578,6 +625,7 @@ test('the stop button stops a running reply even when the field holds /clear', a
   key('KeyA', 'a', { altKey: true });
   type(w, get, 'question');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   assistant.emit(start('t1', 'question'));
   await frames(w);
@@ -599,9 +647,11 @@ test('nothing is sent while /clear is being written, and the first history load 
   key('KeyA', 'a', { altKey: true });
   type(w, get, '/clear');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   type(w, get, 'sent too early');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   assert.deepEqual(assistant.calls.send, [], 'the composer is held while the chat is rewritten');
   release();
@@ -619,7 +669,78 @@ test('a /clear that main refuses shows the reason without the Electron prefix', 
   await tick();
   type(w, get, '/clear');
   submit(w, get);
+  if(!get('assistant-clear').hidden)get('assistant-erase').click();
   await tick();
   assert.match(get('messages').textContent, /^.*Stop the running reply before clearing the chat\./s);
   assert.doesNotMatch(get('messages').textContent, /Error invoking remote method/);
+});
+
+test('/resume filters saved conversations and keeps the draft and a background reply in their own chat', async t => {
+  const assistant = fakeAssistant();
+  const id = 'deac0d00-0000-4000-8000-000000000001';
+  assistant.conversations = async () => [{ id: 'main', name: 'Main conversation' }, { id, name: 'Complex Feature' }];
+  assistant.history = async target => target === id ? [{ id: 'second', role: 'user', text: 'Second chat' }] : [];
+  const { w, d, get } = await openShell(t, { assistant });
+  get('assistant-toggle').click();
+  type(w, get, '/resume');
+  submit(w, get);
+  await tick();
+  const query = get('assistant-resume-query');
+  assert.equal(d.activeElement, query);
+  query.value = 'plEX';
+  query.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.equal(get('assistant-resume-list').querySelectorAll('button').length, 1);
+  query.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await tick();
+  assert.match(get('messages').textContent, /Second chat/);
+  assistant.emit(start('background', 'Main run progress'));
+  await frames(w);
+  assert.doesNotMatch(get('messages').textContent, /Main run progress/);
+});
+
+test('cancelling the inline clear confirmation keeps the current conversation', async t => {
+  const { w, d, get, assistant } = await openShell(t, { saved: [{ id: 'u', role: 'user', text: 'Keep me' }] });
+  get('assistant-toggle').click();
+  await tick();
+  type(w, get, '/clear');
+  submit(w, get);
+  assert.equal(d.activeElement.id, 'assistant-keep');
+  d.activeElement.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'n', bubbles: true, cancelable: true }));
+  assert.equal(get('assistant-clear').hidden, true);
+  assert.equal(assistant.calls.clear, 0);
+  assert.match(get('messages').textContent, /Keep me/);
+});
+
+test('backlog completion reveals one command level and confirms deletion locally', async t => {
+  const assistant = fakeAssistant();
+  const calls = [];
+  assistant.backlog = async (id, command, scope) => {
+    calls.push({ id, command, scope });
+    return [{ id: 'backlog-result', role: 'assistant', text: 'Deleted #2.', status: 'done', tools: [] }];
+  };
+  assistant.backlogPlans = async (_scope, completed) => completed ? [{ number: 2, title: 'Done' }] : [];
+  const { w, d, get } = await openShell(t, { assistant });
+  get('assistant-toggle').click();
+  const input = get('chat-input');
+  const choices = () => Array.from(get('assistant-command-menu').querySelectorAll('code'), element => element.textContent);
+  type(w, get, '/');
+  input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.deepEqual(choices(), ['/backlog ']);
+  input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+  assert.equal(input.value, '/backlog ');
+  assert.deepEqual(choices(), ['/backlog list', '/backlog done ', '/backlog delete ']);
+  type(w, get, '/backlog done delete ');
+  input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  await tick();
+  assert.deepEqual(choices(), ['/backlog done delete 2']);
+  type(w, get, '/backlog done delete 2');
+  submit(w, get);
+  assert.equal(d.activeElement.id, 'assistant-keep');
+  get('assistant-keep').click();
+  assert.equal(calls.length, 0);
+  submit(w, get);
+  get('assistant-erase').click();
+  await tick();
+  assert.deepEqual(calls.map(call => call.command), ['/backlog done delete 2']);
+  assert.match(get('messages').textContent, /Deleted #2/);
 });

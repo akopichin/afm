@@ -6,6 +6,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { memoryTool } from './memory-search.js';
+import { backlogTool } from './backlog.js';
 import { localURL } from '../host.js';
 import { askApproval, askLocal } from './approval.js';
 import { isWatchTool, SCHEDULE_TOOL, TASK_TOOL, WATCH_TOOLS } from './watch-tools.js';
@@ -59,9 +61,21 @@ export function createBridge({ host, policy, approve, local = null }) {
     }
   };
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...visibleTools(await host.listTools(), policy),
-    ...(watching ? WATCH_TOOLS : []), ...(scheduling ? [TASK_TOOL] : []), ...(steering ? [pauseTool] : [])] }));
+    ...(watching ? WATCH_TOOLS : []), ...(scheduling ? [TASK_TOOL] : []), ...(steering ? [pauseTool] : []), ...(policy.backlog && local ? [backlogTool] : []), ...(policy.memory && local ? [memoryTool] : [])] }));
   const call = async (params, signal, ready) => {
     const args = params.arguments ?? {};
+    if (params.name === memoryTool.name && policy.memory && local) {
+      try {
+        const result = await local({ op: 'memory', turnId: policy.turnId, args }, undefined, signal);
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      } catch (error) { return refusal(error.message); }
+    }
+    if (params.name === backlogTool.name && policy.backlog && local) {
+      try {
+        const result = await local({ op: 'backlog', turnId: policy.turnId, args }, 601_000, signal);
+        return { content: [{ type: 'text', text: result.text }] };
+      } catch (error) { return refusal(error.message); }
+    }
     if (params.name === PAUSE && steering) {
       if (!Number.isInteger(args.seconds) || args.seconds < 1 || args.seconds > 60) return refusal('desktop_wait: seconds must be an integer from 1 to 60.');
       return waitFor(signal, async abort => {

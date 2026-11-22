@@ -1,3 +1,4 @@
+import { connectRemoteAcp } from './remote-acp.js';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -17,15 +18,26 @@ function childEnvironment(env, credential) {
   return Object.fromEntries(names.filter(name => env[name] !== undefined).map(name => [name, env[name]]));
 }
 
-function launch({ executable, args, credential }, { env, cwd, onUpdate, approve }) {
-  const posix = process.platform !== 'win32';
-  const child = spawn(executable, args, { cwd, env: childEnvironment(env, credential), stdio: ['pipe', 'pipe', 'ignore'], detached: posix, windowsHide: true });
-  child.on('error', () => {});
-  child.stdin.on('error', () => {});
-  const exited = new Promise(resolve => child.once('exit', resolve).once('error', resolve));
+export const codexAcpModes = { read: 'read-only', ask: 'read-only', edit: 'workspace-write', yolo: 'agent-full-access' };
+
+function launch({ executable, args, credential, localCodex, endpoint, remoteCwd }, { env, cwd, onUpdate, approve, token, bridge, confirmWorkspace }) {
   const app = new ClientApp();
   app.onNotification('session/update', ({ params: { sessionId, update } }) => onUpdate?.(sessionId, update));
   app.onRequest('session/request_permission', ({ params }) => approve?.(params) ?? cancelled);
+  if (endpoint) return connectRemoteAcp(app, { endpoint, remoteCwd }, token, confirmWorkspace);
+  const posix = process.platform !== 'win32';
+  const childEnv = childEnvironment(env, credential);
+  if (localCodex) {
+    Object.assign(childEnv, { CODEX_PATH: localCodex, ELECTRON_RUN_AS_NODE: '1' });
+    // The Desktop bridge applies scope and asks for approval itself.
+    if (bridge) childEnv.CODEX_CONFIG = JSON.stringify({ mcp_servers: { afm: {
+      command: bridge.command, args: bridge.args, env: bridge.env, default_tools_approval_mode: 'approve',
+    } } });
+  }
+  const child = spawn(executable, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'ignore'], detached: posix, windowsHide: true });
+  child.on('error', () => {});
+  child.stdin.on('error', () => {});
+  const exited = new Promise(resolve => child.once('exit', resolve).once('error', resolve));
   const stream = ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout));
   const connection = app.connect(stream);
   child.once('exit', () => connection.close());
@@ -50,11 +62,12 @@ async function initialize(agent) {
   return info;
 }
 
-export async function probeAcp(provider, env) {
-  const cwd = await mkdtemp(path.join(os.tmpdir(), 'afm-acp-'));
+export async function probeAcp(provider, env, token, { confirmWorkspace = false } = {}) {
+  const cwd = provider.remoteCwd ?? await mkdtemp(path.join(os.tmpdir(), 'afm-acp-'));
   let process;
   try {
-    process = launch(provider, { env, cwd });
+    process = launch(provider, { env, cwd, token, confirmWorkspace });
+    if (confirmWorkspace) await process.ready;
     const info = await initialize(process.agent);
     const version = [info.agentInfo?.version, 'ACP v' + info.protocolVersion].filter(Boolean).join(' · ');
     const caps = { image: info.agentCapabilities?.promptCapabilities?.image === true, resume: info.agentCapabilities?.loadSession === true };
@@ -71,7 +84,7 @@ export async function probeAcp(provider, env) {
         : (session.models?.availableModels ?? []).map(model => ({ id: model.modelId, label: model.name, default: model.modelId === session.models.currentModelId })),
       reasoning: optionValues(effort).map(option => option.value),
       agentModes: optionValues(selector(session.configOptions, 'mode')).map(option => ({ id: option.value, label: option.name })) };
-  } finally { await process?.stop(); await rm(cwd, { recursive: true, force: true }); }
+  } finally { await process?.stop(); if (!provider.remoteCwd) await rm(cwd, { recursive: true, force: true }); }
 }
 
 function toolResult(update, onEvent) {
@@ -80,14 +93,14 @@ function toolResult(update, onEvent) {
   onEvent({ type: 'tool_result', id: update.toolCallId, error: update.status === 'failed', text: text ?? '' });
 }
 
-export function runAcp({ provider, settings, cwd, env, bridge, prompt, images, resume, onEvent, approve }) {
+export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, images, resume, onEvent, approve }) {
   let sessionId, prompting = false;
   const tools = new Set();
-  const { agent, stop } = launch(provider, { cwd, env, approve: async ({ sessionId: session, toolCall, options }) => {
+  const { agent, stop, ready } = launch(provider, { cwd, env, token, bridge, confirmWorkspace: Boolean(provider.workspaceRevision), approve: async ({ sessionId: session, toolCall, options }) => {
     if (!prompting || session !== sessionId) return cancelled;
     const allow = options.find(option => option.kind === 'allow_once');
     const deny = options.find(option => option.kind === 'reject_once');
-    const selected = allow && await approve(toolCall) ? allow : deny;
+    const selected = allow && settings.permission !== 'read' && (provider.localCodex && settings.permission === 'yolo' || await approve(toolCall)) ? allow : deny;
     return selected ? { outcome: { outcome: 'selected', optionId: selected.optionId } } : cancelled;
   }, onUpdate: (session, update) => {
     if (!prompting || session !== sessionId) return;
@@ -100,9 +113,10 @@ export function runAcp({ provider, settings, cwd, env, bridge, prompt, images, r
   } });
   const done = (async () => {
     try {
+      await ready;
       const info = await initialize(agent);
       if (images.length && !info.agentCapabilities?.promptCapabilities?.image) throw Error('This ACP agent does not accept images.');
-      const mcpServers = bridge ? [{ name: 'afm', command: bridge.command, args: bridge.args,
+      const mcpServers = bridge && !provider.endpoint && !provider.localCodex ? [{ name: 'afm', command: bridge.command, args: bridge.args,
         env: Object.entries(bridge.env).map(([name, value]) => ({ name, value })) }] : [];
       const session = resume ? await agent.request('session/load', { sessionId: resume, cwd, mcpServers }, setup()).catch(error => {
         if (error.code === -32002) throw Error('Unknown session.');
@@ -111,7 +125,7 @@ export function runAcp({ provider, settings, cwd, env, bridge, prompt, images, r
       sessionId = resume ?? session.sessionId;
       onEvent({ type: 'session', id: sessionId });
       let options = session?.configOptions;
-      for (const [category, value] of [['model', settings.model], ['thought_level', settings.reasoning], ['mode', settings.acpMode]]) {
+      for (const [category, value] of [['model', settings.model], ['thought_level', settings.reasoning], ['mode', provider.localCodex ? codexAcpModes[settings.permission] : settings.acpMode]]) {
         if (!value || (category === 'thought_level' && value === 'default')) continue;
         const config = selector(options, category);
         if (!config && category === 'model' && session?.models?.availableModels.some(item => item.modelId === value)) {

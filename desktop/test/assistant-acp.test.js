@@ -1,6 +1,11 @@
+import { AssistantSettings } from '../src/assistant/settings.js';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
+import { probeAcp, runAcp } from '../src/assistant/acp.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { makeAssistant, SAMPLE_IMAGE } from './assistant-support.js';
@@ -84,4 +89,61 @@ test('ACP provider discovers controls, sends a selected model and image, and awa
   assert.deepEqual(saved.segments, [
     { offset: 0, at: new Date(now).toISOString() }, { offset: 13, at: new Date(now + 31000).toISOString() },
   ]);
+});
+
+
+test('remote ACP authenticates before opening a session and streams across the Docker bridge', async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'remote-acp-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const fake = path.join(home, 'agent.mjs');
+  await writeFile(fake, "if (process.env.ACP_BRIDGE_TOKEN) process.exit(1);\n" + AGENT.replace("if (msg.method === 'session/new') result", "if (msg.method === 'session/new' && msg.params.cwd !== process.cwd()) throw Error('Workspace mismatch');\n  if (msg.method === 'session/new') result"));
+  const nested = path.join(await realpath(home), 'nested');
+  await mkdir(nested);
+  await symlink(path.dirname(await realpath(home)), path.join(home, 'outside'), 'dir');
+  const bridge = fileURLToPath(new URL('../remote-acp/bridge.mjs', import.meta.url));
+  const token = 'fixture-bridge-token';
+  const child = spawn(process.execPath, [bridge, fake], {
+    env: { ...process.env, ACP_LISTEN: '127.0.0.1', ACP_WORKSPACE: home, ACP_PORT: '0', ACP_AGENT: process.execPath, ACP_BRIDGE_TOKEN: token },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  const closed = once(child, 'close');
+  t.after(async () => { child.kill(); await closed; });
+  const [line] = await once(child.stdout, 'data', { signal: AbortSignal.timeout(5000) });
+  const port = Number(line.toString().match(/port (\d+)/)?.[1]);
+  assert(port);
+  const provider = { endpoint: `ws://127.0.0.1:${port}/acp`, remoteCwd: home };
+  await assert.rejects(probeAcp(provider, {}, 'wrong'));
+  assert.equal((await probeAcp(provider, {}, token)).capabilities.image, true);
+  const { assistant } = makeAssistant(t, { home, env: process.env });
+  const id = 'test-remote';
+  const credential = { type: 'file', ref: path.join(home, 'bridge-key') };
+  await writeFile(credential.ref, token);
+  await assistant.settings.addProvider({ ...provider, name: 'Remote', kind: 'acp', credential, remoteCwd: await realpath(home) }, id);
+  await assistant.configure({ provider: id, model: 'example' });
+  await assert.rejects(assistant.updateProviderWorkspace(id, path.join(home, 'outside')), /inside the ACP bridge workspace root/);
+  assert.equal((await assistant.settings.get()).providers[0].remoteCwd, await realpath(home));
+  const info = await assistant.updateProviderWorkspace(id, nested);
+  assert.equal(info.providers.find(item => item.id === id).remoteCwd, nested);
+  assert.deepEqual(info.settings.providers[0].credential, credential);
+  assert.equal(info.settings.provider, id);
+  assert.equal(info.settings.model, 'example');
+  const events = [];
+  const run = runAcp({ provider, token, cwd: home, env: {}, prompt: 'test', images: [SAMPLE_IMAGE],
+    settings: { permission: 'ask', model: 'example', reasoning: 'high' },
+    onEvent: event => events.push(event), approve: async () => true });
+  assert.ifError((await run.done).error);
+  assert.equal(events.filter(event => event.type === 'delta').map(event => event.text).join(''), 'First update. Second update.');
+});
+
+
+test('switching the Codex transport keeps permissions and resets the old model selection', async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'codex-transport-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const store = new AssistantSettings(home);
+  await store.select({ provider: 'codex', model: 'cli-model', reasoning: 'medium', permission: 'yolo' });
+  const settings = await store.select({ codexTransport: 'acp' });
+  assert.equal(settings.model, '');
+  assert.equal(settings.reasoning, 'default');
+  assert.equal(settings.permission, 'yolo');
+  assert.equal(settings.codexTransport, 'acp');
 });

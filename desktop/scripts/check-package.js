@@ -1,4 +1,4 @@
-import { statFile } from '@electron/asar';
+import { listPackage, statFile } from '@electron/asar';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFile, mkdtemp, rm, stat } from 'node:fs/promises';
@@ -16,8 +16,16 @@ for (const file of ['assets/afm-desktop.png', 'assets/afm-desktop-attention.png'
   'src/shortcuts.js', 'src/assistant/assistant.js', 'src/assistant/bridge.js', 'src/assistant/ipc.js', 'src/stage-browser/broker.js', 'src/stage-browser/companion-main.js', 'src/stage-browser/electron-page.js', 'renderer/assistant.js', 'renderer/index.html', 'renderer/inventory.js',
   'renderer/checkout.html', 'renderer/run-changes.js', 'renderer/run-changes.css', 'src/run-changes.js',
   '.generated/editor/code-editor.js', '.generated/editor/code-editor.css', '.generated/run.html', '.generated/dashboard/skins/graphite/index.css',
-  'node_modules/@modelcontextprotocol/sdk/package.json', 'node_modules/yaml/package.json']) {
+  'node_modules/@modelcontextprotocol/sdk/package.json', 'node_modules/yaml/package.json',
+  'node_modules/deepagents/package.json', 'node_modules/@langchain/openai/package.json', 'node_modules/@langchain/anthropic/package.json']) {
   if (!statFile(archive, file).size) throw Error('Empty package entry: ' + file);
+}
+if (listPackage(archive).some(file => /^[/\\]node_modules[/\\]@openai[/\\]codex(?:[/\\]|$)/.test(file))) {
+  throw Error('The Desktop archive contains a second Codex executable.');
+}
+const adapter = path.join(resources, 'codex-acp.mjs');
+if (!(await stat(adapter)).size || !(await stat(path.join(resources, 'codex-acp.LICENSE'))).size) {
+  throw Error('The packaged Codex ACP adapter or its license is missing.');
 }
 if (process.platform === 'darwin') {
   const plist = path.join(bundle, 'AFM Desktop.app/Contents/Info.plist');
@@ -52,6 +60,9 @@ async function mcpVersion(node, env) {
   return execFileSync(mcpWrapperPath(home), ['--version'], { encoding: 'utf8', env: { HOME: home, PATH: '/usr/bin:/bin' } }).trim();
 }
 try {
+  const adapterVersion = execFileSync(process.execPath, [adapter, '--version'], { encoding: 'utf8', env: { HOME: home, PATH: '/usr/bin:/bin' } }).trim();
+  if (!adapterVersion.endsWith(' 2.9.0')) throw Error('Unexpected bundled Codex ACP version.');
+  console.log(adapterVersion, '(packaged files)');
   const version = await mcpVersion(process.execPath, {});
   if (version !== '1.12.0') throw Error('Packaged chrome-devtools-mcp reports ' + version + ', expected the pinned 1.12.0.');
   console.log('chrome-devtools-mcp', version, '(packaged files, no external PATH)');

@@ -337,16 +337,23 @@ const demoModelForm=`<form id="model-form" hidden><label>Provider or CLI<input n
 function providerRow(m){
   const id=esc(m.id),name=esc(m.name),selected=m.id===state.profile;
   return `<div class="provider-row"><button class="workflow ${selected?'chosen':''}" data-profile="${id}" aria-pressed="${selected}"><span class="glyph">${m.id==='claude'?'✳':'›_'}</span><span><strong>${name}</strong><small>${esc(m.model)} · ${esc(m.auth)}</small></span><span class="tick">${selected?'✓':''}</span></button>
-    ${!isDemo&&m.custom?`<button type="button" class="icon" data-remove-provider="${id}" aria-label="Remove ${name}" title="Remove ${name}">×</button>`:''}</div>`;
+    ${!isDemo&&m.id==='codex'?'<label class="codex-transport">Connection<select id="codex-transport" aria-label="Codex connection">'+option('cli','CLI',assistantInfo?.settings.codexTransport!=='acp')+option('acp','ACP',assistantInfo?.settings.codexTransport==='acp')+'</select></label>':''}
+    ${!isDemo&&m.remoteCwd?`<span class="workspace-saved" role="status">${savedWorkspaceId===m.id?'Saved':''}</span><button type="button" data-edit-workspace="${id}" aria-expanded="false" aria-controls="workspace-${id}" aria-label="Edit ${name} workspace">Edit</button>`:''}
+    ${!isDemo&&m.custom?`<button type="button" class="icon" data-remove-provider="${id}" aria-label="Remove ${name}" title="Remove ${name}">×</button>`:''}</div>
+    ${!isDemo&&m.remoteCwd?`<form id="workspace-${id}" class="workspace-editor" hidden>
+      <label>Container workspace<input name="workspace" required value="${esc(m.remoteCwd)}"></label>
+      <div class="actions"><button type="submit" class="primary">Save</button><button type="button">Cancel</button></div>
+      <p class="hint" role="status"></p></form>`:''}`;
 }
 function drawSettings(){
   $('settings-title').textContent=onboarding?'Set up AFM Desktop':'Settings';
   const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],['appearance','Appearance'],...(!isDemo?[['environment','Environment'],['notifications','Notifications']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
   const body=$('settings-body');
   if(settingsTab==='models'){
+    if(body.querySelector('.workspace-editor[aria-busy="true"]'))return;
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
       <div class="choices">${state.models.map(providerRow).join('')}</div>
-      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':`<button id="test-model">${profile().kind==='acp'?'Test connection':'Test sign-in'}</button>`}<button id="add-model">＋ Other model</button></div><p class="hint" role="status">${esc(modelScan)}</p>
+      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':`<button id="test-model">${profile().kind==='acp'?'Test connection':'Test sign-in'}</button>`}<button id="add-model">＋ Other model</button></div><p class="hint" id="model-status" role="status">${esc(modelScan)}</p>
       ${isDemo?demoModelForm:providerForm()}
       ${onboarding?'<div class="actions"><button class="primary" id="finish-setup">Continue to projects →</button></div>':''}`;
     wireProfileFields();
@@ -450,7 +457,7 @@ function drawEnvironment(body,tabs){
     <div class="actions"><button id="env-refresh">Refresh environment</button><button id="env-restart">Restart AFM host</button></div>
     <p class="muted">Variables from your shell and environment file are read once and kept. Refresh after changing them outside Desktop.</p><p class="hint" role="status">${esc(environmentStatus)}</p>`;
   async function update(changes){
-    try {savedEnvironment=(await nativeAFM.updateEnvironment(changes)).environment;environmentStatus='Saved.';assistantChat.scanned=false}
+    try {savedEnvironment=(await nativeAFM.updateEnvironment(changes)).environment;environmentStatus='Saved.';assistantDiscovery.scanned=false}
     catch(error){environmentStatus=error.message}
     if($('settings').open&&settingsTab==='environment')drawSettings();
   }
@@ -464,7 +471,7 @@ function drawEnvironment(body,tabs){
   };
   for(const button of body.querySelectorAll('[data-env-remove]'))button.onclick=()=>update({remove:button.dataset.envRemove});
   $('env-refresh').onclick=async()=>{
-    try {await nativeAFM.refreshEnvironment();environmentStatus='Environment reloaded.';assistantChat.scanned=false}
+    try {await nativeAFM.refreshEnvironment();environmentStatus='Environment reloaded.';assistantDiscovery.scanned=false}
     catch(error){environmentStatus=error.message}
     if($('settings').open&&settingsTab==='environment')drawSettings();
   };
@@ -496,7 +503,7 @@ function addSource(source){
   sourceMessage=source.items.length+' workflows available in New run.';save();
 }
 async function scanModels(){
-  const status= document.querySelector('#settings-body [role="status"]');
+  const status=$('model-status');
   modelScan='Scanning command-line agents…';if(status)status.textContent=modelScan;
   let detected=[];
   if(!isDemo){await scanAssistant();return}
@@ -586,11 +593,14 @@ document.addEventListener('keydown',event=>{
 $('settings').addEventListener('close',()=>{
   if(onboarding){state.setup=true;save();onboarding=false}
 });
-document.addEventListener('click',e=>{
-  const el=e.target.closest('button');if(!el)return;
+document.addEventListener('click',async e=>{
+  const el=e.target.closest('button');if(!el||el.disabled)return;
   if(el.hasAttribute('data-close'))el.closest('dialog')?.close();
   if(el.dataset.panel){settingsTab=el.dataset.panel;drawSettings()}
-  if(el.dataset.profile&&!isDemo)configureAssistant({provider:el.dataset.profile});
+  if(el.dataset.profile&&!isDemo){
+    const finish=beginModelAction(el);
+    try{await configureAssistant({provider:el.dataset.profile})}finally{finish();refreshModelPanel()}
+  }
   else if(el.dataset.profile){state.profile=el.dataset.profile;save();drawSettings();drawChat()}
   if(el.dataset.remove&&!isDemo)changeSource(async()=>{await nativeAFM.removeSource(el.dataset.remove);return null});
   else if(el.dataset.remove){state.sources=state.sources.filter(s=>s.id!==el.dataset.remove);save();drawSettings()}
@@ -630,7 +640,13 @@ function toggleChat(open){
   }else $('assistant-toggle').focus();
 }
 function sendMessage(text, fromDraft=false){
-  if(!isDemo)return isClearCommand(text)&&(!fromDraft||!assistantChat.images.length)?clearAssistant():sendAssistant(text,fromDraft);
+  if(!isDemo){
+    const opensConversation=['/new','/resume'].includes(text.trim());
+    if(opensConversation||!fromDraft||!assistantChat.images.length){
+      if(handleAssistantCommand(text))return;
+    }
+    return sendAssistant(text,fromDraft);
+  }
   if(!text.trim())return;
   const {p,r}=selection(),context=p?[p.name,r?.flow].filter(Boolean).join(' / '):'All projects';
   const at=new Date().toISOString();
@@ -665,7 +681,7 @@ function sendMessage(text, fromDraft=false){
 $('assistant-toggle').onclick=()=>toggleChat($('assistant').hidden);
 $('close-chat').onclick=()=>toggleChat(false);
 $('chat-form').onsubmit=e=>{e.preventDefault();sendMessage($('chat-input').value,true)};
-$('chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendMessage(e.target.value,true)}};
+$('chat-input').onkeydown=e=>{if(!isDemo&&assistantCommandKey(e))return;if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendMessage(e.target.value,true)}};
 document.querySelector('.suggestions').onclick=e=>{if(e.target.dataset.prompt)sendMessage(e.target.dataset.prompt)};
 document.addEventListener('workspace-change',drawChat);
 $('launch-hint').title=`${modKey} Shift Enter`;

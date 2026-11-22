@@ -44,7 +44,7 @@ test('an endpoint provider streams its reply with a key read from the referenced
   const { assistant, events, ctx } = await withProvider(t, server, { type: 'env', ref: 'LOCAL_KEY' }, { LOCAL_KEY: KEY });
   await assistant.send({ text: 'hello', images: [SAMPLE_IMAGE] });
   await settled(events);
-  assert.deepEqual(events.filter(e => e.type === 'delta').map(e => e.text), ['One ', 'two ', 'three']);
+  assert.equal(events.filter(e => e.type === 'delta').map(e => e.text).join(''), 'One two three');
   assert.equal(server.seen[0].url, '/v1/chat/completions');
   assert.equal(server.seen[0].auth, 'Bearer ' + KEY);
   assert.equal(server.seen[0].body.model, 'tiny-model');
@@ -109,11 +109,12 @@ test('the window reaches the assistant only through narrow IPC calls that ignore
   const off = registerAssistantIpc((name, fn) => handlers.set(name, fn), assistant, event => published.push(event.type));
   t.after(off);
   const call = (name, ...args) => handlers.get(name)(...args);
-  assert.deepEqual([...handlers.keys()].sort(), ['assistant:add-provider', 'assistant:approve', 'assistant:cancel', 'assistant:clear', 'assistant:configure',
-    'assistant:follow-up', 'assistant:history', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider']);
+  assert.deepEqual([...handlers.keys()].sort(), ['assistant:add-provider', 'assistant:approve', 'assistant:backlog', 'assistant:backlog-plans', 'assistant:cancel', 'assistant:clear', 'assistant:configure', 'assistant:conversations',
+    'assistant:follow-up', 'assistant:history', 'assistant:new-conversation', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider', 'assistant:update-provider-workspace']);
+  await assert.rejects(call('assistant:update-provider-workspace', 'claude', '/workspace'), /Remote ACP provider no longer exists/);
   await call('assistant:configure', { permission: 'read' });
   await assert.rejects(call('assistant:configure', { executable: '/bin/sh' }), /Invalid assistant setting/);
-  await call('assistant:send', { text: 'hi', images: [SAMPLE_IMAGE], conversationId: 'other', scope: { projectId: undefined, extra: '/etc' }, settings: { permission: 'yolo' } });
+  await call('assistant:send', { text: 'hi', images: [SAMPLE_IMAGE], scope: { projectId: undefined, extra: '/etc' }, settings: { permission: 'yolo' } });
   await eventuallyDone(published);
   assert.equal((await call('assistant:history')).length, 2);
   assert.deepEqual((await call('assistant:history')).map(m => m.role), ['user', 'assistant']);

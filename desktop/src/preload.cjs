@@ -74,13 +74,18 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
     configure:changes=>ipcRenderer.invoke('assistant:configure',changes),
     addProvider:input=>ipcRenderer.invoke('assistant:add-provider',input),
     removeProvider:id=>ipcRenderer.invoke('assistant:remove-provider',id),
+    updateProviderWorkspace:(id,cwd)=>ipcRenderer.invoke('assistant:update-provider-workspace',id,cwd),
     testProvider:id=>ipcRenderer.invoke('assistant:test-provider',id),
     send:request=>ipcRenderer.invoke('assistant:send',request),
     followUp:(turnId,queued)=>ipcRenderer.invoke('assistant:follow-up',turnId,queued),
-    cancel:()=>ipcRenderer.invoke('assistant:cancel'),
+    cancel:id=>ipcRenderer.invoke('assistant:cancel',id),
     approve:(id,approved)=>ipcRenderer.invoke('assistant:approve',id,approved),
-    history:()=>ipcRenderer.invoke('assistant:history'),
-    clear:()=>ipcRenderer.invoke('assistant:clear'),
+    backlogPlans:(scope,completed)=>ipcRenderer.invoke('assistant:backlog-plans',scope,completed),
+    backlog:(id,text,scope)=>ipcRenderer.invoke('assistant:backlog',id,text,scope),
+    conversations:()=>ipcRenderer.invoke('assistant:conversations'),
+    newConversation:()=>ipcRenderer.invoke('assistant:new-conversation'),
+    history:id=>ipcRenderer.invoke('assistant:history',id),
+    clear:id=>ipcRenderer.invoke('assistant:clear',id),
     onEvent:callback=>{
       const listener=(_event,event)=>callback(event);
       ipcRenderer.on('assistant:event',listener);

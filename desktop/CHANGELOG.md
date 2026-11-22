@@ -4,6 +4,11 @@
 
 ### Improvement:
 
+- Connect a Claude Code container to the Assistant through an authenticated remote ACP bridge.
+- Edit a remote ACP provider’s workspace and start a fresh session from the saved chat.
+- Start and resume saved Assistant conversations, search their titles, and confirm clearing a chat in the composer.
+- Save project plans through the Assistant and manage open and completed plans with backlog commands.
+- Connect OpenAI and Anthropic endpoints to a Deep Agent and see start and finish times for tool calls.
 - Review run changes in a searchable file tree, with a remembered diff layout and Command D or Ctrl D.
 
 ## 2026-11-21

@@ -153,6 +153,46 @@ to 5 MiB. The selected CLI or endpoint model must support image input.
 Desktop sends the images with the message and records the attachment count in
 its chat history.
 
+### Conversations and project backlog
+
+Type `/new` for a separate conversation or `/resume` to search saved titles.
+Use `/clear` to open the confirmation in the composer. The project backlog is
+available from any conversation. Select a project or run for its backlog, or
+use the All projects scope for the shared backlog.
+Ask a tool-capable Assistant to save a plan, then use `/backlog list`,
+`/backlog done N`, or `/backlog list done`. Use `/backlog delete N` for an
+open plan, `/backlog done delete N` for a completed plan, or
+`/backlog done clear` for all completed plans. Desktop asks before deleting.
+Type `/` and complete `/backlog` to see its subcommands.
+
+Choose an OpenAI or Anthropic Deep Agent in Models to use a compatible gateway.
+Set the endpoint URL and API token and select a model that supports tool calls.
+The agent uses the regular Assistant bridge for AFM actions.
+
+### Claude Code in a Docker container
+
+Build the example bridge with `docker build -t afm-claude-acp desktop/remote-acp`
+from the repository root. Keep Claude's sign-in in the container's profile.
+For your own headless Claude Code setup, supply the credential through the
+container environment. Use a separate bridge token for Desktop.
+
+```sh
+docker run --rm -p 127.0.0.1:8765:8765 \
+  -e ACP_BRIDGE_TOKEN -e CLAUDE_CODE_OAUTH_TOKEN \
+  -v afm-remote-claude:/home/node/.claude \
+  -v "$PWD:/workspace" afm-claude-acp
+```
+
+Use **Settings → Models → Add provider → Claude Code · Remote ACP** and enter
+`ws://127.0.0.1:8765/acp`, your bridge token, and the container workspace.
+Use **Edit** on the provider card to switch to an existing directory in the
+bridge workspace root. Saving stops active replies for that provider and starts
+the next reply in a fresh ACP session with the saved chat. The bridge uses
+`ACP_WORKSPACE` as its default directory and root. Set `ACP_WORKSPACE_ROOT`
+to allow choices within a broader mounted directory. Use WSS through your TLS
+proxy for a remote machine. The container can use its own configured MCP
+servers. The local Desktop MCP socket stays on the Desktop machine.
+
 ## Repeating Assistant tasks
 
 Ask the Assistant to run a prompt on a schedule, such as “Every ten minutes,
@@ -209,6 +249,11 @@ the plain-text fallback. Quitting Desktop does not finish an in-flight summary;
 it runs again after restart. At most 50 watches are kept.
 
 ### Connect an ACP agent
+
+For an installed Codex CLI, set **Connection → ACP** on the Codex card in
+**Settings → Models**. Desktop launches the packaged adapter with the same local
+Codex executable and account. The CLI connection remains available in the same
+picker.
 
 Under **Settings → Models → Add provider**, choose **ACP agent**. Enter the
 absolute path to the agent or adapter and one argument per line. Use the

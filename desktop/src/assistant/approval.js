@@ -9,10 +9,17 @@ const MAX_LINE = 16 * 1024;
 export class ApprovalServer {
   #server;
   #dir;
+  #listening;
   constructor(onRequest) { this.onRequest = onRequest; }
 
-  async listen() {
-    if (this.address) return this.address;
+  listen() {
+    return this.#listening ??= this.#open().catch(error => {
+      this.close();
+      throw error;
+    });
+  }
+
+  async #open() {
     this.#dir = mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'afm-a-'));
     this.address = process.platform === 'win32' ? `\\\\.\\pipe\\afm-desktop-${path.basename(this.#dir)}` : path.join(this.#dir, 's');
     this.#server = net.createServer(socket => {
@@ -42,6 +49,7 @@ export class ApprovalServer {
   close() {
     this.#server?.close();
     this.#server = null;
+    this.#listening = null;
     if (this.#dir) rmSync(this.#dir, { recursive: true, force: true });
     this.#dir = this.address = null;
   }
