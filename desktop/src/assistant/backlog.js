@@ -12,7 +12,27 @@ export const backlogTool = {
   } },
 };
 
-export const BACKLOG_COMMAND = /^\/backlog (?:list(?: done)?|done \d+|delete \d+|done delete \d+|done clear)$/;
+export const BACKLOG_NAMESPACE = /^\/backlog(?:\s|$)/;
+const BACKLOG_COMMAND = /^\/backlog (?:list(?: done)?|done \d+|delete \d+|done delete \d+|done clear)$/;
+const BACKLOG_HELP = [
+  'Backlog commands',
+  '/backlog list — list open plans',
+  '/backlog done N — mark a plan complete',
+  '/backlog list done — list completed plans',
+  '/backlog delete N — delete an open plan',
+  '/backlog done delete N — delete a completed plan',
+  '/backlog done clear — clear all completed plans',
+].join('\n');
+
+export function backlogGuidance(canSave) {
+  return [
+    'Backlog is built into AFM Desktop chat. Slash commands are handled by Desktop itself and use the current project, run, or All projects scope.',
+    BACKLOG_HELP,
+    canSave
+      ? 'When asked to save a plan, call desktop_backlog_add. If the user only gave a title, save it as a draft. Report the returned plan number.'
+      : 'If asked to list or manage backlog entries, give the appropriate Desktop command. If asked to save a plan, explain that this reply has no backlog write tool and do not claim it was saved.',
+  ].join('\n');
+}
 
 export class AssistantBacklog {
   #lock = new Mutex();
@@ -50,6 +70,7 @@ export class AssistantBacklog {
   }
 
   command(scope, command) {
+    if (!BACKLOG_COMMAND.test(command)) return `${command === '/backlog' ? '' : 'Unknown or incomplete backlog command.\n\n'}${BACKLOG_HELP}`;
     return this.withBacklog(scope, async (store, save) => {
       const rows = store.plans;
       if (command === '/backlog done clear') {

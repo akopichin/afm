@@ -9,7 +9,8 @@ import { AssistantBacklog } from '../src/assistant/backlog.js';
 test('Desktop persists separate conversation histories and project backlog numbers', async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'afm-assistant-memory-'));
   t.after(() => rm(home, { recursive: true, force: true }));
-  const context = { project: async id => ({ id, name: 'Project', path: '/workspace/project' }) };
+  const context = { project: async id => ({ id, name: 'Project', path: '/workspace/project' }),
+    runs: async () => [{ run_id: 'run', instance_id: 'instance', project_root: '/workspace/project' }] };
   const assistant = new Assistant({ home, context });
   const first = await assistant.createConversation();
   const second = await assistant.createConversation();
@@ -24,7 +25,12 @@ test('Desktop persists separate conversation histories and project backlog numbe
   const resumed = new Assistant({ home, context });
   assert.equal((await resumed.conversations()).length, 3);
   const project = { projectId: 'project' };
-  const [, open] = await resumed.backlogCommand(second.id, '/backlog list', project);
+  const run = { runId: 'run', instanceId: 'instance' };
+  const [, help] = await resumed.backlogCommand(second.id, '/backlog', run);
+  assert.match(help.text, /Backlog commands[\s\S]*\/backlog list done/);
+  const [, incomplete] = await resumed.backlogCommand(second.id, '/backlog done', project);
+  assert.match(incomplete.text, /Unknown or incomplete backlog command[\s\S]*\/backlog done N/);
+  const [, open] = await resumed.backlogCommand(second.id, '/backlog list', run);
   assert.match(open.text, /#1 · Scope the plan/);
   await resumed.backlogCommand(second.id, '/backlog done 1', project);
   const [, complete] = await resumed.backlogCommand(first.id, '/backlog list done', project);

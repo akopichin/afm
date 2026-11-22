@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 import { searchMessages } from './memory-search.js';
-import { AssistantBacklog, BACKLOG_COMMAND } from './backlog.js';
+import { AssistantBacklog, BACKLOG_NAMESPACE, backlogGuidance } from './backlog.js';
 import { ApprovalServer } from './approval.js';
 import { detectProvider, searchDirs } from './detect.js';
 import { probeAcp, runAcp } from './acp.js';
@@ -351,14 +351,15 @@ export class Assistant {
 
   async backlogCommand(id, text, input) {
     if (this.clearing.has(id)) throw new AssistantError('busy', 'The conversation is being cleared.');
-    if (!BACKLOG_COMMAND.test(text)) throw new AssistantError('invalid', 'Unknown backlog command.');
+    if (!BACKLOG_NAMESPACE.test(text)) throw new AssistantError('invalid', 'Unknown backlog command.');
     if (id !== 'main' && !await this.#loadConversation(id)) throw new AssistantError('unknown_chat', 'Conversation not found.');
     const scope = await this.#resolveScope(input);
     const answer = await this.backlog.command(scope, text);
     const at = new Date().toISOString();
+    const scoped = { at, context: scopeLabel(scope), projectRoot: scope.projectRoot, runId: scope.runId, instanceId: scope.instanceId };
     const messages = [
-      { id: randomUUID(), role: 'user', text, at, context: scopeLabel(scope) },
-      { id: randomUUID(), role: 'assistant', text: answer, at, status: 'done', context: scopeLabel(scope) },
+      { id: randomUUID(), role: 'user', text, ...scoped },
+      { id: randomUUID(), role: 'assistant', text: answer, status: 'done', ...scoped },
     ];
     await this.#saveMessages(id, current => [...current, ...messages]);
     return messages;
@@ -447,7 +448,7 @@ export class Assistant {
       `Scope: ${scopeLabel(scope)}${scope.kind === 'all' ? '' : ` (${scope.projectRoot})`}. Permission mode: ${effective.label}.`,
       hasTools ? 'Use the afm_* tools to inspect or control AFM runs. They only work inside the scope and mode above; report any tool error to the user as it is.'
         : 'AFM tools are not available in this conversation; say so if the user asks you to inspect or control runs.',
-      hasTools && !turn?.repeating && effective.label !== PERMISSION_LABELS.read ? 'When asked to put a plan in the backlog, call desktop_backlog_add. If the user only gave a title, save it as a draft. Report the saved plan number.' : '',
+      !turn?.repeating ? backlogGuidance(hasTools && turn?.settings?.permission !== 'read') : '',
       hasTools && this.watch && !turn?.repeating ? `Use desktop_watch_* to observe runs. For an explicit request to repeat a prompt at intervals, use desktop_task_schedule if available, including delivery=telegram when requested. Create one task, and wait for Desktop’s approval result. Current time: ${new Date().toISOString()}. Use absolute ISO times with an offset.` : '',
       hasTools && isDesktopConversation(turn?.conversationId) ? WAIT_GUIDANCE : '',
       turn?.prior?.at(-1)?.status === 'yielded' ? FOLLOW_UP_GUIDANCE : '',
@@ -534,9 +535,10 @@ export class Assistant {
   }
 
   #invocation(turn, bridge = null, resume = null, imageFiles = []) {
+    const hasTools = Boolean(bridge) && (turn.provider.kind !== 'claude' || turn.provider.capabilities.mcpConfig);
     return buildInvocation({ provider: turn.provider, settings: turn.settings, bridge, resume, isolated: turn.noTools,
       hasImages: turn.images.length > 0, imageFiles,
-      systemPrompt: this.#systemPrompt(turn.scope, { label: PERMISSION_LABELS[turn.settings.permission] }, Boolean(bridge), turn) });
+      systemPrompt: this.#systemPrompt(turn.scope, { label: PERMISSION_LABELS[turn.settings.permission] }, hasTools, turn) });
   }
 
   // The provider refused the resumed session before doing anything. Retrying any other failure could repeat
@@ -594,8 +596,11 @@ export class Assistant {
           const { args } = this.#invocation(turn, bridge, resume?.id, imageFiles);
           const context = [];
           if (provider.kind === 'acp') context.push(this.#systemPrompt(scope, { label: turn.effective.label }, Boolean(bridge), turn));
+          if (provider.kind === 'claude' && !provider.capabilities.appendSystemPrompt && !turn.repeating)
+            context.push(backlogGuidance(Boolean(bridge) && provider.capabilities.mcpConfig && settings.permission !== 'read'));
           if (provider.kind === 'codex') {
             if (turn.repeating) context.push(this.#systemPrompt(scope, { label: PERMISSION_LABELS[settings.permission] }, Boolean(bridge), turn));
+            else context.push(backlogGuidance(Boolean(bridge) && settings.permission !== 'read'));
             if (bridge && isDesktopConversation(turn.conversationId)) context.push(WAIT_GUIDANCE);
             if (prior.at(-1)?.status === 'yielded') context.push(FOLLOW_UP_GUIDANCE);
           }

@@ -1,7 +1,7 @@
 'use strict';
 // The Tasks tab: background watches Desktop keeps for the user, their results and written summaries.
 // The tasks live in the main process; this page shows the latest list it was sent and sends back the user's choices.
-const watchState={tasks:[],view:'chat',note:''};
+const watchState={tasks:[],view:'chat',note:'',deleteId:null,deleting:false};
 const repeatingHistory=new Map();
 const WATCH_STATUS={active:'Watching',paused:'Paused',stopped:'Stopped',completed:'Completed'};
 const WATCH_KIND={question:'Question',approval:'Approval needed',decision:'Decision needed',failed:'Failed',finished:'Finished'};
@@ -30,6 +30,7 @@ function watchScopeText(task){
   return projects.flatMap(p=>p.runs).find(r=>r.rawId===runId&&r.instance===instanceId)?.flow||'A run';
 }
 const watchTime=iso=>new Date(iso).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const watchDay=new Intl.DateTimeFormat('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'});
 function watchUntilText(task){
   const parts=[task.deadline?'Until '+watchTime(task.deadline):'No end time'];
   if(task.summaryAt&&!task.summaryDone)parts.push('summary at '+watchTime(task.summaryAt));
@@ -51,6 +52,18 @@ function historyRowHTML(task,row,unread){
   const {item}=row;
   return `<button type="button" class="watch-event" data-watch-open="result" data-task="${esc(task.id)}" data-item="${esc(item.id)}">${bell}<span><strong>${dot}${esc(WATCH_KIND[item.kind]||item.kind)}${item.runName?' · '+esc(item.runName):''}</strong><small>${esc([item.stageName,watchTime(item.at)].filter(Boolean).join(' · '))}</small></span></button>`;
 }
+const canDeleteTask=task=>['stopped','completed'].includes(task.status);
+function taskDeleteButton(task){
+  return canDeleteTask(task)?`<button type="button" class="icon task-delete" data-watch-delete="${esc(task.id)}" aria-label="Delete ${esc(task.title)}" title="Delete task">×</button>`:'';
+}
+function taskDeleteConfirmation(task){
+  if(watchState.deleteId!==task.id)return '';
+  return `<div class="watch-delete-confirm" role="group" aria-label="Delete task and its results" ${watchState.deleting?'aria-busy="true"':''}>
+    <p>Delete this task and its results?</p><div class="watch-buttons">
+      <button type="button" class="action" data-watch-keep="${esc(task.id)}" ${watchState.deleting?'disabled':''}>Cancel</button>
+      <button type="button" class="action watch-delete-confirm-button" data-watch-remove="${esc(task.id)}" ${watchState.deleting?'disabled':''}>${watchState.deleting?'Deleting…':'Delete'}</button>
+    </div></div>`;
+}
 function taskCardHTML(task){
   if(task.kind==='repeating')return repeatingCardHTML(task);
   const live=task.status==='active'||task.status==='paused';
@@ -58,7 +71,8 @@ function taskCardHTML(task){
   // Summaries are never cut off by newer results.
   const history=watchHistory(task),rows=[...history.slice(0,20),...history.slice(20).filter(row=>row.type==='report')];
   return `<article class="watch-card" aria-label="${esc(task.title)}">
-    <div class="watch-title">${radar}<strong>${esc(task.title)}</strong><span class="watch-state" role="status" ${task.status==='active'?'':'data-inactive'}><i class="dot"></i>${esc(WATCH_STATUS[task.status]||task.status)}</span></div>
+    <div class="watch-title">${radar}<strong>${esc(task.title)}</strong><span class="watch-state" role="status" ${task.status==='active'?'':'data-inactive'}><i class="dot"></i>${esc(WATCH_STATUS[task.status]||task.status)}</span>${taskDeleteButton(task)}</div>
+    ${taskDeleteConfirmation(task)}
     <dl class="watch-meta"><div><dt>Scope</dt><dd>${esc(watchScopeText(task))}</dd></div><div><dt>Notify</dt><dd>${esc(task.events.map(kind=>WATCH_KIND[kind]||kind).join(', '))}</dd></div><div><dt>Until</dt><dd>${esc(watchUntilText(task))}</dd></div></dl>
     ${buttons?`<div class="watch-buttons">${buttons}</div>`:''}
     <div class="watch-activity">Results and events</div>
@@ -74,7 +88,8 @@ function repeatingCardHTML(task){
   const delivery=report?.deliveryStatus==='sent'?'Sent to Telegram':report?.deliveryStatus==='cancelled'?'Delivery cancelled':report?.deliveryStatus;
   return `<article class="watch-card" aria-label="${esc(task.title)}">
     <div class="watch-title">${radar}<strong>${esc(task.title)}</strong><span class="watch-state" role="status" ${task.status==='active'?'':'data-inactive'}>${esc(status)}</span>
-      ${live?`<button type="button" class="icon repeat-cancel" data-watch-action="stop" data-task="${esc(task.id)}" aria-label="Cancel repeating task" title="Cancel repeating task">×</button>`:''}</div>
+      ${live?`<button type="button" class="icon repeat-cancel" data-watch-action="stop" data-task="${esc(task.id)}" aria-label="Cancel repeating task" title="Cancel repeating task">×</button>`:taskDeleteButton(task)}</div>
+    ${taskDeleteConfirmation(task)}
     <dl class="watch-meta"><div><dt>Scope</dt><dd>${esc(task.scope.name||watchScopeText(task))}</dd></div>
       <div><dt>Schedule</dt><dd>Every ${esc(task.everyMs/60000)} min${task.status==='active'?' · Next '+esc(watchTime(task.nextAt)):''}</dd></div>
       <div><dt>Model</dt><dd>${esc(task.providerName)} · ${esc(task.settings.model||'Provider default')}</dd></div>
@@ -92,13 +107,26 @@ function repeatingCardHTML(task){
       :'<p class="watch-none">No results yet.</p>'}
   </article>`;
 }
+function datedTasksHTML(tasks){
+  const dated=[...tasks].reverse().map(task=>({task,at:Date.parse(task.createdAt)}))
+    .sort((a,b)=>(Number.isFinite(b.at)?b.at:-Infinity)-(Number.isFinite(a.at)?a.at:-Infinity));
+  const groups=new Map();
+  for(const {task,at} of dated){
+    const day=Number.isFinite(at)?watchDay.format(at):'';
+    if(!groups.has(day))groups.set(day,[]);
+    groups.get(day).push(task);
+  }
+  return [...groups].map(([day,items])=>`<section class="watch-day-group" aria-label="${day||'Unknown date'}">
+    <h3 class="watch-day">${day?`<time datetime="${day.split('/').reverse().join('-')}">${day}</time>`:'Unknown date'}</h3>
+    ${items.map(taskCardHTML).join('')}</section>`).join('');
+}
 function drawTasks(){
   const total=watchUnreadTotal(),badge=$('tasks-unread');
   badge.hidden=!total;badge.textContent=total;
   badge.setAttribute('aria-label',total+(total===1?' unread result':' unread results'));
   paintKeepingFocus('tasks',()=>{$('tasks').innerHTML=(watchState.note?`<p class="watch-note" role="status">${esc(watchState.note)}</p>`:'')
     +(!isDemo?'<button type="button" class="action repeat-new" data-new-repeating>New repeating task</button>':'')
-    +(watchState.tasks.length?[...watchState.tasks].reverse().map(taskCardHTML).join(''):'<div class="chat-empty"><span>◎</span><h3>No watches yet</h3><p>Ask the assistant to watch your runs and report back.</p></div>');});
+    +(watchState.tasks.length?datedTasksHTML(watchState.tasks):'<div class="chat-empty"><span>◎</span><h3>No watches yet</h3><p>Ask the assistant to watch your runs and report back.</p></div>');});
   queueChatDraw();
 }
 // A task card in the chat: what was set up and where to find it. It reads the live task, so a finished summary shows up there too.
@@ -109,7 +137,7 @@ function watchCardHTML(card){
   return `<div class="watch-card compact" role="group" aria-label="${card.kind==='repeating'?'Repeating task':'Watch task'}">
     <div class="watch-title">${radar}<strong>${esc(card.title)}</strong>${task?`<span class="watch-state" ${task.status==='active'?'':'data-inactive'}><i class="dot"></i>${esc(status)}</span>`:''}</div>
     <p class="watch-line">${esc([card.scope,card.deadline?'until '+watchTime(card.deadline):null].filter(Boolean).join(' · '))}</p>
-    <div class="watch-buttons"><button type="button" class="action" data-watch-card="tasks" data-task="${esc(card.taskId)}">Open in Tasks</button>${report?`<button type="button" class="action" data-watch-card="summary" data-task="${esc(card.taskId)}" data-item="${esc(report.id)}">Open summary</button>`:''}</div>
+    ${task?`<div class="watch-buttons"><button type="button" class="action" data-watch-card="tasks" data-task="${esc(card.taskId)}">Open in Tasks</button>${report?`<button type="button" class="action" data-watch-card="summary" data-task="${esc(card.taskId)}" data-item="${esc(report.id)}">Open summary</button>`:''}</div>`:''}
   </div>`;
 }
 
@@ -134,6 +162,23 @@ function openRunLink(instance,runId,stage){
 async function changeTask(action,id){
   try{await nativeAFM.watch[action](id)}catch(error){watchState.note=ipcMessage(error);drawTasks();return}
   [...$('tasks').querySelectorAll('[data-watch-action]')].find(button=>button.dataset.task===id)?.focus();
+}
+async function removeWatchTask(id){
+  if(watchState.deleting||watchState.deleteId!==id)return;
+  watchState.deleting=true;
+  watchState.note='';
+  drawTasks();
+  try{
+    await nativeAFM.watch.remove(id);
+    watchState.deleteId=null;
+    repeatingHistory.delete(id);
+  }catch(error){
+    watchState.note=ipcMessage(error);
+  }finally{
+    watchState.deleting=false;
+    drawTasks();
+  }
+  $('tasks').querySelector(watchState.deleteId?'[data-watch-keep]':'[data-watch-delete],[data-new-repeating]')?.focus({preventScroll:true});
 }
 function openHistoryItem(task,kind,itemId){
   if(kind==='report'){const report=task.reports.find(item=>item.id===itemId);if(report)openReport(task,report);return}
@@ -207,6 +252,17 @@ $('tasks').addEventListener('click',e=>{
   }
   const action=e.target.closest('[data-watch-action]');
   if(action){changeTask(action.dataset.watchAction,action.dataset.task);return}
+  const command=e.target.closest('[data-watch-delete],[data-watch-keep],[data-watch-remove]');
+  if(command){
+    if(watchState.deleting)return;
+    const {watchDelete,watchKeep,watchRemove}=command.dataset;
+    if(watchRemove){void removeWatchTask(watchRemove);return}
+    watchState.deleteId=watchDelete??null;
+    drawTasks();
+    const selector=watchDelete?'[data-watch-keep]':'[data-watch-delete]';
+    [...$('tasks').querySelectorAll(selector)].find(button=>(button.dataset.watchKeep??button.dataset.watchDelete)===(watchDelete??watchKeep))?.focus({preventScroll:true});
+    return;
+  }
   const open=e.target.closest('[data-watch-open]'),task=open&&watchState.tasks.find(item=>item.id===open.dataset.task);
   if(task)openHistoryItem(task,open.dataset.watchOpen,open.dataset.item);
 });

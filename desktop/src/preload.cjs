@@ -99,6 +99,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
     pause:id=>ipcRenderer.invoke('watch:pause',id),
     resume:id=>ipcRenderer.invoke('watch:resume',id),
     stop:id=>ipcRenderer.invoke('watch:stop',id),
+    remove:id=>ipcRenderer.invoke('watch:remove',id),
     markRead:id=>ipcRenderer.invoke('watch:read',id),
     onChange:callback=>{
       const listener=(_event,tasks)=>callback(tasks);

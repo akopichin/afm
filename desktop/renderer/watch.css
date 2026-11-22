@@ -54,6 +54,12 @@
 #tasks { flex: 1; overflow: auto; padding: 18px }
 #tasks[hidden] { display: none }
 #tasks .watch-card { margin-bottom: 14px }
+.watch-day {display:flex;align-items:center;gap:10px;margin:2px 0 10px;color:var(--text-muted);font:11px var(--font-mono);white-space:nowrap}
+.watch-day::before,.watch-day::after {content:'';flex:1;border-top:1px solid var(--separator-subtle)}
+.task-delete {width:24px;height:24px;flex:none;color:var(--text-muted)}
+.task-delete:hover,.task-delete:focus-visible,.watch-delete-confirm-button {color:var(--danger)}
+.watch-delete-confirm {margin-top:9px;padding:8px;border:1px solid var(--separator-subtle);border-radius:6px;background:var(--surface-raised)}
+.watch-delete-confirm p {margin:0 0 6px;font-size:12px}
 .watch-card.compact { margin: 8px 0 0 }
 .watch-line, .watch-none, .watch-note { margin: 6px 0; color: var(--text-muted); font-size: 12px }
 .watch-note { padding: 7px 9px; border-radius: 6px; background: var(--surface-tool); color: var(--attention) }

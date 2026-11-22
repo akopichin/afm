@@ -471,7 +471,10 @@ for (const kind of ['claude', 'codex']) {
     assert.deepEqual(calls[0].args.filter(arg => resume.includes(arg)), [], 'the first turn is a fresh session');
     assert.ok(resume.every(arg => calls[1].args.includes(arg)), `the second turn resumes: ${calls[1].args.join(' ')}`);
     assert.equal(calls[1].args.filter(arg => arg === 'sess-one').length, 1, 'the id appears once, as the provider flag value');
-    assert.equal(calls[1].stdin, 'User: two', 'a resumed session is not given the transcript again');
+    const prompt = calls[1].stdin;
+    if (kind === 'codex') assert.match(prompt, /^Backlog is built into AFM Desktop chat/);
+    assert.equal(prompt.slice(prompt.startsWith('Backlog is built') ? prompt.indexOf('\n\n') + 2 : 0), 'User: two',
+      'a resumed session is not given the transcript again');
     assert.equal(JSON.stringify(await second.assistant.state()).includes('sess-one'), false, 'the id is not part of the state shown to the window');
   });
 }
@@ -900,7 +903,7 @@ test('a session is resumed only while everything it did not see fits the transcr
     await turn(assistant, events, 'next');
     let call = (await ctx.invocations()).at(-1);
     assert.ok(call.args.includes(resumeArg(kind)), `${kind}: a catch-up that fits is resumed`);
-    assert.equal(call.stdin, 'User: small unseen\n\nUser: next');
+    assert.equal(call.stdin.slice(kind === 'codex' ? call.stdin.indexOf('\n\n') + 2 : 0), 'User: small unseen\n\nUser: next');
     await seed(Array.from({ length: 24 }, (_, i) => ({ id: 'c' + i, role: i % 2 ? 'assistant' : 'user', text: `unseen-${i} ` + 'x'.repeat(1990) })));
     await turn(assistant, events, 'now');
     call = (await ctx.invocations()).at(-1);

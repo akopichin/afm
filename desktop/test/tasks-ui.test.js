@@ -33,6 +33,29 @@ async function openShell(t, tasks) {
 }
 const openTasks = async ({ d, get }) => { d.querySelector('[data-assistant-view="tasks"]').click(); await tick(); return get('tasks'); };
 
+test('Tasks group by local creation date and delete a finished task after confirmation', async t => {
+  const at = (day, hour) => new Date(2026, 10, day, hour).toISOString();
+  const shell = await openShell(t, [
+    watchTask('today', { title: 'Watch today', createdAt: at(22, 13) }),
+    watchTask('old', { status: 'completed', createdAt: at(21, 12), results: [result('old-result')], unread: 1 }),
+    watchTask('same-day', { title: 'Watch same-day', status: 'stopped', createdAt: at(22, 10) }),
+  ]);
+  const panel = await openTasks(shell);
+  assert.deepEqual([...panel.querySelectorAll('.watch-day time')].map(node => node.textContent), ['22/11/2026', '21/11/2026']);
+  assert.deepEqual([...panel.querySelector('.watch-day-group').querySelectorAll('article')].map(node => node.ariaLabel), ['Watch today', 'Watch same-day']);
+  assert.equal(panel.querySelector('[data-watch-delete="today"]'), null);
+  panel.querySelector('[data-watch-delete="old"]').click();
+  assert.match(panel.querySelector('.watch-delete-confirm').textContent, /Delete this task and its results/);
+  panel.querySelector('[data-watch-keep="old"]').click();
+  assert.deepEqual(shell.watch.calls.remove, []);
+  panel.querySelector('[data-watch-delete="old"]').click();
+  panel.querySelector('[data-watch-remove="old"]').click();
+  await tick();
+  assert.deepEqual(shell.watch.calls.remove, ['old']);
+  assert.deepEqual([...panel.querySelectorAll('.watch-day time')].map(node => node.textContent), ['22/11/2026']);
+  assert.equal(shell.get('tasks-unread').hidden, true);
+});
+
 test('Chat and Tasks switch in place, the Tasks tab counts unread results, and opening a result clears the count', async t => {
   const shell = await openShell(t, [watchTask('t1', { results: [result('r1'), result('r2', { at: '2026-06-01T08:40:00.000Z', kind: 'failed', stageId: null })], unread: 2 })]);
   const { d, get, watch } = shell;

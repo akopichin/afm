@@ -7,6 +7,7 @@ export function registerWatchIpc(handle, watch, publish) {
   handle('watch:pause', id => changed(() => watch.pause(String(id))));
   handle('watch:resume', id => changed(() => watch.resume(String(id))));
   handle('watch:stop', id => changed(() => watch.stop(String(id))));
+  handle('watch:remove', id => watch.remove(String(id)));
   handle('watch:read', id => changed(() => watch.markRead(String(id))));
   return () => publish(watch.list().map(taskView));
 }

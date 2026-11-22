@@ -713,10 +713,12 @@ test('cancelling the inline clear confirmation keeps the current conversation', 
 
 test('backlog completion reveals one command level and confirms deletion locally', async t => {
   const assistant = fakeAssistant();
+  assistant.info.providers.push(providerInfo('clodik', { name: 'Clodik', builtIn: false, kind: 'acp', remoteCwd: '/workspace' }));
+  assistant.info.settings.provider = 'clodik';
   const calls = [];
   assistant.backlog = async (id, command, scope) => {
     calls.push({ id, command, scope });
-    return [{ id: 'backlog-result', role: 'assistant', text: 'Deleted #2.', status: 'done', tools: [] }];
+    return [{ id: 'backlog-result-' + calls.length, role: 'assistant', text: command === '/backlog' ? 'Backlog commands' : 'Deleted #2.', status: 'done', tools: [] }];
   };
   assistant.backlogPlans = async (_scope, completed) => completed ? [{ number: 2, title: 'Done' }] : [];
   const { w, d, get } = await openShell(t, { assistant });
@@ -724,6 +726,15 @@ test('backlog completion reveals one command level and confirms deletion locally
   const input = get('chat-input');
   const choices = () => Array.from(get('assistant-command-menu').querySelectorAll('code'), element => element.textContent);
   type(w, get, '/');
+  input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.deepEqual(choices(), ['/new', '/resume', '/clear', '/backlog ']);
+  type(w, get, '/backlog');
+  submit(w, get);
+  await tick();
+  assert.deepEqual(calls.map(call => call.command), ['/backlog']);
+  assert.deepEqual(assistant.calls.send, []);
+  assert.match(get('messages').textContent, /Backlog commands/);
+  type(w, get, '/back');
   input.dispatchEvent(new w.Event('input', { bubbles: true }));
   assert.deepEqual(choices(), ['/backlog ']);
   input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
@@ -737,10 +748,10 @@ test('backlog completion reveals one command level and confirms deletion locally
   submit(w, get);
   assert.equal(d.activeElement.id, 'assistant-keep');
   get('assistant-keep').click();
-  assert.equal(calls.length, 0);
+  assert.equal(calls.length, 1);
   submit(w, get);
   get('assistant-erase').click();
   await tick();
-  assert.deepEqual(calls.map(call => call.command), ['/backlog done delete 2']);
+  assert.deepEqual(calls.map(call => call.command), ['/backlog', '/backlog done delete 2']);
   assert.match(get('messages').textContent, /Deleted #2/);
 });

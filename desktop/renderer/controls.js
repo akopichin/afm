@@ -642,7 +642,7 @@ function toggleChat(open){
 function sendMessage(text, fromDraft=false){
   if(!isDemo){
     const opensConversation=['/new','/resume'].includes(text.trim());
-    if(opensConversation||!fromDraft||!assistantChat.images.length){
+    if(opensConversation||isBacklogCommand(text)||!fromDraft||!assistantChat.images.length){
       if(handleAssistantCommand(text))return;
     }
     return sendAssistant(text,fromDraft);

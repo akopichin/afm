@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { makeAssistant, SAMPLE_IMAGE } from './assistant-support.js';
+import { makeAssistant, SAMPLE_IMAGE, settled, stubContext } from './assistant-support.js';
 
 const AGENT = `
 import { createInterface } from 'node:readline';
@@ -96,7 +96,14 @@ test('remote ACP authenticates before opening a session and streams across the D
   const home = await mkdtemp(path.join(os.tmpdir(), 'remote-acp-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const fake = path.join(home, 'agent.mjs');
-  await writeFile(fake, "if (process.env.ACP_BRIDGE_TOKEN) process.exit(1);\n" + AGENT.replace("if (msg.method === 'session/new') result", "if (msg.method === 'session/new' && msg.params.cwd !== process.cwd()) throw Error('Workspace mismatch');\n  if (msg.method === 'session/new') result"));
+  const remoteAgent = AGENT.replace("if (msg.method === 'session/new') result", "if (msg.method === 'session/new' && msg.params.cwd !== process.cwd()) throw Error('Workspace mismatch');\n  if (msg.method === 'session/new') result")
+    .replace('promptId = msg.id;', `promptId = msg.id;
+      const text = msg.params.prompt.find(item => item.type === 'text')?.text;
+      if (text.endsWith('Tell me how the backlog works.') &&
+        (!text.includes('Scope: test-run') || !text.includes('/backlog list done') || !text.includes('this reply has no backlog write tool'))) {
+        throw Error('Missing Desktop backlog guidance');
+      }`);
+  await writeFile(fake, "if (process.env.ACP_BRIDGE_TOKEN) process.exit(1);\n" + remoteAgent);
   const nested = path.join(await realpath(home), 'nested');
   await mkdir(nested);
   await symlink(path.dirname(await realpath(home)), path.join(home, 'outside'), 'dir');
@@ -114,7 +121,9 @@ test('remote ACP authenticates before opening a session and streams across the D
   const provider = { endpoint: `ws://127.0.0.1:${port}/acp`, remoteCwd: home };
   await assert.rejects(probeAcp(provider, {}, 'wrong'));
   assert.equal((await probeAcp(provider, {}, token)).capabilities.image, true);
-  const { assistant } = makeAssistant(t, { home, env: process.env });
+  const { assistant, events: chatEvents } = makeAssistant(t, { home, env: process.env }, { context: stubContext({
+    runs: async () => [{ run_id: 'test-run', instance_id: 'instance', project_root: home }],
+  }) });
   const id = 'test-remote';
   const credential = { type: 'file', ref: path.join(home, 'bridge-key') };
   await writeFile(credential.ref, token);
@@ -133,6 +142,11 @@ test('remote ACP authenticates before opening a session and streams across the D
     onEvent: event => events.push(event), approve: async () => true });
   assert.ifError((await run.done).error);
   assert.equal(events.filter(event => event.type === 'delta').map(event => event.text).join(''), 'First update. Second update.');
+  await assistant.configure({ reasoning: 'high' });
+  assistant.onEvent(event => { if (event.type === 'approval') assistant.approve(event.approvalId, true); });
+  await assistant.send({ text: 'Tell me how the backlog works.', images: [SAMPLE_IMAGE], scope: { runId: 'test-run', instanceId: 'instance' } });
+  const result = await settled(chatEvents);
+  assert.equal(result.type, 'done', result.message);
 });
 
 

@@ -113,4 +113,10 @@ test('the window API names tasks by id only, hides the observer cursor, stores b
   assert.ok(changes.length >= 4, 'every save is announced');
   publish();
   assert.equal(sent.at(-1)[0].reports.length, 1);
+  await assert.rejects(handlers.get('watch:remove')(task.id), /Stop the task/);
+  await handlers.get('watch:stop')(task.id);
+  await handlers.get('watch:remove')(task.id);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).tasks, []);
+  publish();
+  assert.deepEqual(sent.at(-1), []);
 });

@@ -507,6 +507,7 @@ const completedCommands=[
   ['/backlog done clear','Clear completed plans'],
 ];
 const backlogNumberPrefix=/^(\/backlog (?:done delete|delete|done) )\d*$/;
+const isBacklogCommand=text=>/^\/backlog(?:\s|$)/.test(text.trim());
 let commandIndex=0, resumeRows=[],resumeIndex=0, backlogSuggestions=[], hintRequest=0, confirmAction=null;
 function refreshBacklogSuggestions(){
   const request=++hintRequest;
@@ -579,6 +580,7 @@ function drawResume(reset){
 }
 
 function executeBacklogCommand(target,id,command,scope){
+  target.local='';
   if(target===assistantChat){$('chat-input').value='';drawAssistantCommands(true)}
   nativeAFM.assistant.backlog(id,command,scope).then(messages=>{
     target.messages.push(...messages);
@@ -591,12 +593,12 @@ function executeBacklogCommand(target,id,command,scope){
 
 function handleAssistantCommand(text){
   const command=text.trim();
-  if(/^\/backlog (?:list(?: done)?|done \d+|delete \d+|done delete \d+|done clear)$/.test(command)){
+  if(isBacklogCommand(command)){
     const target=assistantChat, id=activeConversation, scope=currentScope();
     const run=()=>executeBacklogCommand(target,id,command,scope);
     $('assistant-command-menu').hidden=true;
-    const clear=command.endsWith(' done clear');
-    const number=/ delete (\d+)$/.exec(command)?.[1];
+    const clear=command==='/backlog done clear';
+    const number=/^\/backlog (?:done )?delete (\d+)$/.exec(command)?.[1];
     if(clear||number){
       openAssistantConfirmation({ title:clear?'Clear completed plans?':`Delete plan #${number}?`,
         detail:scopeText(), action:clear?'Clear completed':'Delete', run });
@@ -654,7 +656,6 @@ $('assistant-resume')?.addEventListener('keydown',e=>{
 function commandSuggestions(){
   const input=$('chat-input').value;
   if(!input.startsWith('/')||input.includes('\n'))return [];
-  if(input==='/')return [assistantCommands.at(-1)];
   const commands=input.startsWith('/backlog done ')?[...completedCommands,...backlogSuggestions]
     :input.startsWith('/backlog delete ')?backlogSuggestions
     :input.startsWith('/backlog list ')?[['/backlog list done','List completed plans']]

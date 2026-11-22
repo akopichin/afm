@@ -163,7 +163,9 @@ Ask a tool-capable Assistant to save a plan, then use `/backlog list`,
 `/backlog done N`, or `/backlog list done`. Use `/backlog delete N` for an
 open plan, `/backlog done delete N` for a completed plan, or
 `/backlog done clear` for all completed plans. Desktop asks before deleting.
-Type `/` and complete `/backlog` to see its subcommands.
+Type `/` for the top-level commands and complete `/backlog` to see its
+subcommands. Sending `/backlog` opens the command help in chat. Desktop
+handles these commands directly with any selected provider.
 
 Choose an OpenAI or Anthropic Deep Agent in Models to use a compatible gateway.
 Set the endpoint URL and API token and select a model that supports tool calls.
@@ -209,6 +211,9 @@ previous 20 results. Pause or resume a schedule, or click × to cancel future
 runs and keep its results. The first run is one interval after creation.
 Busy or offline intervals are skipped. Desktop saves the schedule in
 `~/.afm/desktop/watch-tasks.json` and resumes at its next interval after restart.
+The Tasks tab groups watches and repeating tasks by their local creation date,
+newest first. Click × on a stopped or completed task and confirm **Delete** to
+remove the task and its saved results.
 
 For Telegram, configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in Desktop
 Environment, or use `~/.afm/secrets/telegram-bot-token` and

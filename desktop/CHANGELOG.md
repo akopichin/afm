@@ -5,6 +5,7 @@
 ### Improvement:
 
 - Connect a Claude Code container to the Assistant through an authenticated remote ACP bridge.
+- Group Tasks by creation date and delete stopped or completed tasks from their cards.
 - Edit a remote ACP provider’s workspace and start a fresh session from the saved chat.
 - Start and resume saved Assistant conversations, search their titles, and confirm clearing a chat in the composer.
 - Save project plans through the Assistant and manage open and completed plans with backlog commands.
@@ -13,6 +14,7 @@
 
 ### Fix:
 
+- Handle `/backlog` locally for every provider and show all top-level slash commands in autocomplete.
 - Draw interval lines in Costs, recover elapsed spans from AFM clocks, and place finished-run tokens from matching job totals.
 
 ## 2026-11-21

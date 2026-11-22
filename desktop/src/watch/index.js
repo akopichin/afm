@@ -89,6 +89,13 @@ export class WatchService {
     return this.#changed(task);
   }
 
+  async remove(id) {
+    const task = this.#need(id);
+    if (task.status !== 'stopped' && task.status !== 'completed') throw Error('Stop the task before deleting it.');
+    this.store.tasks = this.store.tasks.filter(item => item !== task);
+    await this.store.save();
+  }
+
   // Stores the planned report id and a "started" mark before the provider is called. False means a report was already
   // started (Desktop quit during the reply) or the mark could not be stored: the plain report is written, never a second reply.
   async beginSummary(id) {

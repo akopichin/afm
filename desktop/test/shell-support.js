@@ -123,7 +123,7 @@ export function fakeAssistant() {
 
 // The watch API of the main process: a list the test controls, the calls it receives and pushed changes.
 export function fakeWatch(tasks = []) {
-  const fake = { tasks, listeners: new Set(), calls: { pause: [], resume: [], stop: [], markRead: [] } };
+  const fake = { tasks, listeners: new Set(), calls: { pause: [], resume: [], stop: [], remove: [], markRead: [] } };
   const change = (name, apply) => async id => {
     fake.calls[name].push(id);
     const task = fake.tasks.find(item => item.id === id);
@@ -137,6 +137,7 @@ export function fakeWatch(tasks = []) {
     pause: change('pause', task => { task.status = 'paused'; }),
     resume: change('resume', task => { task.status = 'active'; }),
     stop: change('stop', task => { task.status = 'stopped'; }),
+    remove: async id => { fake.calls.remove.push(id); fake.tasks = fake.tasks.filter(task => task.id !== id); fake.emit(); },
     markRead: change('markRead', task => { task.unread = 0; }),
     onChange: callback => { fake.listeners.add(callback); return () => fake.listeners.delete(callback); },
     emit: () => { for (const callback of fake.listeners) callback(JSON.parse(JSON.stringify(fake.tasks))); },
