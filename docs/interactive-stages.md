@@ -66,6 +66,12 @@ In question files and `<phase>.dialog.jsonl` history, an omitted or `null`
 `allow_custom` allows a free-text answer. Only an explicit `false` disables the
 custom-answer field in the dashboard.
 
+Line comments are still accepted as an answer to such a question: the agent receives
+their text through `afm stage wait-answer` with `from_options: false`. Over the API,
+`POST /api/stages/{id}/dialog/answer` takes an optional `"feedback": true` (non-empty
+text and `from_options: false`) that skips only the option check. Without the flag,
+free text that is not one of the options is still rejected with `400`.
+
 When launching `claude`, the flags
 `--print --output-format stream-json --verbose --dangerously-skip-permissions` are
 always added (`--verbose` is required for stream-json in Claude Code 2.1.x). If an

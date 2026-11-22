@@ -314,7 +314,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await answerDialog(stage.id, question.phase ?? '', question.id, feedback, false)
+      await answerDialog(stage.id, question.phase ?? '', question.id, feedback, false, { feedback: true })
       acknowledge(sent)
       setClickedSend(true)
       window.setTimeout(() => setClickedSend(false), 1200)

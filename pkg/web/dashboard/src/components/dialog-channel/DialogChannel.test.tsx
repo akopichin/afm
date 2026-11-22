@@ -752,10 +752,110 @@ describe('DialogChannel', () => {
 
     const answerCall = calls.find((c) => c.url.endsWith('/dialog/answer'))
     const body = JSON.parse(answerCall?.body ?? '{}') as Record<string, unknown>
-    expect(body).toMatchObject({ id: 'q1', phase: 'p1', from_options: false })
+    expect(body).toMatchObject({ id: 'q1', phase: 'p1', from_options: false, feedback: true })
     expect(body.answer as string).toContain('please clarify this')
     expect(body.answer as string).toContain('Line 3:')
     expect(body.answer as string).toContain('Second line')
+  })
+
+  describe('options-only question (allow_custom:false)', () => {
+    const optionsOnly: RawDialogEntry = {
+      id: 'q1',
+      phase: 'p1',
+      question: 'First line\n\nSecond line',
+      answer: null,
+      options: ['A', 'B'],
+      allow_custom: false,
+    }
+
+    function mockAnswerFetch(calls: FetchCall[]) {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        calls.push({ url, method: init?.method ?? 'GET', body: init?.body as string | undefined })
+        if (url.endsWith('/dialog/answer')) return { ok: true } as Response
+        if (url.endsWith('/dialog')) return jsonResponse([optionsOnly])
+        return jsonResponse([])
+      })
+    }
+
+    function answerBody(calls: FetchCall[]): Record<string, unknown> {
+      const call = calls.find((c) => c.url.endsWith('/dialog/answer'))
+      return JSON.parse(call?.body ?? '{}') as Record<string, unknown>
+    }
+
+    async function saveLineComment(container: HTMLElement, line: number, text: string) {
+      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
+      fireEvent.click(container.querySelector(`[data-line="${line}"]`) as HTMLElement)
+      fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: text } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+    }
+
+    test('line comment is sent as feedback without choosing an option', async () => {
+      const calls: FetchCall[] = []
+      mockAnswerFetch(calls)
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'A' })
+      expect(container.querySelector('textarea.dialog-custom')).toBeDisabled()
+
+      await saveLineComment(container, 3, 'needs a rationale')
+      expect(screen.queryByRole('button', { name: 'A' })).toBeNull()
+      expect(container.querySelector('textarea.dialog-custom')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback (1)' }))
+
+      await waitFor(() => expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(true))
+      const body = answerBody(calls)
+      expect(body).toMatchObject({ feedback: true, from_options: false })
+      expect(body.answer as string).toContain('Line 3:')
+      expect(body.answer as string).toContain('Second line')
+      expect(body.answer as string).toContain('needs a rationale')
+    })
+
+    test('choosing an option sends from_options:true without the feedback key', async () => {
+      const calls: FetchCall[] = []
+      mockAnswerFetch(calls)
+      renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      fireEvent.click(await screen.findByRole('button', { name: 'A' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
+
+      await waitFor(() => expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(true))
+      const body = answerBody(calls)
+      expect(body.from_options).toBe(true)
+      expect(body).not.toHaveProperty('feedback')
+      expect(answerDialog).toHaveBeenLastCalledWith('s1', 'p1', 'q1', 'A', true)
+    })
+
+    test('a rejected feedback send keeps the comment and the retry succeeds', async () => {
+      const calls: FetchCall[] = []
+      mockAnswerFetch(calls)
+      vi.mocked(answerDialog).mockRejectedValueOnce(new FlowApiError('/dialog/answer', 400, 'bad_request', 'answer not in allowed options'))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await saveLineComment(container, 1, 'first try')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback (1)' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent(/Failed to send/)
+      expect(screen.getByRole('button', { name: 'Send feedback (1)' })).not.toBeDisabled()
+      expect(container.querySelector('.line-comment-display[data-comment-line="1"]')).not.toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback (1)' }))
+      await waitFor(() => expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(true))
+      expect(answerBody(calls)).toMatchObject({ feedback: true })
+    })
+
+    test('a comment revised during the request stays a draft after success', async () => {
+      let acceptAnswer!: () => void
+      vi.mocked(answerDialog).mockImplementationOnce(() => new Promise<void>((resolve) => { acceptAnswer = resolve }))
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([optionsOnly]))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await saveLineComment(container, 1, 'one')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback (1)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Edit comment on line 1' }))
+      fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'one, revised' } })
+      await act(async () => acceptAnswer())
+
+      await waitFor(() => expect(answerDialog).toHaveBeenCalledTimes(1))
+      expect((container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement).value).toBe('one, revised')
+    })
   })
 
   test('Ctrl+Enter in a comment textarea saves the comment instead of sending feedback', async () => {

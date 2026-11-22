@@ -666,6 +666,8 @@ type dialogAnswerRequest struct {
 	Phase       string `json:"phase"`
 	Answer      string `json:"answer"`
 	FromOptions bool   `json:"from_options"`
+	// Feedback marks line comments sent as a full answer; they are free text and bypass the options check.
+	Feedback bool `json:"feedback"`
 }
 
 func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
@@ -681,6 +683,10 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ID == "" || req.Phase == "" || req.Answer == "" {
 		http.Error(w, "id, phase, answer required", http.StatusBadRequest)
+		return
+	}
+	if req.Feedback && (req.FromOptions || strings.TrimSpace(req.Answer) == "") {
+		http.Error(w, "feedback must be non-empty free text", http.StatusBadRequest)
 		return
 	}
 	if !flow.IsValidPhase(req.Phase) {
@@ -747,7 +753,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 	if qf.AllowCustom != nil {
 		allowCustom = *qf.AllowCustom
 	}
-	if !allowCustom {
+	if !allowCustom && !req.Feedback {
 		if len(qf.Options) == 0 {
 			http.Error(w, "question has no options but allow_custom=false", http.StatusBadRequest)
 			return

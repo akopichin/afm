@@ -624,6 +624,13 @@ opens the form). The `## Assumptions` and `## Acceptance Criteria` headings stay
 in the document without separate collapse controls. The same line commenting
 works on an agent's **question** in the Communication channel.
 
+Line comments also work on a question that offers only options
+(`allow_custom: false`). While there are no comments, the options are shown and the
+free-text field stays disabled. Once you save a comment, the options and the field
+are hidden and **Send feedback (N)** sends the comments as a full answer to the
+current question, without choosing an option. If the send fails, the comments stay
+for another try.
+
 ## Writing to a stage from its Feed
 
 A messenger-style composer is pinned to the bottom of a stage's **Feed**.

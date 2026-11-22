@@ -117,12 +117,19 @@ export async function answerDialog(
   id: string,
   answer: string,
   fromOptions: boolean,
+  options?: { feedback?: boolean },
 ): Promise<void> {
   const url = stageUrl(stageId, 'dialog/answer')
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, phase, answer, from_options: fromOptions }),
+    body: JSON.stringify({
+      id,
+      phase,
+      answer,
+      from_options: fromOptions,
+      ...(options?.feedback === true && { feedback: true }),
+    }),
   })
   if (!response.ok) {
     throw await flowApiError(url, response)

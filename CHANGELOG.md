@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-22
+
+### Fix:
+
+- **Send feedback** now works on a question with options and `allow_custom: false`.
+  Before, the answer was rejected with `answer not in allowed options` and the agent
+  waited forever. `POST /api/stages/{id}/dialog/answer` accepts an optional
+  `feedback: true` that skips only the option check; free text without it is still
+  rejected.
+
 ## 2026-11-18
 
 ### Improvement:
