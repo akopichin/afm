@@ -95,6 +95,8 @@
 .project-cost-legend {display:flex;gap:2px 12px;flex-wrap:wrap;margin-top:4px;min-height:17px;color:var(--text-secondary);font-size:11px}
 .project-cost-legend span {white-space:nowrap}
 .project-cost-legend i {display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:1px}
+.cost-chart-legend i {width:13px;height:0;border-radius:0;border-top:2px solid var(--line-color);vertical-align:3px}
+.cost-chart-legend i.total {border-top-style:dashed}
 .project-cost-legend b {color:var(--text-primary);font-weight:600}
 .project-cost-legend em {color:var(--attention);font-style:normal}
 .project-tile .tile-cost-link {position:absolute;z-index:3;right:80px;top:8px;padding:3px 9px;font-size:12px;background:var(--surface-raised);opacity:0}

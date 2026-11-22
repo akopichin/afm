@@ -303,6 +303,10 @@ time, so Desktop shows Stage work (the time stages were working) or a dash.
   Runs whose prices AFM hides are never shown with money.
 - **Charts:** Costs and Home show time and value axes, a line for each run,
   and a dashed total. Hover to see the value and timestamp or interval.
+  Costs shows hourly intervals for 24h and 3.5-hour intervals for 7d. It places
+  elapsed time using AFM's live clock and provably continuous finished runs.
+  Finished-run tokens are placed at recorded job completions when the jobs
+  account for the reported total.
   When no interval growth is known for active runs, Costs shows the saved
   cumulative readings with gaps. Home uses cumulative readings over the
   last 24 hours and shows Stage work when prices are unavailable or hidden.

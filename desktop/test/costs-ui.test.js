@@ -296,7 +296,8 @@ test('Finished charts report totals by completion when no interval observations 
   await tick();
   assert.match(text(shell), /Elapsed time for runs that finished in each interval/);
   assert.match(shell.d.querySelector('[data-cost-point]:last-child').ariaLabel, /1h 0m/);
-  assert.equal(shell.d.querySelectorAll('.cost-plot circle').length, 2);
+  assert.equal(shell.d.querySelectorAll('.cost-plot polyline').length, 2);
+  assert.equal(shell.d.querySelectorAll('.cost-plot circle').length, 0);
 });
 
 test('a chosen period shows the growth inside it, asks the history once per change and stops ticking', async t => {
@@ -306,7 +307,7 @@ test('a chosen period shows the growth inside it, asks the history once per chan
   await tick();
   const [from, to, buckets] = shell.native.periodCalls.at(-1);
   assert.ok(Math.abs(to - from - 24 * 3600000) < 1000);
-  assert.equal(buckets, 8);
+  assert.equal(buckets, 24);
   const row = shell.d.querySelector('[data-cost-row]').textContent;
   assert.match(row, /250k/, 'tokens are the growth, not the since-start total');
   assert.match(row, /2h 0m/);

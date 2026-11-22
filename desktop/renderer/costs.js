@@ -10,7 +10,7 @@ let costsView = { hidePrices: false, runs: [] };
 let costsWatching = false;
 let costsDetail = null;
 // Growth inside the chosen period comes from the history the main process keeps; it is requested per range and never ticks.
-const COSTS_BUCKETS = 8;
+const COSTS_BUCKETS = { 24: 24, 168: 48 };
 const COSTS_RANGES = [['24', '24h'], ['168', '7d'], ['all', 'Since start']];
 let costsPeriod = null;
 let costsPeriodRequest = 0;
@@ -273,13 +273,18 @@ function costsPlot(lines, metric, from, to, { compact = false, controls = [] } =
   const grid = [0.1, 0.5, 0.9].map(ratio => `<line x1="${W * 0.04}" x2="${W * 0.96}" y1="${H * ratio}" y2="${H * ratio}" stroke="var(--separator-subtle)"/>`).join('');
   const strokes = lines.map(line => {
     const segments = [];
+    let previous;
     for (const point of line.points) {
-      if (point.breakBefore || !segments.length) segments.push([]);
-      segments.at(-1).push([x(point.at).toFixed(1), y(point.value).toFixed(1)]);
+      const start = point.start ?? point.at, end = point.end ?? point.at;
+      if (point.breakBefore || !segments.length || (point.start != null && start > previous?.end)) segments.push([]);
+      const height = y(point.value).toFixed(1);
+      segments.at(-1).push([x(start).toFixed(1), height]);
+      if (end > start) segments.at(-1).push([x(end).toFixed(1), height]);
+      previous = point;
     }
     return segments.map(segment => segment.length === 1
       ? `<circle cx="${segment[0][0]}" cy="${segment[0][1]}" r="${compact ? 2 : 3}" fill="${line.color}"/>`
-      : `<polyline points="${segment.map(point => point.join(',')).join(' ')}" fill="none" stroke="${line.color}" stroke-width="${line.totalLine ? 2.5 : 1.7}"${line.totalLine ? ' stroke-dasharray="5 3"' : ''} vector-effect="non-scaling-stroke"/>`).join('');
+      : `<polyline points="${segment.map(point => point.join(',')).join(' ')}" fill="none" stroke="${line.color}" stroke-width="${line.totalLine ? 2.5 : 1.7}" stroke-linecap="round"${line.totalLine ? ' stroke-dasharray="5 3"' : ''} vector-effect="non-scaling-stroke"/>`).join('');
   }).join('');
   const markers = lines.flatMap(line => line.points.map(point =>
     `<span hidden ${mark(point, `${line.name} · ${point.label ?? costsStamp(point.at, true)} · ${costsExactPoint(metric, point.value)}`)}></span>`)).join('');
@@ -308,22 +313,29 @@ function costsChart(hidden, rows) {
   const readings = !costsFinished() && !hasGrowth;
   const source = selected => byCompletion ? costsCompletionSeries(selected, metric, count, data) : costsSeries(selected, metric, count);
   const step = (data.to - data.from) / count;
-  const label = i => `${costsStamp(data.from + i * step, costsUi.range !== '24')} → ${costsStamp(data.from + (i + 1) * step, costsUi.range !== '24')}`;
-  const intervalPoints = values => values.flatMap((point, i) => point ? [{ ...point, at: data.from + (i + 0.5) * step, label: label(i), breakBefore: i > 0 && (!values[i - 1] || point.gaps > 0 || values[i - 1]?.gaps > 0) }] : []);
+  const stamp = at => costsStamp(at, costsUi.range !== '24');
+  const label = (start, end) => `${stamp(start)} → ${stamp(end)}`;
+  const intervalPoints = values => values.flatMap((point, i) => {
+    if (!point) return [];
+    const start = point.start ?? data.from + i * step, end = point.end ?? data.from + (i + 1) * step;
+    return [{ ...point, start, end, at: (start + end) / 2, label: label(start, end),
+      breakBefore: i > 0 && (!values[i - 1] || point.gaps > 0 || values[i - 1]?.gaps > 0) }];
+  });
   const lines = rows.map((row, i) => ({ name: row.entry.name, color: COSTS_COLORS[i % COSTS_COLORS.length],
     points: readings ? data.runs[row.entry.key]?.recorded?.[metric] ?? [] : intervalPoints(source([row])) })).filter(line => line.points.length);
   if (!lines.length) return costsChartEmpty('Desktop recorded no intervals for this metric.');
+  const missing = rows.length - lines.length;
   const points = readings ? costsRecordedTotal(lines) : intervalPoints(source(rows));
   if (points.length) lines.push({ ...COST_TOTAL, points });
   const controls = readings ? points.map(point => ({ ...point, text: `${costsStamp(point.at, true)}: ${costsFormatPoint(metric, point.value)}` })) : source(rows).map((point, i) => ({
     at: data.from + (i + 0.5) * step, value: point?.value ?? null,
-    text: `${label(i)}: ${costsFormatPoint(metric, point?.value ?? null)}${point?.partial ? ' (history starts later)' : ''}${point?.gaps ? ' (gap in history)' : ''}`,
+    text: `${label(data.from + i * step, data.from + (i + 1) * step)}: ${costsFormatPoint(metric, point?.value ?? null)}${point?.partial ? ' (history starts later)' : ''}${point?.gaps ? ' (gap in history)' : ''}`,
   }));
   const gaps = interrupted || (readings && lines.some(line => line.points.some(point => point.breakBefore)));
   const title = costsUi.range === '24' ? 'Usage, last 24 hours' : 'Usage, last 7 days';
   return `<section class="cost-card cost-chart-card" aria-labelledby="cost-chart-title"><header class="cost-card-head"><div><h2 id="cost-chart-title">${title}</h2><p>${metric === 'time' ? 'Elapsed time' : metric === 'tokens' ? 'Recorded tokens' : 'Known estimated cost'} ${byCompletion ? 'for runs that finished in each interval' : readings ? 'since start at each reading' : 'per interval'}${partial ? ' · history starts after the period start' : ''}${gaps ? ' · gaps in history' : ''}</p></div></header>
     ${costsPlot(lines, metric, data.from, data.to, { controls })}
-    <div class="project-cost-legend">${lines.map(line => `<span><i style="background:${line.color}"></i>${esc(line.name)}</span>`).join('')}</div>
+    <div class="project-cost-legend cost-chart-legend">${lines.map(line => `<span><i class="${line.totalLine ? 'total' : ''}" style="--line-color:${line.color}"></i>${esc(line.name)}</span>`).join('')}${missing ? `<em>${missing} ${missing === 1 ? 'run has' : 'runs have'} no chart data</em>` : ''}</div>
     <p id="cost-chart-readout" class="cost-muted" aria-live="polite">${esc(`${costsStamp(data.from, true)} – ${costsStamp(data.to, true)}`)}</p></section>`;
 }
 function costsChartEmpty(message) {
@@ -389,8 +401,8 @@ function refreshCostsPeriod(force = false) {
   if (!force && costsFinished() && costsPeriodData() && Date.now() - costsPeriodAt < 15000) return;
   const { range, status } = costsUi, rewindAt = costsRewindAt, id = ++costsPeriodRequest;
   costsPeriodAt = Date.now();
-  const to = rewindAt ?? Date.now(), from = to - (costsGrowthMode() ? Number(range) * 3600000 : 3600000), buckets = costsGrowthMode() ? COSTS_BUCKETS : 0;
-  const options = costsFinished() ? { finished: true, growth: costsGrowthMode(), rewind: Boolean(rewindAt) } : undefined;
+  const to = rewindAt ?? Date.now(), from = to - (costsGrowthMode() ? Number(range) * 3600000 : 3600000), buckets = COSTS_BUCKETS[range] ?? 0;
+  const options = { intervalChart: buckets > 0, ...(costsFinished() ? { finished: true, growth: costsGrowthMode(), rewind: Boolean(rewindAt) } : {}) };
   const load = isDemo ? Promise.resolve(costsDemoPeriod(from, to, buckets, options)) : nativeAFM.costsPeriod(from, to, buckets, options);
   load.then(data => {
     if (id !== costsPeriodRequest || costsUi.range !== range || costsUi.status !== status || costsRewindAt !== rewindAt) return;

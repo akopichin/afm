@@ -655,7 +655,34 @@ test('Costs.period as of a past moment: finished runs appear while followed, lat
   assert.equal((await costs.period(T0 + 58000, T0 + 59000, 0)).runs[view.key].asOf.usd, null);
 });
 
-test('finished costs combine saved observations and final reports without synthesizing chart points', async t => {
+test('active elapsed intervals extend from the clock anchor and stop at the last verified reading when offline', async t => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { CostsHistory } = await import('../src/costs-history.js');
+  const dir = await mkdtemp((await import('node:path')).join(tmpdir(), 'costs-active-chart-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = row(await fakeRun(t));
+  const minute = 60000;
+  let now = T0 + 10 * minute;
+  const costs = new Costs({ now: () => now, history: new CostsHistory(dir) });
+  t.after(() => costs.close());
+  costs.setWatched(true);
+  costs.setVisible(true);
+  const inventory = Costs.inventoryOf([{ run, projectId: 'p' }]);
+  await costs.observe(inventory, new Map([[run.key, statusBody({ elapsed_accumulated_ms: 0, elapsed_since: iso(T0 + 12) })]]));
+  const chart = () => costs.period(T0 - 10 * minute, now, 2, { intervalChart: true });
+  const values = result => result.runs[run.key].buckets.time.map(point => point?.value ?? null);
+  assert.deepEqual(values(await chart()), [null, 10 * minute - 12]);
+  now += 10 * minute;
+  const current = await chart();
+  assert.equal(current.runs[run.key].elapsed.value, 20 * minute - 12);
+  await costs.observe(inventory, new Map([[run.key, null]]));
+  const offline = await chart();
+  assert.equal(offline.runs[run.key].elapsed.value, 10 * minute - 12);
+  assert.equal(offline.runs[run.key].buckets.time.at(-1).end, T0 + 10 * minute);
+});
+
+test('finished charts recover elapsed intervals and place token totals on recorded job completions', async t => {
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { CostsHistory } = await import('../src/costs-history.js');
@@ -667,8 +694,10 @@ test('finished costs combine saved observations and final reports without synthe
   const reports = [];
   const costs = new Costs({ now: () => now, history: new CostsHistory(dir), readReport: async run => {
     reports.push(run.key);
-    return { run: { started_at: new Date(T0), ended_at: new Date(T0 + 120000), elapsed_ms: 120000, status: 'failed' },
-      cost: { total: { tokens: { total: 9000 } } }, stage_time: { working_ms: 50000 } };
+    const job = (start, duration, tokens) => ({ started_at: iso(start), duration_ms: duration, status: 'ok', tokens: { counts: { total: tokens } } });
+    return { run: { started_at: new Date(T0), ended_at: new Date(T0 + 120000), elapsed_ms: 119983, status: 'failed' },
+      cost: { total: { tokens: { total: 9000 } } }, stage_time: { working_ms: 50000 },
+      analytics: { jobs: [job(T0, 30000, 4000), job(T0 + 30000, 90000, run.key === unseen.key ? 1000 : 5000)] } };
   } });
   costs.setWatched(true);
   costs.setVisible(true);
@@ -691,6 +720,11 @@ test('finished costs combine saved observations and final reports without synthe
   assert.equal(runs[unseen.key].final.tokens, 9000);
   assert.equal(runs[unseen.key].meta.wholeRun, true);
   assert.deepEqual(runs[unseen.key].buckets.tokens, [null, null, null]);
+  const chart = await costs.period(T0, now, 3, { ...options, intervalChart: true });
+  assert.deepEqual(chart.runs[unseen.key].buckets.time.map(slice => slice?.value ?? null), [59983, 60000, null]);
+  assert.deepEqual(chart.runs[run.key].buckets.tokens.map(slice => slice?.value ?? null), [4000, 5000, null]);
+  assert.deepEqual(chart.runs[unseen.key].buckets.tokens, [null, null, null], 'an incomplete job ledger cannot place the total');
+  assert.equal(chart.runs[run.key].tokens.value, 9000);
   assert.deepEqual(Object.keys((await costs.period(T0, T0 + 60000, 0, { finished: true, rewind: true })).runs), []);
   assert.deepEqual(reports, [run.key, unseen.key], 'final reports are reused across ranges');
   costs.setHidePrices(true);

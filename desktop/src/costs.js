@@ -71,6 +71,44 @@ function priceMode(status) {
   return status.accounting.show_money ? 'visible' : 'afm-hidden';
 }
 
+function elapsedSpan(subject, to, seenAt) {
+  const clock = subject.entry?.elapsed;
+  if (!clock || subject.startedAt === null) return null;
+  const openedAt = clock.since;
+  const closedAt = subject.endedAt ?? subject.entry.endedAt;
+  const anchor = openedAt ?? closedAt;
+  if (!Number.isFinite(anchor) || anchor < subject.startedAt) return null;
+  // The run's creation stamp precedes the elapsed clock by a small startup delay.
+  const complete = Math.abs(anchor - subject.startedAt - clock.ms) < 1000;
+  if (!complete && openedAt === null) return null;
+  const start = complete ? anchor - clock.ms : openedAt;
+  const end = Math.min(to, closedAt ?? (subject.entry.stale ? seenAt ?? openedAt : to));
+  return end > start ? { start, end, complete } : null;
+}
+
+function elapsedSlices(span, ranges, history) {
+  return ranges.map(([from, to], index) => {
+    const start = Math.max(from, span.start), end = Math.min(to, span.end);
+    const earlier = from < span.start ? history[index] : null;
+    if (end <= start) return earlier;
+    return { value: end - start + (earlier?.observed ? earlier.value : 0), observed: true,
+      partial: earlier?.partial ?? (!span.complete && from < span.start), gaps: earlier?.gaps ?? 0,
+      ...(!earlier?.value ? { start, end } : {}) };
+  });
+}
+
+function tokenSlices(events, from, to, count) {
+  const totals = Array(count).fill(null);
+  let total = 0;
+  for (const { at, tokens } of events) {
+    if (at < from || at > to) continue;
+    const index = Math.max(0, Math.ceil((at - from) / (to - from) * count) - 1);
+    totals[index] = (totals[index] ?? 0) + tokens;
+    total += tokens;
+  }
+  return [total, ...totals].map(value => value === null ? null : { value, observed: true, partial: false, gaps: 0 });
+}
+
 // One run's figures from its verified /api/status. run_cost already contains the overhead and every stage, so
 // stage and overhead rows are only for display and never added to it.
 export function costEntry(run, projectId, status) {
@@ -89,6 +127,7 @@ export function costEntry(run, projectId, status) {
   const entry = {
     key: run.key, projectId, name: run.name || run.runId, stale: false, runStatus: status.run_status ?? run.status,
     startedAt: parseTime(status.started_at),
+    endedAt: parseTime(status.ended_at),
     elapsed: anchored(status.elapsed_accumulated_ms, status.elapsed_since),
     idle: anchored(status.idle_accumulated_ms, status.idle_since),
     stageWork: stageWork(status.stages ?? []),
@@ -219,7 +258,8 @@ export class Costs {
       const name = run.name || run.runId;
       const entry = report ? { ...report.entry, key: run.key, name, projectId, startedAt } : null;
       const wholeRun = endedAt !== null && endedAt <= to && startedAt !== null && startedAt >= from;
-      return { key: run.key, entry, name, projectId, startedAt, endedAt, finished: true, status: report?.entry.runStatus ?? run.status ?? 'finished', wholeRun };
+      return { key: run.key, entry, name, projectId, startedAt, endedAt, tokenEvents: report?.tokenEvents, finished: true,
+        status: report?.entry.runStatus ?? run.status ?? 'finished', wholeRun };
     }));
     return subjects.filter(Boolean);
   }
@@ -305,6 +345,15 @@ export class Costs {
       const priced = show && (finished || !subject.entry || subject.entry.price === 'visible');
       const readings = Object.fromEntries(Object.entries(fields).map(([name, field]) => [name,
         name === 'usd' && !priced ? ranges.map(() => null) : this.history.deltas(subject.key, field, name === 'idle' ? period : ranges)]));
+      if (options.intervalChart) {
+        const span = elapsedSpan(subject, to, this.seenAt.get(subject.key));
+        if (span) {
+          const before = span.complete ? ranges.map(() => null) : this.history.deltas(subject.key, 'elapsedMs',
+            ranges.map(([start, end]) => [start, Math.min(end, span.start)]));
+          readings.elapsed = elapsedSlices(span, ranges, before);
+        }
+        if (subject.tokenEvents) readings.tokens = tokenSlices(subject.tokenEvents, from, to, buckets);
+      }
       const run = runs[subject.key] = Object.fromEntries(Object.entries(readings).map(([name, [total]]) => [name, total]));
       run.meta = { name: subject.name, projectId: subject.projectId, startedAt: subject.startedAt, finished: subject.finished };
       if (!finished) {
@@ -373,5 +422,12 @@ function finishedReport(report) {
       workMs: stage.timing?.work_ms ?? null, tokens: stageUsage.get(stage.id)?.tokens?.total ?? null })),
     overhead: cost?.overhead ? { tokens: cost.overhead.tokens?.total ?? null } : null,
     models: analytics?.models?.filter(row => !row.agent?.outside_run_total).map(row => ({ label: row.label, tokens: row.tokens?.counts?.total ?? null })) ?? null };
-  return { endedAt: parseTime(run.ended_at), startedAt: parseTime(run.started_at), entry };
+  const tokenEvents = (analytics?.jobs ?? []).flatMap(job => {
+    const start = parseTime(job.started_at), tokens = job.tokens?.counts?.total;
+    if (job.agent?.outside_run_total || job.status === 'running' || start === null ||
+      !Number.isFinite(job.duration_ms) || job.duration_ms < 0 || !Number.isSafeInteger(tokens) || tokens < 0) return [];
+    return [{ at: start + job.duration_ms, tokens }];
+  });
+  return { endedAt: parseTime(run.ended_at), startedAt: parseTime(run.started_at), entry,
+    tokenEvents: tokenEvents.length && tokenEvents.reduce((sum, item) => sum + item.tokens, 0) === entry.tokens ? tokenEvents : null };
 }

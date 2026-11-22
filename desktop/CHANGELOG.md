@@ -11,6 +11,10 @@
 - Connect OpenAI and Anthropic endpoints to a Deep Agent and see start and finish times for tool calls.
 - Review run changes in a searchable file tree, with a remembered diff layout and Command D or Ctrl D.
 
+### Fix:
+
+- Draw interval lines in Costs, recover elapsed spans from AFM clocks, and place finished-run tokens from matching job totals.
+
 ## 2026-11-21
 
 ### Improvement:
