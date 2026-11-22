@@ -90,7 +90,7 @@ async function loadLaunchData(){
     updateWorkflows();
   }catch(error){showNativeError(error)}
 }
-const nativeSource=source=>({id:source.id,name:basename(source.location),location:source.location,error:source.error,
+const nativeSource=source=>({id:source.id,name:basename(source.location),location:source.location,error:source.error,lastSuccessfulRefreshAt:source.lastSuccessfulRefreshAt,
   items:source.entries.map(entry=>({name:entry.name,kind:'Pipeline',path:entry.id,git:entry.policy?(entry.policy.enabled?'worktree':'current'):undefined}))});
 function targetProject(){return projects.find(item=>item.id===$('launch-project').value)}
 function workspace(){
@@ -377,8 +377,8 @@ function drawSettings(){
     };
     if(onboarding)$('finish-setup').onclick=()=>$('settings').close();
   }else if(settingsTab==='library'){
-    body.innerHTML=tabs+libraryLinkHTML()+`<p class="muted">Flows and pipelines available in every project.</p><div class="source-list">${state.sources.map(s=>`<div><span><strong>${esc(s.name)}</strong><small>${s.error?esc(s.error):s.items.length+' workflows'}</small></span>${s.id!=='starter'?`<button class="icon" data-refresh="${esc(s.id)}" aria-label="Refresh ${esc(s.name)}">↻</button><button class="icon" data-remove="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">×</button>`:''}</div>`).join('')}</div>
-      ${!isDemo?`<div class="source-list">${state.sources.flatMap(source=>source.items).map(item=>`<div><span>${esc(item.name)}</span><button data-pipeline-options="${esc(item.path)}">Pipeline options</button></div>`).join('')}</div>`:''}
+    body.innerHTML=tabs+libraryLinkHTML()+`<p class="muted">Flows and pipelines available in every project.</p><div class="source-list">${state.sources.map(sourceRow).join('')}</div>
+      ${!isDemo?`<div class="source-list">${state.sources.flatMap(pipelineRows).join('')}</div>`:''}
       <div class="links"><button id="add-folder">＋ Local folder</button><button id="add-repo">＋ ${isDemo?'GitHub repository':'Git repository'}</button></div>
       <form id="repo-form" hidden><label>${isDemo?'Public GitHub repository':'Git repository URL'}<input name="repo" required placeholder="${isDemo?'owner/repository':'SSH or HTTPS URL'}"></label><div class="actions"><button class="primary">Connect repository</button></div></form><p class="hint" role="status">${esc(sourceMessage)}</p>`;
     for(const button of body.querySelectorAll('[data-pipeline-options]')){
@@ -488,13 +488,22 @@ function drawEnvironment(body,tabs){
   };
 }
 // Runs one source operation in the main process, then redraws the library from its stored inventory.
-async function changeSource(operation){
+async function changeSource(operation,refreshId){
+  if(refreshingSources.has(refreshId))return;
+  if(refreshId){
+    refreshingSources.add(refreshId);
+    sourceMessage='';
+    drawSettings();
+  }
   try{
     const source=await operation();
     sourceMessage=source?.error||(source?`${source.entries.length} workflows available in New run.`:'');
     await loadSettingsData();
   }catch(error){sourceMessage=error.message}
-  if(settingsTab==='library')drawSettings();
+  finally{
+    refreshingSources.delete(refreshId);
+    if($('settings').open&&settingsTab==='library')drawSettings();
+  }
 }
 function addSource(source){
   if(!source.items.length)throw Error('No flows or pipeline manifests found in this source.');
@@ -604,7 +613,7 @@ document.addEventListener('click',async e=>{
   else if(el.dataset.profile){state.profile=el.dataset.profile;save();drawSettings();drawChat()}
   if(el.dataset.remove&&!isDemo)changeSource(async()=>{await nativeAFM.removeSource(el.dataset.remove);return null});
   else if(el.dataset.remove){state.sources=state.sources.filter(s=>s.id!==el.dataset.remove);save();drawSettings()}
-  if(el.dataset.refresh)changeSource(()=>nativeAFM.refreshSource(el.dataset.refresh));
+  if(el.dataset.refresh)changeSource(()=>nativeAFM.refreshSource(el.dataset.refresh),el.dataset.refresh);
 });
 document.addEventListener('keydown',e=>{
   if(primary(e)&&e.shiftKey&&!e.altKey&&!e.isComposing&&!e.repeat&&e.key==='Enter'){e.preventDefault();openLauncher(selection().p)}

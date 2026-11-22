@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Show when each Library source last refreshed successfully, indicate refresh progress, and label each pipeline with its source.
 - Connect a Claude Code container to the Assistant through an authenticated remote ACP bridge.
 - Group Tasks by creation date and delete stopped or completed tasks from their cards.
 - Edit a remote ACP provider’s workspace and start a fresh session from the saved chat.

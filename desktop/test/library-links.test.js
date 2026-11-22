@@ -100,6 +100,68 @@ test('a cold link opens Library for review, retries failures and renders the reg
   assert.deepEqual(calls, ['cold', 'cold', 'warm']);
 });
 
+test('Library shows pipeline sources and keeps the last successful refresh visible through a retry', async t => {
+  const firstDate = '2026-11-20T09:31:00.000Z';
+  const nextDate = '2026-11-22T11:12:00.000Z';
+  const source = { id: 'one', location: repository, lastSuccessfulRefreshAt: firstDate, entries: [{ id: 'dev', name: 'Dev pipeline' }] };
+  const other = { id: 'two', location: '/work/other-library', entries: [{ id: 'review', name: 'Review pipeline' }] };
+  let inventory = [source, other];
+  let pending = Promise.withResolvers();
+  const calls = [];
+  const native = {
+    ...fakeNative(snapshotOf([])),
+    sources: async () => inventory,
+    refreshSource: id => { calls.push(id); return pending.promise; },
+  };
+  const shell = await loadShell(t, { demo: false, native });
+  const query = selector => shell.d.querySelector(selector);
+  const refresh = () => query('[data-refresh="one"]');
+  const row = () => refresh().parentElement;
+  shell.get('settings-toggle').click();
+  query('[data-panel="library"]').click();
+  await tick();
+  assert.equal(row().querySelector('time').dateTime, firstDate);
+  assert.equal(query('[data-refresh="two"]').parentElement.querySelector('time'), null);
+  assert.equal(query('[data-pipeline-options="dev"]').parentElement.querySelector('small').textContent, 'Source: pipelines');
+  assert.equal(query('[data-pipeline-options="review"]').parentElement.querySelector('small').textContent, 'Source: other-library');
+
+  refresh().click();
+  assert.equal(refresh().disabled, true);
+  assert.equal(refresh().getAttribute('aria-busy'), 'true');
+  assert.match(row().textContent, /Refreshing/);
+  assert.equal(query('[data-refresh="two"]').disabled, false);
+  query('[data-panel="runs"]').click();
+  query('[data-panel="library"]').click();
+  assert.equal(refresh().disabled, true);
+  refresh().click();
+  assert.deepEqual(calls, ['one']);
+
+  inventory = [{ ...source, error: 'Repository unavailable' }, other];
+  pending.resolve(inventory[0]);
+  await tick();
+  assert.equal(refresh().disabled, false);
+  assert.equal(refresh().hasAttribute('aria-busy'), false);
+  assert.match(row().textContent, /Repository unavailable/);
+  assert.equal(row().querySelector('time').dateTime, firstDate);
+
+  pending = Promise.withResolvers();
+  refresh().click();
+  pending.reject(Error('Refresh request failed'));
+  await tick();
+  assert.equal(refresh().disabled, false);
+  assert.match(shell.get('settings-body').textContent, /Refresh request failed/);
+
+  pending = Promise.withResolvers();
+  refresh().click();
+  inventory = [{ ...source, lastSuccessfulRefreshAt: nextDate }, other];
+  pending.resolve(inventory[0]);
+  await tick();
+  assert.equal(refresh().disabled, false);
+  assert.equal(row().querySelector('time').dateTime, nextDate);
+  assert.doesNotMatch(shell.get('settings-body').textContent, /Repository unavailable|Refresh request failed/);
+  assert.deepEqual(calls, ['one', 'one', 'one']);
+});
+
 test('the Linux registration command writes an encoded launcher and requests the AFM MIME handler', async t => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'lib-link-'));
   t.after(() => rm(temp, { recursive: true, force: true }));

@@ -29,7 +29,14 @@ export class Sources {
     this.lock = new Mutex();
   }
 
-  async #load() { return (await readJSON(this.file, { sources: [] })).sources ?? []; }
+  async #load() {
+    const { sources = [] } = await readJSON(this.file, { sources: [] });
+    return (sources ?? []).map(source => ({
+      ...source,
+      // Older records contain only the last attempt, which may have failed.
+      lastSuccessfulRefreshAt: source.lastSuccessfulRefreshAt ?? (source.error ? null : source.refreshedAt ?? null),
+    }));
+  }
 
   list() { return this.#load(); }
 
@@ -41,7 +48,7 @@ export class Sources {
       const sources = await this.#load();
       const existing = sources.find(source => source.location === resolved);
       if (existing) return existing.error ? this.#refresh(existing) : existing;
-      const source = { id: createHash('sha256').update(resolved).digest('hex').slice(0, 8), kind, location: resolved, entries: [], refreshedAt: null, error: null };
+      const source = { id: createHash('sha256').update(resolved).digest('hex').slice(0, 8), kind, location: resolved, entries: [], refreshedAt: null, lastSuccessfulRefreshAt: null, error: null };
       await writeJSON(this.file, { sources: [...sources, source] });
       return this.#refresh(source);
     });
@@ -80,7 +87,11 @@ export class Sources {
       for (const old of source.entries) if (!retained.has(old.id)) await this.serveConfig.removePipeline(old.id);
       entries = next;
     } catch (failure) { error = failure.message; }
-    const updated = { ...source, entries, error, refreshedAt: new Date().toISOString() };
+    const refreshedAt = new Date().toISOString();
+    const updated = {
+      ...source, entries, error, refreshedAt,
+      lastSuccessfulRefreshAt: error ? source.lastSuccessfulRefreshAt : refreshedAt,
+    };
     const sources = (await this.#load()).map(item => item.id === source.id ? updated : item);
     await writeJSON(this.file, { sources });
     return updated;

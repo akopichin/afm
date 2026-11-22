@@ -156,6 +156,12 @@ root. Desktop discovers nested packages and lists each workflow separately in
 and the inspected commit as JSON. An explicit package directory selects only that
 package. A branch or tag suffix applies to the whole collection.
 
+**Settings → Library** shows the time of each source's last successful refresh
+and the source name under each pipeline. While a source is refreshing, its
+refresh button is disabled and shows a spinner. If the refresh fails, Library
+keeps the previous pipeline list and timestamp, displays the error, and lets you
+retry.
+
 
 A URL with embedded credentials is refused; use your git credential helper or ssh
 key. Prefer a tag or a full commit over a branch: the run is reproducible and a

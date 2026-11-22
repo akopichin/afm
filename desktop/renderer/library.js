@@ -92,6 +92,25 @@ function addProject(path,git,flows=[]){
   save();$('open-project').close();openProject(project);
 }
 
+const refreshingSources=new Set();
+const libraryDate=new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'});
+function sourceRow(source){
+  const id=esc(source.id),name=esc(source.name),busy=refreshingSources.has(source.id);
+  const date=new Date(source.lastSuccessfulRefreshAt??NaN);
+  const updated=Number.isFinite(+date)
+    ?`Last updated <time datetime="${date.toISOString()}">${esc(libraryDate.format(date))}</time>`
+    :'No successful refresh recorded';
+  const count=`${source.items.length} ${source.items.length===1?'workflow':'workflows'}`;
+  const status=busy?'Refreshing…':source.error||count;
+  return `<div><span><strong>${name}</strong><small role="status">${esc(status)}</small>${!isDemo?`<small>${updated}</small>`:''}</span>
+    ${source.id!=='starter'?`<button class="icon" data-refresh="${id}" aria-label="${busy?'Refreshing':'Refresh'} ${name}"${busy?' disabled aria-busy="true"':''}>${busy?'':'↻'}</button>
+    <button class="icon" data-remove="${id}" aria-label="Remove ${name}">×</button>`:''}</div>`;
+}
+function pipelineRows(source){
+  return source.items.map(item=>`<div><span>${esc(item.name)}<small>Source: ${esc(source.name)}</small></span>
+    <button data-pipeline-options="${esc(item.path)}">Pipeline options</button></div>`);
+}
+
 let libraryLink=null, installingLibraryLink=false;
 function showLibraryLink(link){
   if(!link||libraryLink?.id===link.id)return;

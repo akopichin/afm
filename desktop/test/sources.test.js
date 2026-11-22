@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afmBinary } from '../src/binary.js';
 import { Desktop } from '../src/desktop.js';
@@ -39,7 +39,10 @@ test('folder sources list pipelines, register them for the host and follow refre
   await writePackage(path.join(root, 'gamma'), 'gamma');
   const refreshed = await sources.refresh(source.id);
   assert.deepEqual(refreshed.entries.map(e => e.name).sort(), ['alpha', 'gamma']);
-  assert.deepEqual((await serveConfig.read()).pipelines.map(p => p.source).sort(), [path.join(root, 'alpha'), path.join(root, 'gamma')]);
+  assert.equal(refreshed.lastSuccessfulRefreshAt, refreshed.refreshedAt);
+  assert.ok(Number.isFinite(Date.parse(refreshed.lastSuccessfulRefreshAt)));
+  const resolvedRoot = await realpath(root);
+  assert.deepEqual((await serveConfig.read()).pipelines.map(p => p.source).sort(), [path.join(resolvedRoot, 'alpha'), path.join(resolvedRoot, 'gamma')]);
 
   assert.equal(await sources.remove(source.id), true);
   assert.deepEqual((await serveConfig.read()).pipelines, []);
@@ -52,10 +55,21 @@ test('a failing refresh keeps the last inventory and reports the error', async t
   const root = path.join(home, 'lib');
   await writePackage(path.join(root, 'one'), 'one');
   const source = await sources.add({ location: root });
+  const saved = JSON.parse(await readFile(sources.file, 'utf8'));
+  delete saved.sources[0].lastSuccessfulRefreshAt;
+  await writeFile(sources.file, JSON.stringify(saved));
+  assert.equal((await sources.list())[0].lastSuccessfulRefreshAt, source.refreshedAt);
   await rm(root, { recursive: true });
   const failed = await sources.refresh(source.id);
   assert.equal(failed.entries.length, 1);
   assert.match(failed.error, /ENOENT/);
+  assert.equal(failed.lastSuccessfulRefreshAt, source.refreshedAt);
+  assert.equal((await sources.list())[0].lastSuccessfulRefreshAt, source.refreshedAt);
+  await writePackage(path.join(root, 'two'), 'two');
+  const retried = await sources.refresh(source.id);
+  assert.equal(retried.error, null);
+  assert.equal(retried.lastSuccessfulRefreshAt, retried.refreshedAt);
+  assert.deepEqual(retried.entries.map(entry => entry.name), ['two']);
 });
 
 test('a Git package is inspected through the AFM CLI', { timeout: 60000 }, async t => {
