@@ -24,20 +24,23 @@ const canTestModel=m=>m&&(m.kind==='acp'||isModelEndpoint(m));
 const modelSelectionKey=settings=>JSON.stringify([settings?.provider,settings?.model,settings?.reasoning,settings?.codexTransport]);
 
 function authLabel(p){
+  if(p.auth.state==='error')return p.auth.detail;
   if(p.found===false)return 'Not installed';
   if(p.auth.state==='ready')return p.auth.detail;
-  return p.auth.state==='unknown'?'Checking…':'Needs sign-in';
+  if(p.auth.state==='unknown')return p.credential?.type==='stored'?'Checking saved key and models…':'Checking…';
+  return 'Needs sign-in';
 }
 // A provider as the settings UI expects it: model and reasoning belong to the selected provider only.
 function providerModel(p,settings){
   const selected=p.id===settings.provider;
   const unsupported=selected&&!p.permissions.includes(settings.permission);
-  return {id:p.id,name:p.name,custom:!p.builtIn,kind:p.kind,found:p.found,auth:authLabel(p),authDetail:p.auth.detail,authState:p.auth.state,
+  return {id:p.id,name:p.name,custom:!p.builtIn,kind:p.kind,found:p.found,auth:authLabel(p),authDetail:p.auth.detail,authState:p.auth.state,catalogPending:p.found===null&&p.auth.state==='unknown',
     remoteCwd:p.remoteCwd,catalog:p.models||[],model:selected&&settings.model?settings.model:'CLI default',reasoning:selected?settings.reasoning:'default',
     permission:selected?settings.permission:'ask',levels:p.reasoning,permissions:p.permissions,modes:p.modes,agentModes:p.agentModes||[],acpMode:selected?settings.acpMode:'',
     problem:unsupported?'This provider cannot enforce the chosen permission mode. Pick another.':p.found===false||p.auth.state==='missing'?p.auth.detail:''};
 }
 function applyAssistantInfo(info){
+  const firstSnapshot=!assistantInfo;
   assistantInfo=info;
   state.models=info.providers.map(p=>providerModel(p,info.settings));
   state.profile=info.settings.provider;
@@ -46,17 +49,26 @@ function applyAssistantInfo(info){
   if(!$('settings-body').querySelector('input:focus,select:focus'))refreshModelPanel();
   if($('quick-model').open)syncQuickProviders();
   refreshVisibleCatalogs();
+  if(firstSnapshot&&$('settings').open&&settingsTab==='models')discoverAssistantProvider(state.profile);
+}
+function applyDetectedProvider(provider){
+  const index=assistantInfo?.providers.findIndex(item=>item.id===provider.id)??-1;
+  if(index<0)return;
+  assistantInfo.providers[index]=provider;
+  const m=providerModel(provider,assistantInfo.settings);
+  state.models[index]=m;
+  const row=[...$('settings-body').querySelectorAll('[data-profile]')].find(el=>el.dataset.profile===m.id);
+  if(row)row.querySelector('small').textContent=m.model+' · '+m.auth;
+  refreshVisibleCatalogs(m.id);
+}
+function catalogFailed(id,error){
+  const provider=assistantInfo?.providers.find(item=>item.id===id);
+  if(provider?.found===null)applyDetectedProvider({...provider,auth:{state:'error',detail:ipcMessage(error)}});
 }
 function discoverAssistantProvider(id){
-  if(!id)return;
+  if(!id||!assistantInfo)return;
   if(!providerDiscovery.has(id)){
-    const pending=nativeAFM.assistant.discoverProvider(id).then(provider=>{
-      const index=assistantInfo?.providers.findIndex(item=>item.id===id)??-1;
-      if(index<0)return;
-      assistantInfo.providers[index]=provider;
-      state.models[index]=providerModel(provider,assistantInfo.settings);
-      refreshVisibleCatalogs(id);
-    }).catch(error=>showNativeError(error)).finally(()=>providerDiscovery.delete(id));
+    const pending=nativeAFM.assistant.discoverProvider(id).then(applyDetectedProvider).catch(error=>{catalogFailed(id,error);showNativeError(error)}).finally(()=>providerDiscovery.delete(id));
     providerDiscovery.set(id,pending);
   }
   return providerDiscovery.get(id);
@@ -131,7 +143,10 @@ function scanAssistant(){
     applyAssistantInfo(info);
     const ready=info.providers.filter(p=>p.auth.state==='ready').map(p=>p.name);
     modelScan=ready.length?'Ready to use: '+ready.join(', ')+'.':'No signed-in provider found. Sign in to Claude Code or Codex, or add a provider.';
-  }).catch(error=>{modelScan=error.message}).finally(()=>{assistantDiscovery.scanning=null;
+  }).catch(error=>{
+    modelScan=ipcMessage(error);
+    for(const provider of assistantInfo?.providers??[])catalogFailed(provider.id,error);
+  }).finally(()=>{assistantDiscovery.scanning=null;
     const status=$('model-status');if(status)status.textContent=modelScan});
   const status=$('model-status');if(status)status.textContent=modelScan;
   return assistantDiscovery.scanning;
@@ -857,6 +872,7 @@ $('chat-images').addEventListener('click',event=>{
 });
 
 function handleAssistantEvent(event){
+  if(event.type==='provider-detected'){applyDetectedProvider(event.provider);return}
   const id=event.conversationId||'main';
   const chat=stateFor(id);
   const {messages}=chat;

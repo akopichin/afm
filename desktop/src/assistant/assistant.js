@@ -246,14 +246,17 @@ export class Assistant {
 
   async discoverProvider(id) {
     const cached = this.detections.get(id)?.info;
-    const fresh = cached && isModelEndpoint(cached.kind) && !cached.models?.length;
+    const fresh = cached && !cached.models?.length && (isModelEndpoint(cached.kind) || cached.auth.state === 'ready');
     return this.#providerView(await this.#provider(id, { fresh }));
   }
 
-  async scan() {
+  async scan(onProvider) {
     const { definitions } = await this.#definitions();
     const environment = await this.#environment();
-    await Promise.all(definitions.map(definition => this.#detect(definition, environment)));
+    await Promise.all(definitions.map(async definition => {
+      const provider = await this.#detect(definition, environment);
+      if (environment.generation === this.detectGeneration) onProvider?.(this.#providerView(provider));
+    }));
     return this.state();
   }
 

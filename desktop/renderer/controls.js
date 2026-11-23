@@ -41,6 +41,7 @@ function bindReasoningPicker(select,input,change,onCustom){
   };
 }
 function modelOptions(m,selected=m.model==='CLI default'?'':m.model,custom=false){
+  if(m.catalogPending)return option('','Loading models…',true);
   const models=m.catalog||[];
   const pick=custom?'__custom':models.some(v=>v.id===selected)?selected:selected?'__custom':'';
   const suggested=models.find(v=>v.default);
@@ -51,7 +52,9 @@ function refreshCatalog(prefix,m){
   const select=$(prefix+'-model-list');
   if(!select||!m)return;
   const input=$(prefix==='quick'?'quick-model-id':'profile-model');
-  select.innerHTML=modelOptions(m,input.value.trim(),!input.hidden&&select.value==='__custom');
+  select.disabled=m.catalogPending;
+  select.innerHTML=modelOptions(m,input.value.trim(),select.dataset.customDraft==='true');
+  input.hidden=select.value!=='__custom';
   const effort=$(prefix+'-effort');
   if(effort.value!=='__custom')effort.innerHTML=reasoningOptions(m,input.value.trim(),effort.value);
 }
@@ -70,9 +73,11 @@ function refreshQuickCatalog(){
   $('quick-test-model').hidden=isDemo||!canTestModel(m);
 }
 function bindModelPicker(select,input,change,onCustom){
+  delete select.dataset.customDraft;
   input.hidden=select.value!=='__custom';
   select.onchange=()=>{
     input.hidden=select.value!=='__custom';
+    select.dataset.customDraft=String(!input.hidden);
     if(!input.hidden){onCustom?.();input.focus();input.select();return}
     input.value=select.value;
     change?.(input.value);
@@ -80,7 +85,7 @@ function bindModelPicker(select,input,change,onCustom){
 }
 function profileFields(m){
   const toolPermissions=!isDemo&&(m.kind==='acp'||m.kind==='openai-agent'||m.kind==='anthropic-agent');
-  return `<div class="profile-fields"><label>Model<select id="profile-model-list">${modelOptions(m)}</select><input id="profile-model" value="${esc(m.model==='CLI default'?'':m.model)}" placeholder="CLI default" autocomplete="off"></label>
+  return `<div class="profile-fields"><label>Model<select id="profile-model-list" ${m.catalogPending?'disabled':''}>${modelOptions(m)}</select><input id="profile-model" value="${esc(m.model==='CLI default'?'':m.model)}" placeholder="CLI default" autocomplete="off"></label>
     <label>Reasoning<select id="profile-effort">${reasoningOptions(m)}</select><input id="profile-effort-custom" aria-label="Custom reasoning level" placeholder="e.g. medium" pattern="[a-zA-Z0-9_-]+" maxlength="32" hidden></label>
     ${m.agentModes?.length?`<label>Agent mode<select id="profile-acp-mode">${option('','Agent default',!m.acpMode)}${m.agentModes.map(mode=>option(mode.id,mode.label,mode.id===m.acpMode)).join('')}</select></label>`:''}
     <label>${toolPermissions?'AFM tool permissions':'Permissions'}<select id="profile-permissions">${Object.entries(permissionLabels).filter(([k])=>isDemo||m.permissions.includes(k)).map(([k,v])=>option(k,toolPermissions&&k==='yolo'?'Allow AFM actions without approval':v,k===(m.permission||'ask'))).join('')}</select></label></div>
@@ -816,6 +821,7 @@ function fillQuickModel(){
   const m=quickProvider();
   resetQuickTest();
   $('quick-test-model').hidden=isDemo||!canTestModel(m);
+  $('quick-model-list').disabled=m.catalogPending;
   $('quick-model-list').innerHTML=modelOptions(m);
   const effort=$('quick-effort'), custom=$('quick-effort-custom');
   const refreshEffort=(model,selected)=>{

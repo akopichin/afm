@@ -45,7 +45,8 @@ async function importEnvironment({ shell, file, variables }, home, base, dirs, s
     try {
       // ZDOTDIR is closed by its own NUL, so whatever the shell prints on exit is not taken as part of the path.
       const importing = exec(executable, ['-ic', 'printf "\\000AFM_ENV\\000"; /usr/bin/env -0; printf "\\000AFM_ZDOTDIR\\000%s\\000" "${ZDOTDIR-}"'],
-        {cwd: home, env: base, timeout: 5000, maxBuffer: 1 << 20, killSignal: 'SIGKILL', signal});
+        {cwd: home, env: base, timeout: 15000, maxBuffer: 1 << 20, killSignal: 'SIGKILL', signal});
+      importing.child.stdin.end();
       // `signal` stops the wait at once but sends SIGTERM, which an interactive shell ignores, so the shell is killed here.
       const kill = () => importing.child.kill('SIGKILL');
       signal.addEventListener('abort', kill);

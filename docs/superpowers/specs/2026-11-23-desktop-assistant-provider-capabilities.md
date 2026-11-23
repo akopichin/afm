@@ -18,6 +18,12 @@ credential used by the Assistant.
 | OpenAI-compatible chat endpoint | Authenticated model catalog | Model or gateway metadata | Short completion |
 | Deep Agent with an OpenAI or Anthropic endpoint | Authenticated provider catalog and compatible gateway metadata | Model or gateway metadata, sent using the endpoint's API dialect | Short completion using the same endpoint model adapter |
 
+- On cold start, Settings requests the provider ID from the persisted Assistant
+  selection. While its first check is pending the picker displays “Loading
+  models…”. The scan publishes each completed provider independently. A pending
+  OS credential prompt must leave the Desktop event loop and other catalogs
+  available. A saved model becomes the selected catalog entry when its ID
+  arrives. Choosing Custom model explicitly preserves the editable draft.
 - An endpoint uses its standard models endpoint first. When it is missing or
   empty, compatible gateway model group names and public deployment aliases can
   populate the list. An explicit authorization failure on the standard listing

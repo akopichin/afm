@@ -98,6 +98,27 @@ test('a provider catalog is available independently of a scan and reused by conc
   assert.equal(requests, 1);
 });
 
+test('a pending stored credential leaves other scan results available through IPC', { timeout: 10000 }, async t => {
+  const credential = Promise.withResolvers();
+  const { assistant } = makeAssistant(t, await providerHome(t), { secrets: { get: () => credential.promise } });
+  await assistant.settings.addProvider({ name: 'Locked endpoint', kind: 'openai-agent', endpoint: 'http://localhost:1/v1',
+    credential: { type: 'stored', ref: 'custom-1234abcd' } }, 'locked');
+  const handlers = new Map(), ready = new Map();
+  t.after(registerAssistantIpc((name, fn) => handlers.set(name, fn), assistant, event => {
+    if (event.type === 'provider-detected') ready.set(event.provider.id, event.provider);
+  }));
+  const scan = handlers.get('assistant:scan')();
+  try {
+    await eventually(() => ready.get('codex')?.found);
+    assert.equal(ready.has('locked'), false);
+    assert.equal((await assistant.state()).scanned, false);
+  } finally {
+    credential.resolve('');
+    await scan;
+  }
+  assert.equal(ready.get('locked').auth.state, 'missing');
+});
+
 test('Deep Agent tests the selected effort without adding a chat message and sends it in actual replies', async t => {
   const requests = [];
   const model = 'dashscope/qwen3.8-max';

@@ -439,6 +439,30 @@ test('the quick chooser tests the draft automatically and can retry without appl
   assert.equal(attempts.length, 2);
 });
 
+test('cold Settings selects the saved catalog model while an unrelated provider is still checking', async t => {
+  const assistant = fakeAssistant();
+  const model = 'dashscope/saved';
+  const portal = providerInfo('portal', { kind: 'anthropic-agent', found: null, auth: {state: 'unknown', detail: 'Not checked yet.'} });
+  assistant.info.settings = { ...assistant.info.settings, provider: portal.id, model };
+  assistant.info.providers.push(portal);
+  const catalog = Promise.withResolvers();
+  assistant.scan = () => new Promise(() => {});
+  assistant.discoverProvider = async id => id === portal.id ? catalog.promise : assistant.info.providers.find(p => p.id === id);
+  const { get, d } = await loadShell(t, { demo: false, native: { ...fakeNative(snapshot), assistant } });
+  await tick();
+  const picker = get('profile-model-list');
+  assert.equal(picker.disabled, true);
+  assert.match(picker.selectedOptions[0].textContent, /Loading/);
+  catalog.resolve({ ...portal, found: true, models: [{ id: model }, { id: 'other' }], auth: {state: 'ready', detail: 'API key configured'} });
+  await tick();
+  assert.deepEqual([...picker.options].map(o => o.value), ['', model, 'other', '__custom']);
+  assert.equal(picker.disabled, false);
+  assert.equal(picker.value, model);
+  assert.equal(get('profile-model').hidden, true);
+  assert.match(d.querySelector('[data-profile="portal"] small').textContent, /API key configured/);
+  assert.deepEqual(assistant.calls.configure, []);
+});
+
 test('choosing an endpoint loads its catalog without editing the model or waiting for a full scan', async t => {
   const assistant = fakeAssistant();
   const provider = providerInfo('portal', { name: 'llm-portal', kind: 'anthropic-agent', models: [] });

@@ -58,6 +58,13 @@ async function shellFixture(t) {
     load: () => desktopEnvironment(prefs, home, base)};
 }
 
+test('a startup file reading from stdin receives EOF during provider discovery', async t => {
+  const fixture = await shellFixture(t);
+  if (!fixture) return;
+  await appendFile(fixture.rc, 'read -r interactive_answer || export AFM_IMPORT_NONINTERACTIVE=yes\n');
+  assert.equal((await fixture.load()).AFM_IMPORT_NONINTERACTIVE, 'yes');
+});
+
 test('concurrent callers share one import and a repeat call imports nothing', async t => {
   const fixture = await shellFixture(t);
   if (!fixture) return;

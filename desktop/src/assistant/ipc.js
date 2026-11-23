@@ -6,7 +6,7 @@ function conversationId(value = 'main') {
 // Renderer-facing assistant calls. Every argument is picked field by field, so the page cannot pass anything else through.
 export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:state', () => assistant.state());
-  handle('assistant:scan', () => assistant.scan());
+  handle('assistant:scan', () => assistant.scan(provider => publish({ type: 'provider-detected', provider })));
   handle('assistant:discover-provider', id => assistant.discoverProvider(String(id)));
   handle('assistant:configure', changes => assistant.configure({ ...changes }));
   handle('assistant:add-provider', input => assistant.addProvider({

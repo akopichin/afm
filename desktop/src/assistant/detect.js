@@ -132,7 +132,7 @@ function codexModelCatalog(executable, env) {
       const fallback = configuredModel && !models.has(configuredModel) ? listed.find(model => model.default)?.id : undefined;
       resolve({ models: listed, fallback, configuredReasoning });
     };
-    const timer = setTimeout(finish, 5000);
+    const timer = setTimeout(finish, 15000);
     child.on('error', finish);
     child.on('close', finish);
     child.stdin.on('error', finish);

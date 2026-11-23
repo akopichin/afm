@@ -112,12 +112,12 @@ const assistant = new Assistant({
     ? path.join(process.resourcesPath, 'codex-acp.mjs')
     : path.join(root, 'node_modules', '@agentclientprotocol', 'codex-acp', 'dist', 'index.js') },
   secrets: {
-    set: (id, token) => {
-      if (!safeStorage.isEncryptionAvailable() || safeStorage.getSelectedStorageBackend?.() === 'basic_text')
+    set: async (id, token) => {
+      if (!await safeStorage.isAsyncEncryptionAvailable() || safeStorage.getSelectedStorageBackend?.() === 'basic_text')
         throw Error('Secure storage is unavailable. Choose Environment variable or Key file.');
-      return writeAtomic(assistantKeyFile(id), safeStorage.encryptString(token));
+      return writeAtomic(assistantKeyFile(id), await safeStorage.encryptStringAsync(token));
     },
-    get: async id => safeStorage.decryptString(await readFile(assistantKeyFile(id))),
+    get: async id => (await safeStorage.decryptStringAsync(await readFile(assistantKeyFile(id)))).result,
     remove: id => rm(assistantKeyFile(id), { force: true }),
   },
   home, env: environment, watch: { ...watchTasks.tools(), schedule: createRepeatingTask }, loginPath: () => (loginPath ??= loginShellPath(process.env)),

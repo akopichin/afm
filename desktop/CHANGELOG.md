@@ -11,6 +11,8 @@
 
 ### Fix:
 
+- Populate each provider’s models independently on cold start, including while macOS requests access to another provider’s saved key.
+
 - Load the selected provider's model catalog immediately in Settings and the quick picker, including after switching to a gateway with an empty cached catalog.
 - Show reported Codex, Claude Code, and Deep Agent subagents in the chat agent list.
 - Use the Codex model catalog's default when the configured CLI default is absent from the catalog.

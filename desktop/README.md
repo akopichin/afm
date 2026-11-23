@@ -190,7 +190,9 @@ Choose an OpenAI or Anthropic Deep Agent in Models to use a compatible gateway.
 Set the endpoint URL and API token and select a model that supports tool calls.
 The agent uses the regular Assistant bridge for AFM actions.
 
-The model picker uses the catalog available to the selected connection. The
+Open Settings → Models to load the saved connection’s catalog. Each provider becomes available as its check finishes. If macOS asks for access to a saved key, allow access to load that connection’s models.
+
+The
 reasoning picker uses the catalog or gateway's published levels. If a provider
 reports reasoning support without levels, Desktop offers low, medium, high,
 and xhigh for testing. Compatible Deep Agent gateways also accept manually
