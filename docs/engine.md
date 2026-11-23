@@ -31,8 +31,8 @@ binary, including `afm run --mode core`.
 The public repository contains the CLI composition, HTTP API, dashboard, SDK,
 and the independent `contracts` module. Public CI tests contracts, SDK, and UI
 without private credentials. Full builds, engine tests, and runtime integration
-run in AFM CI for trusted branches and same-repository pull requests, using a
-read-only engine token. Private dependencies are not vendored into this repository.
+run in AFM CI on non-Desktop tag pushes and manual dispatch in `akopichin/afm`,
+using a read-only engine token. Private dependencies are not vendored into this repository.
 See [CI configuration](releases.md#afm-3x-ci-configuration).
 
 ## Development across repositories

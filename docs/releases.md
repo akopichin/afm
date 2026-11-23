@@ -106,11 +106,13 @@ the intended version (for example `0.0.1`). This uploads the archives as workflo
 ## AFM 3.x CI configuration
 
 AFM owns validation, archive builds, and publication. The private `afm-engine`
-repository has no active workflows. Public CLI checks run for branch pushes, non-Desktop tag pushes and pull
-requests. Product checks also run for pushes and same-repository pull requests in
-`akopichin/afm`; fork and Dependabot pull requests have no private module access.
-To validate an external contribution, review it and push the reviewed revision
-to a branch in AFM before merging.
+repository has no active workflows. The **CI** workflow runs on non-Desktop tag
+pushes and on manual dispatch. Choose **Actions → CI → Run workflow** or run
+`gh workflow run ci.yml --ref <branch>` to check a branch. Public checks run
+without private module access. Product checks run in `akopichin/afm` for the same
+events, with private module access withheld from Dependabot. To validate an
+external contribution, review it and push the reviewed revision to a branch in
+AFM, then dispatch CI for that branch.
 
 Configure these under AFM **Settings → Secrets and variables → Actions**:
 
@@ -173,11 +175,11 @@ Actions then builds the Docker image and binaries, publishes the GitHub Release,
 and updates the matching Homebrew cask.
 
 When introducing changes to the release workflow, commit and push them to the
-branch being released and wait for CI to succeed. Each tag uses the workflow
-and GoReleaser configuration from its own commit. Then fetch tags and run the
-desired release target. The target itself pushes the tag; no additional `git push` is needed. Branch pushes run CI checks and do
-not create release tags. This lets `main` contain alpha or beta code without
-publishing it as a stable `1.x` release.
+branch being released, run CI manually for that branch, and wait for it to
+succeed. Each tag uses the workflow and GoReleaser configuration from its own
+commit. Then fetch tags and run the
+desired release target, which pushes the tag and starts publication. This lets
+`main` contain alpha or beta code without publishing it as a stable `1.x` release.
 
 | Version bump | Stable | Alpha | Beta |
 |---|---|---|---|

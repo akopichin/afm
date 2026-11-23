@@ -2,9 +2,8 @@ name: CI
 
 on:
   push:
-    branches: ['**']
     tags-ignore: ['ds-v*']
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,7 +49,7 @@ jobs:
 
   product:
     needs: validate
-    if: github.repository == 'akopichin/afm' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]'
+    if: github.repository == 'akopichin/afm' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.actor != 'dependabot[bot]'
     uses: ./.github/workflows/product-checks.yml
     secrets:
       ENGINE_READ_TOKEN: ${{ secrets.ENGINE_READ_TOKEN }}

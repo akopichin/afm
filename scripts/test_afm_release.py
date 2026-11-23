@@ -193,12 +193,14 @@ class ProductWorkflowTests(unittest.TestCase):
         self.checks = yaml.safe_load((root / ".github/workflows/product-checks.yml").read_text())
         self.action = yaml.safe_load((root / ".github/actions/private-go/action.yml").read_text())
 
-    def test_untrusted_prs_never_receive_private_module_credentials(self):
-        self.assertEqual(self.ci[True], {"push": {"branches": ["**"], "tags-ignore": ["ds-v*"]}, "pull_request": None})
+    def test_ci_runs_only_manually_or_for_non_desktop_tags(self):
+        self.assertEqual(self.ci[True], {"push": {"tags-ignore": ["ds-v*"]}, "workflow_dispatch": None})
+
+    def test_product_ci_only_grants_private_credentials_in_the_afm_repository(self):
         guard = self.ci["jobs"]["product"]["if"]
         self.assertIn("github.repository == 'akopichin/afm'", guard)
         self.assertIn("github.event_name == 'push'", guard)
-        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", guard)
+        self.assertIn("github.event_name == 'workflow_dispatch'", guard)
         self.assertIn("github.actor != 'dependabot[bot]'", guard)
         self.assertNotIn("secrets.", json.dumps(self.ci["jobs"]["validate"]))
 

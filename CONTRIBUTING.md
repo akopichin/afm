@@ -24,9 +24,9 @@ before downloading dependencies. Private sources must never be committed under
 `vendor/`, uploaded as public caches, or copied into release archives. Run `go mod
 tidy` after dependency changes and commit the module manifests and checksums.
 The public CI tests `contracts`, `sdk`, and the dashboard without private access.
-Full product builds, engine tests on Linux and macOS, and integration tests run
-in AFM CI for trusted branch pushes and pull requests. Fork and Dependabot pull
-requests run public checks only. See [CI configuration](docs/releases.md#afm-3x-ci-configuration)
+Use **Actions → CI → Run workflow** to check a branch. CI also runs on non-Desktop
+tag pushes. In `akopichin/afm`, CI runs the full product build, engine tests on
+Linux and macOS, and integration tests. See [CI configuration](docs/releases.md#afm-3x-ci-configuration)
 for private module access.
 
 To update the engine pin, push the engine commit first, then create an AFM branch:
