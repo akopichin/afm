@@ -1,5 +1,11 @@
 # AFM Desktop changelog
 
+## 2026-11-23
+
+### Fix:
+
+- Bundle the Deep Agents runtime dependencies so Anthropic and OpenAI providers can reply in the packaged Desktop app.
+
 ## 2026-11-22
 
 ### Improvement:

@@ -17,7 +17,9 @@ for (const file of ['assets/afm-desktop.png', 'assets/afm-desktop-attention.png'
   'renderer/checkout.html', 'renderer/run-changes.js', 'renderer/run-changes.css', 'src/run-changes.js',
   '.generated/editor/code-editor.js', '.generated/editor/code-editor.css', '.generated/run.html', '.generated/dashboard/skins/graphite/index.css',
   'node_modules/@modelcontextprotocol/sdk/package.json', 'node_modules/yaml/package.json',
-  'node_modules/deepagents/package.json', 'node_modules/@langchain/openai/package.json', 'node_modules/@langchain/anthropic/package.json']) {
+  'node_modules/deepagents/package.json', 'node_modules/@langchain/openai/package.json', 'node_modules/@langchain/anthropic/package.json',
+  'node_modules/langchain/package.json', 'node_modules/@langchain/langgraph/package.json',
+  'node_modules/@langchain/langgraph-checkpoint/package.json', 'node_modules/@langchain/langgraph-sdk/package.json']) {
   if (!statFile(archive, file).size) throw Error('Empty package entry: ' + file);
 }
 if (listPackage(archive).some(file => /^[/\\]node_modules[/\\]@openai[/\\]codex(?:[/\\]|$)/.test(file))) {
@@ -68,6 +70,12 @@ try {
   console.log('chrome-devtools-mcp', version, '(packaged files, no external PATH)');
   try {
     console.log('chrome-devtools-mcp', await mcpVersion(electron, { ELECTRON_RUN_AS_NODE: '1' }), '(packaged runtime)');
+    execFileSync(electron, [path.resolve('test/assistant-deep-agent.test.js')], {
+      timeout: 30_000,
+      env: { HOME: home, PATH: '/usr/bin:/bin', ELECTRON_RUN_AS_NODE: '1',
+        AFM_DESKTOP_DEEP_AGENT_MODULE: path.join(archive, 'src/assistant/deep-agent.js') },
+      stdio: ['ignore', 'inherit', 'pipe'],
+    });
   } catch (error) {
     if (process.platform === 'darwin' || !/shared libraries/.test(String(error.stderr))) throw error;
     console.log('packaged runtime not executed: this machine lacks the GUI libraries Electron loads (Mac check only)');

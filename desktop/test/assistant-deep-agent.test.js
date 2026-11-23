@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
-import { endpointModels, runDeepAgent } from '../src/assistant/deep-agent.js';
+import { pathToFileURL } from 'node:url';
+
+const packagedModule = process.env.AFM_DESKTOP_DEEP_AGENT_MODULE;
+const { endpointModels, runDeepAgent } = await import(packagedModule
+  ? pathToFileURL(packagedModule).href : '../src/assistant/deep-agent.js');
 
 test('OpenAI agent discovers models and streams a reply through a prefixed endpoint', async t => {
   const received = [];
@@ -109,7 +113,8 @@ test('OpenAI agent hands a tool call to the scoped bridge and streams the answer
   const events = [];
   const { done } = runDeepAgent({ provider, apiKey: 'test-token', modelId: 'test-model',
     systemPrompt: 'Use the run tool.', messages: [{ role: 'user', content: 'What is running?' }],
-    bridge: { command: process.execPath, args: ['--input-type=module', '-e', script], env: {} }, onEvent: event => events.push(event) });
+    bridge: { command: process.execPath, args: ['--input-type=module', '-e', script],
+      env: packagedModule ? { ELECTRON_RUN_AS_NODE: '1' } : {} }, onEvent: event => events.push(event) });
   assert.ifError((await done).error);
   assert.equal(events.filter(event => event.type === 'delta').map(event => event.text).join(''), 'The run is active.');
   const tool = events.find(event => event.type === 'tool' && event.name === 'afm_runs_list');

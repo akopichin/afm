@@ -74,7 +74,10 @@ To preview it, use `./scripts/release.sh --dry-run --desktop patch --branch main
 The Desktop workflow selects the latest stable AFM CLI release once per run.
 Each macOS and Linux build (arm64 or x64) verifies and bundles the corresponding
 CLI executable from that release. It still builds the Desktop assets, runs tests,
-performance checks and package inspection, and opens the packaged app on macOS. After
+performance checks and package inspection, and opens the packaged app on macOS.
+Package inspection checks that the Deep Agents runtime dependencies are present.
+Where Electron can run on the build host, it also checks streaming replies from
+OpenAI and Anthropic test endpoints using the code inside `app.asar`. After
 all four builds pass it publishes a GitHub Release named **AFM Desktop** with the
 version from the tag. Download the `afm-desktop-<version>-darwin-<arch>.zip` for
 Mac or `afm-desktop-<version>-linux-<arch>.tar.gz` for Linux and verify it with
