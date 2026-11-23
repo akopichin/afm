@@ -1,5 +1,5 @@
 import { desktopDir, writeAtomic } from './files.js';
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell, session, safeStorage, WebContentsView } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell, session, safeStorage, WebContentsView } from 'electron';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
@@ -208,6 +208,10 @@ handle('projects:pick', async () => {
   return folder ? projectSummary(await desktop.projects.add(folder)) : null;
 });
 handle('projects:overview', () => desktop.overview());
+handle('projects:copy-path', projectPath => {
+  if (typeof projectPath !== 'string' || !projectPath) throw Error('Invalid project path.');
+  clipboard.writeText(projectPath);
+});
 handle('app:version', () => app.getVersion());
 handle('workspace:get', () => workspace.get());
 handle('workspace:refresh', () => workspace.refresh());

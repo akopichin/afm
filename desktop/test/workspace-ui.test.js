@@ -204,9 +204,11 @@ test('Home pins a compact copy, persists the choice and keeps it distinct from o
 
 test('both sizes of Home card reveal and copy the exact path without opening a project', async t => {
   const project={...projectRow('a',[]),path:'/work/space & <folder>/another folder'};
-  const {w,d,get,key}=await openShell(t,snapshotOf([project]));
   const copied=[];
-  Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async path=>copied.push(path)}});
+  const {w,d,get,key}=await openShell(t,snapshotOf([project]),{
+    copyProjectPath:async path=>copied.push(path),
+  });
+  Object.defineProperty(w.navigator,'clipboard',{value:undefined});
   d.querySelector('[data-pin-project="a"]').click();
   for(const scope of ['recent','pinned']){
     const anchor=d.querySelector(`[data-project-path="a"][data-tile="${scope}"]`);

@@ -72,7 +72,7 @@ projectPathCopy.onclick=async()=>{
   const anchor=projectPathAnchor;
   if(!anchor)return;
   try{
-    await navigator.clipboard.writeText(projectPathText.textContent);
+    await window.nativeAFM.copyProjectPath(projectPathText.textContent);
     if(projectPathAnchor!==anchor)return;
     clearTimeout(projectPathCopyTimer);
     projectPathCopyState('Copied');

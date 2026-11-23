@@ -9,6 +9,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   liveLayout:(bounds,stage)=>ipcRenderer.invoke('live:layout',bounds,stage),
   onLiveShortcut:callback=>ipcRenderer.on('live:shortcut',(_event,action)=>callback(action)),
   pickProject:()=>ipcRenderer.invoke('projects:pick'),
+  copyProjectPath:path=>ipcRenderer.invoke('projects:copy-path',path),
   runs:()=>ipcRenderer.invoke('runs:list'),
   dashboard:(id,instance,external=false)=>ipcRenderer.invoke('runs:open',id,instance,external),
   openLaunchLog:id=>ipcRenderer.invoke('runs:launch-log',id),
