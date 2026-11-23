@@ -439,6 +439,62 @@ test('the quick chooser tests the draft automatically and can retry without appl
   assert.equal(attempts.length, 2);
 });
 
+test('choosing an endpoint loads its catalog without editing the model or waiting for a full scan', async t => {
+  const assistant = fakeAssistant();
+  const provider = providerInfo('portal', { name: 'llm-portal', kind: 'anthropic-agent', models: [] });
+  assistant.info.providers.push(provider);
+  const scan = Promise.withResolvers();
+  assistant.scan = () => scan.promise;
+  const { w, get, key } = await openShell(t, { assistant });
+  const pending = Promise.withResolvers();
+  const lookups = [];
+  assistant.discoverProvider = async id => {
+    lookups.push(id);
+    return id === provider.id ? pending.promise : assistant.info.providers.find(item => item.id === id);
+  };
+  key('KeyM', 'm', { metaKey: true });
+  get('quick-agent').value = provider.id;
+  get('quick-agent').dispatchEvent(new w.Event('change'));
+  const modelIds = () => [...get('quick-model-list').options].map(option => option.value);
+  assert.deepEqual(modelIds(), ['', '__custom']);
+  assert.deepEqual(lookups, ['claude', 'portal']);
+  pending.resolve({ ...provider, models: [{ id: 'dashscope/one', reasoning: ['low'] }, { id: 'dashscope/two' }] });
+  await tick();
+  assert.deepEqual(modelIds(), ['', 'dashscope/one', 'dashscope/two', '__custom']);
+  assert.equal(get('quick-model-list').value, '');
+  assert.deepEqual(assistant.calls.configure, []);
+  get('quick-model-list').value = 'dashscope/one';
+  get('quick-model-list').dispatchEvent(new w.Event('change'));
+  assert.deepEqual([...get('quick-effort').options].map(option => option.value), ['default', 'low']);
+  scan.resolve({ ...assistant.info, scanned: true });
+  await tick();
+  assert.equal(get('quick-model-list').value, 'dashscope/one');
+});
+
+test('a catalog arriving in the quick chooser preserves a focused custom model draft', async t => {
+  const assistant = fakeAssistant();
+  const provider = providerInfo('portal', { name: 'llm-portal', kind: 'anthropic-agent', models: [] });
+  assistant.info.providers.push(provider);
+  const { w, d, get, key } = await openShell(t, { assistant });
+  const pending = Promise.withResolvers();
+  assistant.discoverProvider = async id => id === provider.id ? pending.promise : assistant.info.providers.find(item => item.id === id);
+  key('KeyM', 'm', { metaKey: true });
+  get('quick-agent').value = provider.id;
+  get('quick-agent').dispatchEvent(new w.Event('change'));
+  const picker = get('quick-model-list');
+  picker.value = '__custom';
+  picker.dispatchEvent(new w.Event('change'));
+  const input = get('quick-model-id');
+  input.value = 'custom/draft';
+  pending.resolve({ ...provider, models: [{ id: 'dashscope/one' }] });
+  await tick();
+  assert.deepEqual([...picker.options].map(option => option.value), ['', 'dashscope/one', '__custom']);
+  assert.equal(picker.value, '__custom');
+  assert.equal(input.value, 'custom/draft');
+  assert.equal(d.activeElement, input);
+  assert.deepEqual(assistant.calls.configure, []);
+});
+
 test('settings and the quick chooser offer the detected models, a default and custom input', async t => {
   const assistant=fakeAssistant();
   assistant.info.providers[0].models=[{id:'sonnet',label:'Sonnet',default:true}];

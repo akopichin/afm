@@ -45,6 +45,12 @@ credential used by the Assistant.
   new validation or joins an identical probe already running. A pending status
   indicates that validation is in progress. A rejection stays visible for the
   selection so the user can return to Provider default or try another level.
+- Opening either model picker or switching providers requests that provider's
+  catalog independently of the full scan. The picker updates as soon as the
+  catalog arrives, including when the model control has focus or the quick
+  picker has an unsaved draft. A catalog update preserves the selected provider
+  and model input. Concurrent detection requests for the same provider and
+  environment share the in-flight check. A recent populated catalog is reused.
 - A probe uses a short fixed prompt with no AFM bridge, external MCP servers,
   images, project history or chat history. ACP permission requests are denied
   for a probe. A reply must produce output. The main process bounds probe

@@ -76,6 +76,28 @@ test('an endpoint key can come from a key file; a missing key stops before any r
   assert.equal((await second.assistant.testProvider(second.id)).ok, false);
 });
 
+test('a provider catalog is available independently of a scan and reused by concurrent callers', async t => {
+  let requests = 0;
+  const server = createServer((req, res) => {
+    if (req.method !== 'GET' || req.url !== '/v1/models') return res.writeHead(404).end();
+    requests++;
+    assert.equal(req.headers.authorization, 'Bearer ' + KEY);
+    res.end(JSON.stringify({ data: [{ id: 'available', supported_reasoning_efforts: ['high'] }] }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const { assistant } = makeAssistant(t, await providerHome(t, { LOCAL_KEY: KEY }));
+  const id = 'gateway';
+  await assistant.settings.addProvider({ name: 'Gateway', kind: 'openai-agent', endpoint: 'http://127.0.0.1:' + server.address().port + '/v1',
+    credential: { type: 'env', ref: 'LOCAL_KEY' } }, id);
+  const replies = await Promise.all([assistant.discoverProvider(id), assistant.discoverProvider(id)]);
+  assert.deepEqual(replies.map(reply => reply.models), Array(2).fill([{ id: 'available', label: 'available', reasoning: ['high'] }]));
+  assert.equal(requests, 1);
+  assert.equal((await assistant.state()).scanned, false);
+  await assistant.discoverProvider(id);
+  assert.equal(requests, 1);
+});
+
 test('Deep Agent tests the selected effort without adding a chat message and sends it in actual replies', async t => {
   const requests = [];
   const model = 'dashscope/qwen3.8-max';
@@ -158,7 +180,7 @@ test('the window reaches the assistant only through narrow IPC calls that ignore
   t.after(off);
   const call = (name, ...args) => handlers.get(name)(...args);
   assert.deepEqual([...handlers.keys()].sort(), ['assistant:add-provider', 'assistant:approve', 'assistant:backlog', 'assistant:backlog-plans', 'assistant:cancel', 'assistant:clear', 'assistant:configure', 'assistant:conversations',
-    'assistant:follow-up', 'assistant:history', 'assistant:mcp-import', 'assistant:mcp-list', 'assistant:mcp-remove', 'assistant:mcp-save', 'assistant:mcp-test',
+    'assistant:discover-provider', 'assistant:follow-up', 'assistant:history', 'assistant:mcp-import', 'assistant:mcp-list', 'assistant:mcp-remove', 'assistant:mcp-save', 'assistant:mcp-test',
     'assistant:new-conversation', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-model', 'assistant:test-provider', 'assistant:update-provider-workspace']);
   await assert.rejects(call('assistant:update-provider-workspace', 'claude', '/workspace'), /Remote ACP provider no longer exists/);
   await call('assistant:configure', { permission: 'read' });

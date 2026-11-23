@@ -40,13 +40,34 @@ function bindReasoningPicker(select,input,change,onCustom){
     if(value&&input.reportValidity())change(value);
   };
 }
-function modelOptions(m){
-  const selected=m.model==='CLI default'?'':m.model;
+function modelOptions(m,selected=m.model==='CLI default'?'':m.model,custom=false){
   const models=m.catalog||[];
-  const pick=models.some(v=>v.id===selected)?selected:selected?'__custom':'';
+  const pick=custom?'__custom':models.some(v=>v.id===selected)?selected:selected?'__custom':'';
   const suggested=models.find(v=>v.default);
   return option('',suggested?'Provider default · '+suggested.label:'Provider default',!pick)
     +models.map(v=>option(v.id,v.label||v.id,pick===v.id)).join('')+option('__custom','Custom model…',pick==='__custom');
+}
+function refreshCatalog(prefix,m){
+  const select=$(prefix+'-model-list');
+  if(!select||!m)return;
+  const input=$(prefix==='quick'?'quick-model-id':'profile-model');
+  select.innerHTML=modelOptions(m,input.value.trim(),!input.hidden&&select.value==='__custom');
+  const effort=$(prefix+'-effort');
+  if(effort.value!=='__custom')effort.innerHTML=reasoningOptions(m,input.value.trim(),effort.value);
+}
+function refreshProfileCatalog(){refreshCatalog('profile',profile())}
+const quickProvider=()=>state.models.find(item=>item.id===$('quick-agent').value);
+function syncQuickProviders(){
+  const select=$('quick-agent');
+  const selected=state.models.some(item=>item.id===select.value)?select.value:state.profile;
+  const previous=select.value;
+  select.innerHTML=state.models.map(m=>option(m.id,m.name+(m.model==='CLI default'?'':' · '+m.model),m.id===selected)).join('');
+  if(previous!==selected){fillQuickModel();discoverAssistantProvider(selected)}
+}
+function refreshQuickCatalog(){
+  const m=quickProvider();
+  refreshCatalog('quick',m);
+  $('quick-test-model').hidden=isDemo||!canTestModel(m);
 }
 function bindModelPicker(select,input,change,onCustom){
   input.hidden=select.value!=='__custom';
@@ -344,7 +365,7 @@ $('workflows').onclick=e=>{
 function openSettings(first=false,tab='models'){
   onboarding=first;settingsTab=tab;sourceMessage='';drawSettings();
   if(!$('settings').open)$('settings').showModal();
-  if(!isDemo&&tab==='models')ensureAssistantScan();
+  if(!isDemo&&tab==='models'){ensureAssistantScan();discoverAssistantProvider(state.profile)}
   else if(first)scanModels();
   loadSettingsData();
 }
@@ -640,11 +661,12 @@ document.addEventListener('click',async e=>{
   if(el.hasAttribute('data-close'))el.closest('dialog')?.close();
   if(el.dataset.panel){
     settingsTab=el.dataset.panel;drawSettings();
-    if(!isDemo&&settingsTab==='models')ensureAssistantScan();
+    if(!isDemo&&settingsTab==='models'){ensureAssistantScan();discoverAssistantProvider(state.profile)}
   }
   if(el.dataset.profile&&!isDemo){
     const finish=beginModelAction(el);
     try{await configureAssistant({provider:el.dataset.profile})}finally{finish();refreshModelPanel()}
+    void discoverAssistantProvider(el.dataset.profile);
   }
   else if(el.dataset.profile){state.profile=el.dataset.profile;save();drawSettings();drawChat()}
   if(el.dataset.remove&&!isDemo)changeSource(async()=>{await nativeAFM.removeSource(el.dataset.remove);return null});
@@ -755,7 +777,6 @@ async function testQuickSelection(force=false){
   const settings=quickSelection();
   if(!settings.reasoning)return;
   clearTimeout(quickTestTimer);
-  $('quick-model-form').dataset.edited='true';
   const version=++quickTestVersion;
   quickTestedKey=JSON.stringify(settings);
   const button=$('quick-test-model');
@@ -786,20 +807,20 @@ function scheduleQuickTest(){
 }
 function showQuickModel(){
   if(document.querySelector('dialog[open]'))return;
-  delete $('quick-model-form').dataset.edited;
   if(!isDemo)ensureAssistantScan();
   $('quick-agent').innerHTML=state.models.map(m=>option(m.id,m.name+(m.model==='CLI default'?'':' · '+m.model),m.id===state.profile)).join('');
   fillQuickModel();$('quick-model').showModal();$('quick-model-list').focus();
+  if(!isDemo)discoverAssistantProvider($('quick-agent').value);
 }
 function fillQuickModel(){
-  const m=state.models.find(item=>item.id===$('quick-agent').value);
+  const m=quickProvider();
   resetQuickTest();
   $('quick-test-model').hidden=isDemo||!canTestModel(m);
   $('quick-model-list').innerHTML=modelOptions(m);
   const effort=$('quick-effort'), custom=$('quick-effort-custom');
   const refreshEffort=(model,selected)=>{
     custom.hidden=true;
-    effort.innerHTML=reasoningOptions(m,model,selected);
+    effort.innerHTML=reasoningOptions(quickProvider(),model,selected);
   };
   const selectModel=model=>{refreshEffort(model,effort.value);scheduleQuickTest()};
   bindModelPicker($('quick-model-list'),$('quick-model-id'),selectModel,resetQuickTest);
@@ -809,10 +830,12 @@ function fillQuickModel(){
   bindReasoningPicker(effort,custom,scheduleQuickTest,resetQuickTest);
   custom.oninput=resetQuickTest;
 }
-$('quick-agent').onchange=()=>{fillQuickModel();scheduleQuickTest()};
+$('quick-agent').onchange=()=>{
+  fillQuickModel();scheduleQuickTest();
+  if(!isDemo)discoverAssistantProvider($('quick-agent').value);
+};
 $('quick-test-model').onclick=()=>testQuickSelection(true);
 $('quick-model').addEventListener('close',resetQuickTest);
-$('quick-model-form').addEventListener('input',()=>{$('quick-model-form').dataset.edited='true'});
 $('quick-model-form').onsubmit=e=>{
   e.preventDefault();
   if(!isDemo){

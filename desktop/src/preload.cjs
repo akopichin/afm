@@ -72,6 +72,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
   assistant:{
     state:()=>ipcRenderer.invoke('assistant:state'),
     scan:()=>ipcRenderer.invoke('assistant:scan'),
+    discoverProvider:id=>ipcRenderer.invoke('assistant:discover-provider',id),
     configure:changes=>ipcRenderer.invoke('assistant:configure',changes),
     addProvider:input=>ipcRenderer.invoke('assistant:add-provider',input),
     removeProvider:id=>ipcRenderer.invoke('assistant:remove-provider',id),

@@ -11,6 +11,7 @@
 
 ### Fix:
 
+- Load the selected provider's model catalog immediately in Settings and the quick picker, including after switching to a gateway with an empty cached catalog.
 - Show reported Codex, Claude Code, and Deep Agent subagents in the chat agent list.
 - Use the Codex model catalog's default when the configured CLI default is absent from the catalog.
 - Copy full project paths from Home using the system clipboard.

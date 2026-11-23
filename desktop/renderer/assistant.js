@@ -4,6 +4,7 @@
 const newChatState=()=>({messages:[],queue:[],images:[],busy:false,local:''});
 let assistantChat=newChatState();
 const assistantDiscovery={scanned:false,scanning:null};
+const providerDiscovery=new Map();
 let activeConversation='main';
 const chatStates=new Map([['main',assistantChat]]);
 const stateFor=id=>{
@@ -43,6 +44,26 @@ function applyAssistantInfo(info){
   assistantDiscovery.scanned=info.scanned;
   drawChat();
   if(!$('settings-body').querySelector('input:focus,select:focus'))refreshModelPanel();
+  if($('quick-model').open)syncQuickProviders();
+  refreshVisibleCatalogs();
+}
+function discoverAssistantProvider(id){
+  if(!id)return;
+  if(!providerDiscovery.has(id)){
+    const pending=nativeAFM.assistant.discoverProvider(id).then(provider=>{
+      const index=assistantInfo?.providers.findIndex(item=>item.id===id)??-1;
+      if(index<0)return;
+      assistantInfo.providers[index]=provider;
+      state.models[index]=providerModel(provider,assistantInfo.settings);
+      refreshVisibleCatalogs(id);
+    }).catch(error=>showNativeError(error)).finally(()=>providerDiscovery.delete(id));
+    providerDiscovery.set(id,pending);
+  }
+  return providerDiscovery.get(id);
+}
+function refreshVisibleCatalogs(id){
+  if($('quick-model').open&&(!id||$('quick-agent').value===id))refreshQuickCatalog();
+  if($('settings').open&&settingsTab==='models'&&(!id||state.profile===id))refreshProfileCatalog();
 }
 function refreshModelPanel(){
   if(!$('settings').open||settingsTab!=='models')return;
@@ -111,18 +132,11 @@ function scanAssistant(){
     const ready=info.providers.filter(p=>p.auth.state==='ready').map(p=>p.name);
     modelScan=ready.length?'Ready to use: '+ready.join(', ')+'.':'No signed-in provider found. Sign in to Claude Code or Codex, or add a provider.';
   }).catch(error=>{modelScan=error.message}).finally(()=>{assistantDiscovery.scanning=null;
-    refreshModelPanel();
-    if($('quick-model').open&&!$('quick-model-form').dataset.edited)refreshQuickModel()});
+    const status=$('model-status');if(status)status.textContent=modelScan});
   const status=$('model-status');if(status)status.textContent=modelScan;
   return assistantDiscovery.scanning;
 }
 const ensureAssistantScan=()=>assistantDiscovery.scanned?Promise.resolve():scanAssistant();
-function refreshQuickModel(){
-  const chosen=$('quick-agent').value||state.profile;
-  $('quick-agent').innerHTML=state.models.map(m=>option(m.id,m.name,m.id===chosen)).join('');
-  fillQuickModel();
-}
-
 function providerForm(){
   return `<form id="model-form" ${addingProvider?'aria-busy="true"':'hidden'}><label>Name<input name="name" required maxlength="60" placeholder="My Claude, Local model…"></label>
     <label>Type<select name="kind"><option value="claude">Claude Code CLI</option><option value="codex">Codex CLI</option><option value="openai">OpenAI-compatible endpoint</option><option value="openai-agent">OpenAI · Deep Agent</option><option value="anthropic-agent">Anthropic · Deep Agent</option><option value="acp">ACP agent</option><option value="remote-acp">Claude Code · Remote ACP</option></select></label>

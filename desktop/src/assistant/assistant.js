@@ -120,6 +120,7 @@ export class Assistant {
     this.migrateHistory = migrateHistory;
     this.listeners = new Set();
     this.detections = new Map();
+    this.detecting = new Map();
     this.modelTests = new Map();
     this.activeModelTests = new Set();
     this.detectGeneration = 0;
@@ -199,9 +200,18 @@ export class Assistant {
   }
 
   async #detect(definition, environment) {
-    const info = await detectProvider(definition, { home: this.home, env: environment.env, dirs: environment.dirs, secret: (provider, env) => this.#secret(provider, env) });
-    if (environment.generation === this.detectGeneration) this.detections.set(definition.id, { at: Date.now(), info, key: environment.key });
-    return info;
+    const key = digest([definition, environment.key, environment.generation]);
+    let pending = this.detecting.get(key);
+    if (!pending) {
+      pending = detectProvider(definition, { home: this.home, env: environment.env, dirs: environment.dirs,
+        secret: (provider, env) => this.#secret(provider, env) }).then(info => {
+        if (environment.generation === this.detectGeneration)
+          this.detections.set(definition.id, { at: Date.now(), info, key: environment.key });
+        return info;
+      }).finally(() => this.detecting.delete(key));
+      this.detecting.set(key, pending);
+    }
+    return pending;
   }
 
   async #provider(id, { fresh = false, environment } = {}) {
@@ -227,7 +237,17 @@ export class Assistant {
     });
     const selected = providers.find(item => item.id === settings.provider);
     const effective = selected ? { provider: selected.name, permission: settings.permission, label: PERMISSION_LABELS[settings.permission], flags: describeMode(selected, settings.permission) } : null;
-    return { settings, providers: providers.map(item => ({ ...item, modes: Object.fromEntries(item.found === null ? [] : item.permissions.map(mode => [mode, describeMode(item, mode)])) })), effective, scanned: this.detections.size > 0 };
+    return { settings, providers: providers.map(item => this.#providerView(item)), effective, scanned: providers.every(item => item.found !== null) };
+  }
+
+  #providerView(item) {
+    return { ...item, modes: Object.fromEntries(item.found === null ? [] : item.permissions.map(mode => [mode, describeMode(item, mode)])) };
+  }
+
+  async discoverProvider(id) {
+    const cached = this.detections.get(id)?.info;
+    const fresh = cached && isModelEndpoint(cached.kind) && !cached.models?.length;
+    return this.#providerView(await this.#provider(id, { fresh }));
   }
 
   async scan() {

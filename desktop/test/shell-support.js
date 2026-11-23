@@ -105,6 +105,7 @@ export function fakeAssistant() {
   Object.assign(fake, {
     state: async () => fake.info,
     scan: async () => { fake.calls.scan++; fake.info = { ...fake.info, scanned: true }; return fake.info; },
+    discoverProvider: async id => fake.info.providers.find(provider => provider.id === id),
     configure: async changes => { changes = plain(changes); fake.calls.configure.push(changes); fake.info = { ...fake.info, settings: { ...fake.info.settings, ...changes } }; return fake.info; },
     addProvider: async input => { fake.calls.add.push(plain(input)); return fake.info; },
     removeProvider: async id => { fake.calls.remove.push(id); return fake.info; },

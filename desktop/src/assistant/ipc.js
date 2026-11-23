@@ -7,6 +7,7 @@ function conversationId(value = 'main') {
 export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:state', () => assistant.state());
   handle('assistant:scan', () => assistant.scan());
+  handle('assistant:discover-provider', id => assistant.discoverProvider(String(id)));
   handle('assistant:configure', changes => assistant.configure({ ...changes }));
   handle('assistant:add-provider', input => assistant.addProvider({
     token: typeof input?.token === 'string' ? input.token : '', name: input?.name, kind: input?.kind, executable: input?.executable, endpoint: input?.endpoint, remoteCwd: input?.remoteCwd, args: input?.args,
