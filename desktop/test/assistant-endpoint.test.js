@@ -110,7 +110,8 @@ test('the window reaches the assistant only through narrow IPC calls that ignore
   t.after(off);
   const call = (name, ...args) => handlers.get(name)(...args);
   assert.deepEqual([...handlers.keys()].sort(), ['assistant:add-provider', 'assistant:approve', 'assistant:backlog', 'assistant:backlog-plans', 'assistant:cancel', 'assistant:clear', 'assistant:configure', 'assistant:conversations',
-    'assistant:follow-up', 'assistant:history', 'assistant:new-conversation', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider', 'assistant:update-provider-workspace']);
+    'assistant:follow-up', 'assistant:history', 'assistant:mcp-import', 'assistant:mcp-list', 'assistant:mcp-remove', 'assistant:mcp-save', 'assistant:mcp-test',
+    'assistant:new-conversation', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider', 'assistant:update-provider-workspace']);
   await assert.rejects(call('assistant:update-provider-workspace', 'claude', '/workspace'), /Remote ACP provider no longer exists/);
   await call('assistant:configure', { permission: 'read' });
   await assert.rejects(call('assistant:configure', { executable: '/bin/sh' }), /Invalid assistant setting/);

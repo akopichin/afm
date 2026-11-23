@@ -51,6 +51,7 @@ export function createCodeEditor(parent, {text, language, label, readOnly = fals
   });
   return {
     getValue: () => model.getValue(),
+    focus: () => view.focus(),
     setReadOnly: value => view.updateOptions({readOnly: value}),
     onChange: callback => model.onDidChangeContent(callback),
     dispose() { observer.disconnect(); view.dispose(); model.dispose(); },

@@ -330,7 +330,7 @@ async function loadSettingsData(){
     state.sources=sources.map(nativeSource);state.gitDefault=prefs.gitMode;
     if(prefs.environment)savedEnvironment=prefs.environment;
     if(prefs.notifications)savedNotifications=prefs.notifications;
-    if($('settings').open&&settingsTab!=='models')drawSettings();
+    if($('settings').open&&!['models','mcp'].includes(settingsTab))drawSettings();
   }catch(error){showNativeError(error)}
 }
 const demoModelForm=`<form id="model-form" hidden><label>Provider or CLI<input name="name" required placeholder="Ollama, Gemini CLI…"></label><label>Model or deployment<input name="model" required placeholder="Model ID"></label><label>Credential source<select name="auth"><option>Existing CLI login</option><option>Environment variable</option><option>Config file</option><option>Local endpoint</option></select></label><label id="reference-label" hidden><span>Source</span><input name="reference"></label><div class="actions"><button class="primary">Add model</button></div></form>`;
@@ -345,9 +345,11 @@ function providerRow(m){
       <div class="actions"><button type="submit" class="primary">Save</button><button type="button">Cancel</button></div>
       <p class="hint" role="status"></p></form>`:''}`;
 }
+let disposeMcpSettings;
 function drawSettings(){
+  disposeMcpSettings?.();disposeMcpSettings=null;
   $('settings-title').textContent=onboarding?'Set up AFM Desktop':'Settings';
-  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],['appearance','Appearance'],...(!isDemo?[['environment','Environment'],['notifications','Notifications']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
+  const tabs=onboarding?'':`<nav class="segments">${[['models','Models'],['library','Library'],['runs','Runs'],['appearance','Appearance'],...(!isDemo?[['mcp','MCP'],['environment','Environment'],['notifications','Notifications']]:[])].map(([v,t])=>`<button data-panel="${v}" aria-pressed="${v===settingsTab}">${t}</button>`).join('')}</nav>`;
   const body=$('settings-body');
   if(settingsTab==='models'){
     if(body.querySelector('.workspace-editor[aria-busy="true"]'))return;
@@ -402,6 +404,9 @@ function drawSettings(){
   }else if(settingsTab==='appearance'){
     body.innerHTML=tabs+`<label>Theme<select id="desktop-theme">${[['dark','Dark'],['light','Light']].map(([id,label])=>option(id,label,id===document.documentElement.dataset.theme)).join('')}</select></label>`;
     $('desktop-theme').onchange=event=>{state.theme=event.target.value;document.documentElement.dataset.theme=state.theme;save()};
+  }else if(settingsTab==='mcp'){
+    body.innerHTML=tabs+'<div id="mcp-settings"></div>';
+    disposeMcpSettings=drawMcpSettings($('mcp-settings'));
   }else if(settingsTab==='environment'){
     drawEnvironment(body,tabs);
   }else if(settingsTab==='notifications'){
@@ -600,6 +605,7 @@ document.addEventListener('keydown',event=>{
   else navigateApp('settings');
 });
 $('settings').addEventListener('close',()=>{
+  disposeMcpSettings?.();disposeMcpSettings=null;
   if(onboarding){state.setup=true;save();onboarding=false}
 });
 document.addEventListener('click',async e=>{

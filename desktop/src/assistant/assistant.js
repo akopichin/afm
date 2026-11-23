@@ -9,6 +9,7 @@ import { AssistantBacklog, BACKLOG_NAMESPACE, backlogGuidance } from './backlog.
 import { ApprovalServer } from './approval.js';
 import { detectProvider, searchDirs } from './detect.js';
 import { probeAcp, runAcp } from './acp.js';
+import { McpServers } from './mcp.js';
 import { isAgentEndpoint, runDeepAgent } from './deep-agent.js';
 import { runEndpoint } from './endpoint.js';
 import { assistantImages, claudeImagePrompt, endpointImagePrompt, writeCodexImages } from './images.js';
@@ -67,7 +68,9 @@ function redactor(env) {
   // Longest first, so a short value inside a longer one cannot leave the rest of the longer one visible.
   const redact = text => typeof text === 'string'
     ? [...secrets, ...sessions].sort((a, b) => b.length - a.length).reduce((out, secret) => out.split(secret).join('[hidden]'), text) : text;
-  redact.add = value => { if (value?.length >= 8) secrets.push(value); };
+  redact.add = (value, minimum = 8) => {
+    if (typeof value === 'string' && value.length >= minimum) secrets.push(value, JSON.stringify(value).slice(1, -1));
+  };
   // Provider session ids stay private however short they are; they only go into the provider's own command line.
   redact.addSession = value => { if (value && !sessions.includes(value)) sessions.push(value); };
   // A text delta can end in the middle of a session id, so the part that could begin one is held back until
@@ -99,6 +102,7 @@ export class Assistant {
   constructor({ home, context, bridge, watch = null, env = process.env, loginPath = async () => '', systemDirs, secrets, codexAdapter, migrateHistory = false, maxActive = 3, grace, onTiming = () => {} }) {
     Object.assign(this, { home, context, bridge, watch, baseEnv: env, loginPath, systemDirs, secrets, codexAdapter, maxActive, grace, onTiming });
     this.settings = new AssistantSettings(home);
+    this.mcp = new McpServers({ home, secrets, project: id => context.project(id) });
     this.backlog = new AssistantBacklog(home);
     this.historyFile = path.join(desktopDir(home), 'assistant-history.json');
     this.historyLock = new Mutex();
@@ -247,6 +251,8 @@ export class Assistant {
     this.detections.delete(id);
     return this.state();
   }
+
+  async testMcpServer(id) { return this.mcp.test(id, (await this.#environment()).env); }
 
   async updateProviderWorkspace(id, remoteCwd) {
     const current = (await this.settings.get()).providers.find(item => item.id === id);
@@ -500,6 +506,9 @@ export class Assistant {
       const scope = await this.#resolveScope(scopeInput);
       const prior = turn.repeating ? [] : await this.history(conversationId);
       Object.assign(turn, { settings, provider, scope, prior, text, images });
+      if (provider.kind === 'acp' && !provider.endpoint && !turn.noTools && !turn.repeating && settings.permission !== 'read') {
+        turn.mcp = await this.mcp.forScope(scope, turn.environment.env);
+      }
       if (provider.kind !== 'openai') {
         // The credential is resolved once: it is both what the session is bound to and what the process gets.
         turn.credential = provider.remoteCwd ? {} : await this.#providerCredential(provider, turn.environment.env);
@@ -508,9 +517,11 @@ export class Assistant {
         const secrets = [turn.bridgeToken, provider.endpoint, codexAuth, ...Object.values(turn.credential), provider.auth.via === 'env' ? turn.environment.env[provider.auth.detail] : ''].filter(Boolean);
         // A native CLI login gives Desktop no credential value, so one account cannot be told from another:
         // its key stays null and its sessions are neither resumed nor kept.
-        turn.sessionKey = { providerId: provider.localCodex ? 'codex-acp' : provider.id, scopeKey: digest({ kind: scope.kind, runId: scope.runId, instanceId: scope.instanceId, projectId: scope.projectId, projectRoot: scope.projectRoot }),
+        turn.sessionKey = { providerId: provider.localCodex ? 'codex-acp' : provider.id, scopeKey: digest({ kind: scope.kind, runId: scope.runId, instanceId: scope.instanceId, projectId: scope.projectId, projectRoot: scope.projectRoot,
+          mcp: turn.mcp?.revisions.length ? turn.mcp.revisions.sort() : undefined,
+          mcpEnvironment: turn.mcp?.usesEnvironment ? turn.environment.key : undefined }),
           credentialKey: secrets.length ? digest({ credential: provider.credential, via: provider.auth.via, detail: provider.auth.detail, secrets, workspaceRevision: provider.workspaceRevision }) : null };
-        if (!turn.repeating) turn.resume = await this.#resumableSession(turn);
+        if (!turn.repeating && !turn.mcp?.hasFileCredentials) turn.resume = await this.#resumableSession(turn);
       }
       if (turn.repeating && provider.kind === 'openai') turn.facts = await this.#runFacts(scope);
       if (isAgentEndpoint(provider.kind) && !settings.model && provider.models?.length === 1) settings.model = provider.models[0].id;
@@ -554,11 +565,13 @@ export class Assistant {
     const redact = redactor(env);
     turn.redact = redact;
     if (turn.resume) redact.addSession(turn.resume.id);
+    for (const value of turn.mcp?.secrets ?? []) redact.add(value, 1);
     const onEvent = event => this.#onProviderEvent(turn, event, redact);
     let tempDir, outcome;
     try {
       // Stopped while preparing: nothing has been started yet, so no bridge or approval socket is created.
       if (turn.cancelled) return this.#finish(turn, turn.yielded ? 'yielded' : 'cancelled');
+      for (const text of turn.mcp?.notices ?? []) onEvent({ type: 'notice', text });
       if (isAgentEndpoint(provider.kind)) {
         if (!settings.model) throw new AssistantError('model_required', 'Choose a model for this endpoint first.');
         const apiKey = await this.#secret(provider, env);
@@ -589,7 +602,7 @@ export class Assistant {
         const bridge = provider.remoteCwd ? null : await this.#prepareBridge(turn, tempDir);
         redact.add(turn.bridgeToken);
         const cwd = scope.kind === 'all' ? this.home : scope.projectRoot;
-        Object.values(turn.credential).forEach(redact.add);
+        Object.values(turn.credential).forEach(value => redact.add(value));
         Object.assign(env, turn.credential);
         // A resumed session already holds the conversation up to its catch-up point; a fresh one gets the bounded transcript.
         const start = resume => {
@@ -607,7 +620,7 @@ export class Assistant {
           const prompt = [...context, ...this.#transcript(resume ? resume.catchUp : prior, text), `User: ${text || 'Please look at the attached image(s).'}`].join('\n\n');
           const input = provider.kind === 'claude' && images.length ? claudeImagePrompt(prompt, images) : prompt;
           if (provider.kind === 'acp') {
-            turn.process = runAcp({ provider, settings, cwd: provider.remoteCwd ?? cwd, env: { ...env, HOME: this.home }, bridge, token: turn.bridgeToken, prompt, images, resume: resume?.id, onEvent,
+            turn.process = runAcp({ provider, settings, cwd: provider.remoteCwd ?? cwd, env: { ...env, HOME: this.home }, bridge, token: turn.bridgeToken, prompt, images, resume: resume?.id, servers: turn.mcp?.configs, onEvent,
               approve: tool => this.#askUser({ turnId: turn.turnId, tool: tool.title, kind: 'acp', scope: scopeLabel(scope),
                 summary: clip(JSON.stringify(tool.rawInput ?? tool.title), 3000) }) });
           } else {
@@ -687,6 +700,8 @@ export class Assistant {
         turn.sessionId = event.id;
         redact.addSession(event.id);
       }
+    } else if (event.type === 'notice') {
+      this.#emit({ ...base, type: 'notice', text: redact(event.text) });
     } else if (event.type === 'activity') {
       turn.workStarted = true;
       if (event.command) this.#trackNativeTool(turn, event.command, event.active);
@@ -708,11 +723,12 @@ export class Assistant {
     } else if (event.type === 'tool') {
       turn.workStarted = true;
       if (event.native) this.#trackNativeTool(turn, event.id, true);
-      const tool = { id: event.id, name: event.name, input: redactInput(redact, event.input), startedAt: new Date().toISOString() };
+      const tool = { id: redact(event.id), name: redact(event.name), input: redactInput(redact, event.input), startedAt: new Date().toISOString() };
       if (reply.tools.length < MAX_TOOLS) reply.tools.push({ ...tool, status: 'running' });
       this.#emit({ ...base, type: 'tool', tool });
     } else if (event.type === 'tool_result') {
-      const tool = reply.tools.find(item => item.id === event.id);
+      const id = redact(event.id);
+      const tool = reply.tools.find(item => item.id === id);
       const text = redact(event.text);
       const finishedAt = new Date(Date.now()).toISOString();
       const placement = event.error ? { offset: reply.text.length, at: finishedAt } : null;
@@ -720,10 +736,10 @@ export class Assistant {
         Object.assign(tool, { status: event.error ? 'error' : 'done', text, finishedAt });
         if (event.error) {
           const errors = reply.toolErrors ??= [];
-          if (!errors.some(item => item.id === event.id)) errors.push({ id: event.id, ...placement });
+          if (!errors.some(item => item.id === id)) errors.push({ id, ...placement });
         }
       }
-      this.#emit({ ...base, type: 'tool_result', id: event.id, error: event.error, text, finishedAt, ...placement });
+      this.#emit({ ...base, type: 'tool_result', id, error: event.error, text, finishedAt, ...placement });
       this.#trackNativeTool(turn, event.id, false);
     } else if (event.type === 'result') {
       if (!event.ok) turn.failure = redact(event.error || 'The provider reported an error.');

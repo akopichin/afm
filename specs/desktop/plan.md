@@ -36,6 +36,7 @@ Deliver an app with the same offline dashboard/theme assets and sidecar that tes
 4. Send a real assistant request using the selected provider/permissions and observe a streamed reply and an authorized AFM action.
 5. Trigger a browser-enabled stage. Its Live tab must show the same DOM the agent changes. Switch away/back, finish the stage and check resource cleanup.
 6. Record native cold start, keyboard timings and memory results; report any missing checks. A screenshot, fixture reply or directly opened demo page cannot establish production integration.
+7. In Settings → MCP, import an OpenCode local server, edit it in both themes, and check the status indicators. Test a stdio server and a loopback HTTP server with a file-backed token. Exercise one MCP tool through a local ACP provider and verify the same session receives the AFM bridge. Check that project-scoped servers stay within the selected project and that HTTP capability mismatches appear in chat.
 
 The seed passed Finder launch and smoke:mac on Apple Silicon after an initial signing assessment interrupted startup. Keep that native gate for the final revision. Record a native pass only when the packaged production window and its temporary AFM host both respond.
 

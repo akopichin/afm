@@ -14,6 +14,15 @@ export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:remove-provider', id => assistant.removeProvider(String(id)));
   handle('assistant:update-provider-workspace', (id, cwd) => assistant.updateProviderWorkspace(String(id), String(cwd ?? '')));
   handle('assistant:test-provider', id => assistant.testProvider(String(id)));
+  handle('assistant:mcp-list', () => assistant.mcp.list());
+  handle('assistant:mcp-save', input => assistant.mcp.save({
+    id: input?.id, name: input?.name, transport: input?.transport, projectId: input?.projectId,
+    url: input?.url, command: input?.command, args: input?.args, env: input?.env,
+    tokenEnv: input?.tokenEnv, tokenFile: input?.tokenFile, token: input?.token, removeToken: input?.removeToken === true,
+  }));
+  handle('assistant:mcp-import', (text, projectId) => assistant.mcp.importOpenCode(text, projectId));
+  handle('assistant:mcp-remove', id => assistant.mcp.remove(String(id)));
+  handle('assistant:mcp-test', id => assistant.testMcpServer(String(id)));
   handle('assistant:send', request => assistant.send({
     conversationId: conversationId(request?.conversationId), text: request?.text, images: request?.images,
     scope: { projectId: request?.scope?.projectId, runId: request?.scope?.runId, instanceId: request?.scope?.instanceId } }));

@@ -70,7 +70,8 @@ export async function probeAcp(provider, env, token, { confirmWorkspace = false 
     if (confirmWorkspace) await process.ready;
     const info = await initialize(process.agent);
     const version = [info.agentInfo?.version, 'ACP v' + info.protocolVersion].filter(Boolean).join(' · ');
-    const caps = { image: info.agentCapabilities?.promptCapabilities?.image === true, resume: info.agentCapabilities?.loadSession === true };
+    const caps = { image: info.agentCapabilities?.promptCapabilities?.image === true, resume: info.agentCapabilities?.loadSession === true,
+      mcpHttp: info.agentCapabilities?.mcpCapabilities?.http === true };
     let session;
     try { session = await process.agent.request('session/new', { cwd, mcpServers: [] }, setup()); }
     catch (error) {
@@ -93,7 +94,7 @@ function toolResult(update, onEvent) {
   onEvent({ type: 'tool_result', id: update.toolCallId, error: update.status === 'failed', text: text ?? '' });
 }
 
-export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, images, resume, onEvent, approve }) {
+export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, images, resume, servers = [], onEvent, approve }) {
   let sessionId, prompting = false;
   const tools = new Set();
   const { agent, stop, ready } = launch(provider, { cwd, env, token, bridge, confirmWorkspace: Boolean(provider.workspaceRevision), approve: async ({ sessionId: session, toolCall, options }) => {
@@ -118,6 +119,13 @@ export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, im
       if (images.length && !info.agentCapabilities?.promptCapabilities?.image) throw Error('This ACP agent does not accept images.');
       const mcpServers = bridge && !provider.endpoint && !provider.localCodex ? [{ name: 'afm', command: bridge.command, args: bridge.args,
         env: Object.entries(bridge.env).map(([name, value]) => ({ name, value })) }] : [];
+      if (!provider.endpoint) {
+        for (const server of servers) {
+          if (server.type === 'http' && info.agentCapabilities?.mcpCapabilities?.http !== true) {
+            onEvent({ type: 'notice', text: `MCP server "${server.name}" was skipped. This ACP agent does not support HTTP MCP.` });
+          } else mcpServers.push(server);
+        }
+      }
       const session = resume ? await agent.request('session/load', { sessionId: resume, cwd, mcpServers }, setup()).catch(error => {
         if (error.code === -32002) throw Error('Unknown session.');
         throw error;

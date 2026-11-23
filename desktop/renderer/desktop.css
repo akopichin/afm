@@ -228,3 +228,19 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 .tool-timestamps {display:flex;flex-wrap:wrap;gap:2px 10px;margin:3px 0}
 .tool-timestamps .tool-error-time {white-space:normal;overflow:visible}
 .bubble .tool-error-summary {flex-wrap:wrap}
+.mcp-server {flex-wrap:wrap}
+.mcp-server small {display:block;color:var(--text-muted);margin-top:3px}
+.mcp-server .mcp-status {display:flex;align-items:baseline;gap:6px}
+.mcp-status[data-state="connected"] {color:var(--text-primary);--tone:var(--success)}
+.mcp-status[data-state="error"] {color:var(--attention)}
+.mcp-status:is([data-state="error"], [data-state="checking"]) {--tone:var(--attention)}
+.mcp-code-field {margin:18px 0}
+.mcp-code-field label {margin:0 0 5px}
+.mcp-code-field > textarea,.mcp-code-surface {box-sizing:border-box;width:100%;height:100px;background:var(--surface-tool);border:1px solid var(--control-border);border-radius:6px}
+.mcp-code-field > textarea {padding:10px;color:var(--text-primary);font:13px var(--font-mono);resize:vertical}
+.mcp-code-field > textarea:focus-visible,.mcp-code-surface:focus-within {outline:2px solid var(--focus-ring);outline-offset:2px}
+.mcp-code-surface {overflow:hidden}
+#mcp-code-env,#mcp-code-env + .mcp-code-surface {height:150px}
+#mcp-code-configuration,#mcp-code-configuration + .mcp-code-surface {height:clamp(160px, 36vh, 320px)}
+.mcp-remove-token {display:flex;align-items:center;gap:8px}
+.mcp-remove-token input {width:auto}

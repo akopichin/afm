@@ -2,6 +2,10 @@
 
 ## 2026-11-23
 
+### Improvement:
+
+- Configure and test global and project MCP servers for local ACP assistants. Import local servers from OpenCode and use securely stored tokens or credential files.
+
 ### Fix:
 
 - Bundle the Deep Agents runtime dependencies so Anthropic and OpenAI providers can reply in the packaged Desktop app.

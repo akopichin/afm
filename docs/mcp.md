@@ -232,3 +232,30 @@ advertises `resources.subscribe`.
 - Sessions idle for 30 minutes expire; at most 16 are open at once; at most 8
   `afm_run_wait` calls run in parallel.
 - Existing mutating `/api/stages/*` routes keep their current Origin checks.
+
+## Configure MCP servers in AFM Desktop
+
+Open **Settings → MCP → Add server** to register a server for the Desktop
+Assistant.
+
+- **stdio** runs a command from the Desktop PATH or an absolute path. Enter
+  one argument per line. Use `NAME=value` for settings, `NAME=$SOURCE_NAME` for
+  Desktop environment variables, and `NAME=@~/path/to/key` for credential files.
+  For a pasted token or a token file, enter the variable that receives it.
+- **HTTP** uses a Streamable HTTP MCP URL. Use HTTPS or loopback HTTP. A saved
+  token or a token read from a file is sent in the `Authorization: Bearer` header.
+- **Scope** can be global or limited to a registered project and its runs.
+  Desktop stores tokens using the operating system's secure storage.
+
+**Import OpenCode config** reads enabled local servers from the `mcp` object.
+It keeps command arguments and regular environment settings. Credential
+placeholders like `{YOUR_GITLAB_TOKEN}` refer to Desktop environment variables
+of the same name as the variable being configured. Use `{env:VARIABLE}` or
+`{file:~/path/to/key}` for an explicit source.
+
+**Test connection** checks the MCP handshake from Desktop and shows the last
+result. During an interactive local ACP reply, Desktop supplies the matching
+servers alongside the built-in AFM tools. HTTP servers require HTTP support
+from the selected agent. Custom servers are available in ACP replies with tool
+access. They are excluded from read-only mode and scheduled replies. Remote ACP
+uses the servers configured on the remote side.

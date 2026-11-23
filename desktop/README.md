@@ -281,6 +281,8 @@ agent's CLI login or name a credential variable from Desktop's environment.
 reasoning and mode choices. For Codex, use the
 [Codex ACP adapter](https://github.com/agentclientprotocol/codex-acp).
 
+Use **Settings → MCP** to add and test global or project-specific stdio and HTTP servers for local ACP assistants. See the [MCP settings guide](../docs/mcp.md#configure-mcp-servers-in-afm-desktop).
+
 Desktop passes scoped AFM tools over MCP. The agent controls its own native
 tool permissions through its agent mode. Desktop displays approval prompts the
 agent sends. ACP providers supply their own file and terminal access. Queued chat messages and the transcript are kept in Desktop.
