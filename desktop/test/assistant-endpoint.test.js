@@ -14,7 +14,8 @@ const KEY = 'endpoint-key-abcdefgh';
 async function endpoint(t, { status = 200, hang = false } = {}) {
   const seen = [];
   const server = createServer(async (req, res) => {
-    if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [] }));
+    if (req.method === 'GET' && req.url === '/v1/models') return res.end(JSON.stringify({ data: [] }));
+    if (req.method !== 'POST' || req.url !== '/v1/chat/completions') return res.writeHead(404).end();
     let body = '';
     for await (const chunk of req) body += chunk;
     seen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body || '{}') });
