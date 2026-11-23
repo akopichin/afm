@@ -8,6 +8,7 @@
 
 ### Fix:
 
+- Keep Assistant tool calls at their position in the reply as the chat streams and reopens.
 - Bundle the Deep Agents runtime dependencies so Anthropic and OpenAI providers can reply in the packaged Desktop app.
 
 ## 2026-11-22

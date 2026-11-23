@@ -475,7 +475,7 @@ export class Assistant {
     // Reports Desktop writes for itself do not take chat capacity.
     if (!internal.repeating && [...this.active.values()].filter(turn => !turn.repeating && !turn.noTools).length >= this.maxActive) throw new AssistantError('too_many', 'Too many replies are running at once.');
     const turn = { turnId: randomUUID(), conversationId, cancelled: false, noTools: internal.readOnly === true,
-      repeating: internal.repeating === true, timing: { sentAt: performance.now(), environmentMs: 0 } };
+      repeating: internal.repeating === true, toolOrder: 0, timing: { sentAt: performance.now(), environmentMs: 0 } };
     // close() waits on this as soon as the turn is active, so a turn that is still preparing is not cut off.
     const { promise: finished, resolve: settle } = Promise.withResolvers();
     turn.finished = finished;
@@ -723,7 +723,8 @@ export class Assistant {
     } else if (event.type === 'tool') {
       turn.workStarted = true;
       if (event.native) this.#trackNativeTool(turn, event.id, true);
-      const tool = { id: redact(event.id), name: redact(event.name), input: redactInput(redact, event.input), startedAt: new Date().toISOString() };
+      const tool = { id: redact(event.id), name: redact(event.name), input: redactInput(redact, event.input),
+        startedAt: new Date().toISOString(), offset: reply.text.length, order: ++turn.toolOrder };
       if (reply.tools.length < MAX_TOOLS) reply.tools.push({ ...tool, status: 'running' });
       this.#emit({ ...base, type: 'tool', tool });
     } else if (event.type === 'tool_result') {
@@ -731,7 +732,7 @@ export class Assistant {
       const tool = reply.tools.find(item => item.id === id);
       const text = redact(event.text);
       const finishedAt = new Date(Date.now()).toISOString();
-      const placement = event.error ? { offset: reply.text.length, at: finishedAt } : null;
+      const placement = event.error ? { offset: reply.text.length, at: finishedAt, order: ++turn.toolOrder } : null;
       if (tool) {
         Object.assign(tool, { status: event.error ? 'error' : 'done', text, finishedAt });
         if (event.error) {

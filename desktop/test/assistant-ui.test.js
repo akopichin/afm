@@ -137,6 +137,39 @@ test('parallel tool errors stay ordered between text and keep their own collapse
   assert.deepEqual([...reopened.get('messages').querySelectorAll('.tool-error-time')].map(time => time.dateTime), [atB, atA]);
 });
 
+test('parallel successful calls stay at their starts after finishing and reopening', async t => {
+  const { w, get, assistant } = await openShell(t);
+  get('assistant-toggle').click();
+  const turnId = 'tools';
+  const emit = event => assistant.emit({ ...event, turnId });
+  const startedAt = '2026-11-21T13:00:01.000Z';
+  const segments = [{offset: 0, at: '2026-11-21T13:00:00.000Z'}, {offset: 13, at: '2026-11-21T13:01:00.000Z'}];
+  const tools = [
+    {id: 'a', name: 'first_call', offset: 6, order: 1, startedAt},
+    {id: 'b', name: 'second_call', offset: 13, order: 2, startedAt},
+  ];
+  const order = box => [...box.querySelectorAll('.assistant-text,.tool code')].map(element => element.textContent);
+  assistant.emit(start(turnId, 'Run both'));
+  emit({type: 'delta', text: 'Before'});
+  emit({type: 'tool', tool: tools[0]});
+  emit({type: 'delta', text: 'Between'});
+  emit({type: 'tool', tool: tools[1]});
+  emit({type: 'delta', text: 'After', segments});
+  emit({type: 'tool_result', id: 'b', finishedAt: '2026-11-21T13:01:01.000Z'});
+  emit({type: 'tool_result', id: 'a', finishedAt: '2026-11-21T13:01:02.000Z'});
+  await frames(w);
+  const expected = ['Before', 'first_call', 'Between', 'second_call', 'After'];
+  assert.deepEqual(order(get('messages')), expected);
+  const reply = { ...start(turnId, '').reply, status: 'done', text: 'BeforeBetweenAfter', segments,
+    tools: tools.map(tool => ({...tool, status: 'done'})) };
+  emit({type: 'done', reply});
+  await frames(w);
+  assert.deepEqual(order(get('messages')), expected);
+  const reopened = await openShell(t, {saved: [reply, {...reply, id: 'legacy-tools',
+    tools: [{id: 'old', name: 'old_call', status: 'done', startedAt}]}]});
+  assert.deepEqual(order(reopened.get('messages')), [...expected, 'BeforeBetween', 'old_call', 'After']);
+});
+
 test('old tool errors without positions are hidden while the original reply remains', async t => {
   const saved = [{ id: 'legacy', role: 'assistant', status: 'cancelled', text: 'Saved text',
     tools: [{ id: '1', status: 'error', name: 'afm_runs_list', text: 'MCP error -32603: fetch failed' },

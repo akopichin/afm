@@ -82,9 +82,13 @@ test('ACP provider discovers controls, sends a selected model and image, and awa
   assert.equal(done.type, 'done', done.message);
   assert.equal(done.reply.text, 'First update. Second update.');
   const saved = (await assistant.history()).at(-1);
+  assert.deepEqual(saved.tools.map(({ id, offset, order }) => ({ id, offset, order })), [
+    { id: 'a', offset: 'First update.'.length, order: 1 },
+    { id: 'b', offset: 'First update.'.length, order: 2 },
+  ]);
   assert.deepEqual(saved.toolErrors, [
-    { id: 'b', offset: 'First update.'.length, at: new Date(now).toISOString() },
-    { id: 'a', offset: 'First update. Second update.'.length, at: new Date(now + 31000).toISOString() },
+    { id: 'b', offset: 'First update.'.length, at: new Date(now).toISOString(), order: 3 },
+    { id: 'a', offset: 'First update. Second update.'.length, at: new Date(now + 31000).toISOString(), order: 4 },
   ]);
   assert.deepEqual(saved.segments, [
     { offset: 0, at: new Date(now).toISOString() }, { offset: 13, at: new Date(now + 31000).toISOString() },

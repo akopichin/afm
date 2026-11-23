@@ -288,6 +288,22 @@ function assistantToolHTML(msg,tool,at){
 function assistantTextHTML(text){
   return text.trim()?`<p class="assistant-text">${esc(text.trim())}</p>`:'';
 }
+function toolTimeline(msg,sections){
+  const tools=new Map((msg.tools||[]).map(tool=>[tool.id,tool]));
+  const entries=(msg.toolErrors||[]).flatMap(error=>{
+    const tool=tools.get(error.id);
+    return tool?.status==='error'?[{...error,tool}]:[];
+  });
+  for(const tool of tools.values()){
+    if(tool.status==='error')continue;
+    const at=tool.startedAt;
+    // Older calls carry a timestamp but no text offset. Place them before the next recorded text section.
+    const nextSection=at&&sections.find(section=>Date.parse(section.at)>Date.parse(at));
+    entries.push({tool,at,offset:tool.offset??nextSection?.offset??msg.text.length,order:tool.order});
+  }
+  return entries.sort((a,b)=>a.offset-b.offset||
+    (a.order&&b.order?a.order-b.order:(Date.parse(a.at)||0)-(Date.parse(b.at)||0)));
+}
 function messageHTML(msg){
   if(msg.role==='user'){
     const status=msg.error?`<p class="bubble-error" role="alert">${esc(msg.error)}</p>`:msg.pending?'<small>Sending…</small>'
@@ -298,24 +314,22 @@ function messageHTML(msg){
   const approvals=(msg.approvals||[]).map(a=>`<div class="approval" role="group" aria-label="Approval needed"><p><strong>Approve ${esc(a.tool)}?</strong> <small>${esc(a.scope)}</small></p><code>${esc(a.summary)}</code><div class="actions"><button data-approve="${esc(a.approvalId)}" data-yes="no">Deny</button><button class="primary" data-approve="${esc(a.approvalId)}" data-yes="yes">Approve</button></div></div>`).join('');
   const end=msg.status==='error'?`<p class="bubble-error" role="alert">${esc(providerError(msg.error||'The reply failed.'))}</p>`:msg.status==='yielded'?'<small>Continued with your next message</small>':msg.status==='cancelled'?'<small>Stopped</small>':msg.status==='streaming'&&!msg.text?'<small>Thinking…</small>':'';
   const context=[msg.context,msg.effective?.label].filter(Boolean).join(' · ');
-  const tools=new Map((msg.tools||[]).map(tool=>[tool.id,tool]));
-  const errors=(msg.toolErrors||[]).filter(error=>tools.get(error.id)?.status==='error');
   const sections=(msg.segments||[]).filter(section=>section.offset<msg.text.length);
   if(!sections.length)sections.push({offset:0,at:msg.at});
-  let nextError=0;
+  const timeline=toolTimeline(msg,sections);
+  let nextTool=0;
   return sections.map((section,i)=>{
     const last=i===sections.length-1;
     const boundary=last?msg.text.length:sections[i+1].offset;
     let cursor=section.offset,body='';
-    while(nextError<errors.length&&(last||errors[nextError].offset<=boundary)){
-      const {id,offset,at}=errors[nextError++];
+    while(nextTool<timeline.length&&(last||timeline[nextTool].offset<=boundary)){
+      const {tool,offset,at}=timeline[nextTool++];
       const position=Math.max(cursor,Math.min(boundary,offset));
-      body+=assistantTextHTML(msg.text.slice(cursor,position))+assistantToolHTML(msg,tools.get(id),at);
+      body+=assistantTextHTML(msg.text.slice(cursor,position))+assistantToolHTML(msg,tool,at);
       cursor=position;
     }
     body+=assistantTextHTML(msg.text.slice(cursor,boundary));
     if(last){
-      body+=[...tools.values()].filter(tool=>tool.status!=='error').map(tool=>assistantToolHTML(msg,tool)).join('');
       body+=approvals+(msg.cards||[]).map(watchCardHTML).join('')+end;
       const notes=(msg.notes||[]).map(n=>`<small>${esc(n)}</small>`).join('');
       body=notes+body;
@@ -763,7 +777,7 @@ function handleAssistantEvent(event){
         Object.assign(tool,{status:event.error?'error':'done',text:event.text,finishedAt:event.finishedAt});
         if(event.error){
           const errors=reply.toolErrors??=[];
-          if(!errors.some(error=>error.id===event.id))errors.push({id:event.id,offset:event.offset??reply.text.length,at:event.at??new Date().toISOString()});
+          if(!errors.some(error=>error.id===event.id))errors.push({id:event.id,offset:event.offset??reply.text.length,at:event.at??new Date().toISOString(),order:event.order});
         }
       }
     }
