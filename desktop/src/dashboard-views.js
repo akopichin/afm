@@ -1,12 +1,14 @@
 import { WebContentsView, session } from 'electron';
+import { readFile } from 'node:fs/promises';
 import { dashboardShortcutMessage } from './shortcuts.js';
 
 // AFM serves its dashboard with frame-ancestors 'none'. Each verified run gets a top-level guest
 // in the project window, and only that run's HTTP and WebSocket origin is available to the guest.
 export class DashboardViews {
-  constructor(window, preload) {
+  constructor(window, preload, focusStylesheet) {
     this.window = window;
     this.preload = preload;
+    this.focusStylesheet = focusStylesheet;
     this.pages = new Map();
     this.origins = new Map();
     this.session = session.fromPartition('afm-dashboards');
@@ -36,6 +38,14 @@ export class DashboardViews {
     const guard = event => { if (new URL(event.url).origin !== origin) event.preventDefault(); };
     wc.on('will-frame-navigate', guard);
     wc.on('will-redirect', guard);
+    wc.on('dom-ready', async () => {
+      try {
+        const css = await (this.focusCSS ??= readFile(this.focusStylesheet, 'utf8'));
+        if (!wc.isDestroyed() && new URL(wc.getURL()).origin === origin) await wc.insertCSS(css);
+      } catch (error) {
+        if (!wc.isDestroyed()) console.error('Dashboard focus style:', error);
+      }
+    });
     wc.on('before-input-event', (event, input) => {
       if (key !== this.active) return;
       const message = dashboardShortcutMessage(input);

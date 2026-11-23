@@ -4,8 +4,10 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 const packagedModule = process.env.AFM_DESKTOP_DEEP_AGENT_MODULE;
-const { endpointModels, runDeepAgent } = await import(packagedModule
+const { runDeepAgent } = await import(packagedModule
   ? pathToFileURL(packagedModule).href : '../src/assistant/deep-agent.js');
+const { endpointModels } = await import(packagedModule
+  ? new URL('./model-catalog.js', pathToFileURL(packagedModule)) : '../src/assistant/model-catalog.js');
 
 test('OpenAI agent discovers models and streams a reply through a prefixed endpoint', async t => {
   const received = [];
@@ -39,13 +41,60 @@ test('Anthropic agent discovers models without duplicating v1', async t => {
   const requests = [];
   const server = http.createServer(async (request, response) => {
     requests.push({ path: request.url, key: request.headers['x-api-key'], version: request.headers['anthropic-version'] });
-    response.end(JSON.stringify({ data: [{ id: 'test-claude', display_name: 'Test Claude' }] }));
+    response.end(JSON.stringify({ data: [{ id: 'test-claude', display_name: 'Test Claude' }, { id: 'dashscope/kimi-k3' }] }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
   const provider = { kind: 'anthropic-agent', endpoint: `http://127.0.0.1:${server.address().port}/gateway/v1` };
-  assert.deepEqual(await endpointModels(provider, 'test-token'), [{ id: 'test-claude', label: 'Test Claude' }]);
+  assert.deepEqual(await endpointModels(provider, 'test-token'), [
+    { id: 'test-claude', label: 'Test Claude' },
+    { id: 'dashscope/kimi-k3', label: 'dashscope/kimi-k3' },
+  ]);
   assert.deepEqual(requests, [{ path: '/gateway/v1/models', key: 'test-token', version: '2023-06-01' }]);
+});
+
+test('Anthropic gateways discover the advertised reasoning levels by model group', async t => {
+  const server = http.createServer((request, response) => {
+    const routes = {
+      '/v1/models': [{ id: 'some-provider/new-model' }, { id: 'dashscope/kimi-k3' }, { id: 'another-model' }],
+      '/model_group/info': [
+        { model_group: 'some-provider/new-model', supported_reasoning_efforts: ['medium', 'high'] },
+        { model_group: 'dashscope/kimi-k3', supports_reasoning: true },
+      ],
+      '/model/info': [
+        { model_name: 'dashscope/kimi-k3', model_info: { supports_low_reasoning_effort: null } },
+        { model_name: 'another-model', model_info: { supports_low_reasoning_effort: true } },
+      ],
+    };
+    response.end(JSON.stringify({ data: routes[request.url] }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const provider = { kind: 'anthropic-agent', endpoint: `http://127.0.0.1:${server.address().port}/v1` };
+  assert.deepEqual(await endpointModels(provider, 'test-token', undefined, { discoverGateway: true }), [
+    { id: 'some-provider/new-model', label: 'some-provider/new-model', reasoning: ['medium', 'high'] },
+    { id: 'dashscope/kimi-k3', label: 'dashscope/kimi-k3', reasoning: ['low', 'medium', 'high', 'xhigh'] },
+    { id: 'another-model', label: 'another-model', reasoning: ['low'] },
+  ]);
+});
+
+test('Gateway catalog falls back to scoped aliases when the standard listing is unavailable', async t => {
+  const server = http.createServer((request, response) => {
+    if (request.headers.authorization !== 'Bearer test-token') return response.writeHead(401).end();
+    if (request.url === '/model_group/info')
+      return response.end(JSON.stringify({ data: [{ model_group: 'thinking-alias', supports_reasoning: true }] }));
+    if (request.url === '/model/info')
+      return response.end(JSON.stringify({ data: [{ model_name: 'regular-alias', litellm_params: { model: 'internal-id' },
+        model_info: { supports_reasoning: false } }] }));
+    return response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const provider = { kind: 'openai-agent', endpoint: `http://127.0.0.1:${server.address().port}/v1` };
+  assert.deepEqual(await endpointModels(provider, 'test-token', undefined, { discoverGateway: true }), [
+    { id: 'thinking-alias', label: 'thinking-alias', reasoning: ['low', 'medium', 'high', 'xhigh'] },
+    { id: 'regular-alias', label: 'regular-alias', reasoning: [] },
+  ]);
 });
 
 test('Anthropic agent streams a reply through the Messages API', async t => {
@@ -121,4 +170,44 @@ test('OpenAI agent hands a tool call to the scoped bridge and streams the answer
   assert(tool);
   assert.match(events.find(event => event.type === 'tool_result' && event.id === tool.id).text, /One active run/);
   assert.equal(received.length, 2);
+});
+
+test('Deep Agent streams both native task calls and their results', async t => {
+  let rootRequested = false;
+  let childToolRequests = 0;
+  const server = http.createServer(async (request, response) => {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const { model, messages } = JSON.parse(body);
+    const callTasks = !rootRequested;
+    rootRequested = true;
+    const callChildTool = !callTasks && !messages.some(item => item.role === 'tool')
+      && messages.some(item => item.role === 'user' && typeof item.content === 'string' && item.content === 'First');
+    if (callChildTool) childToolRequests++;
+    const delta = callTasks ? { role: 'assistant', tool_calls: ['First', 'Second'].map((description, index) => ({
+      index, id: 'child-' + index, type: 'function',
+      function: { name: 'task', arguments: JSON.stringify({ description, subagent_type: 'general-purpose' }) },
+    })) } : callChildTool ? { role: 'assistant', tool_calls: [{ index: 0, id: 'child-ls', type: 'function',
+      function: { name: 'ls', arguments: '{"path":"/"}' } }] } : { role: 'assistant', content: 'OK' };
+    const data = { id: 'mock', object: 'chat.completion.chunk', created: 1, model,
+      choices: [{ index: 0, delta, finish_reason: callTasks || callChildTool ? 'tool_calls' : 'stop' }] };
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.end(`data: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const events = [];
+  const { done } = runDeepAgent({
+    provider: { kind: 'openai-agent', endpoint: `http://127.0.0.1:${server.address().port}/v1` },
+    apiKey: 'fixture', modelId: 'test-model', systemPrompt: 'Delegate both tasks.',
+    messages: [{ role: 'user', content: 'Run both.' }], onEvent: event => events.push(event),
+  });
+  assert.ifError((await done).error);
+  const tasks = events.filter(event => event.type === 'tool' && event.name === 'task');
+  assert.equal(tasks.length, 2);
+  assert.ok(tasks.every(task => events.some(event => event.type === 'tool_result' && event.id === task.id && !event.error)));
+  const child = events.find(event => event.type === 'delegate' && event.tool?.name === 'ls');
+  assert.ok(child, JSON.stringify({ childToolRequests, events: events.map(event => [event.type, event.name, event.tool?.name]) }));
+  assert.ok(tasks.some(task => task.id === child.id));
+  assert.ok(events.some(event => event.type === 'delegate' && event.id === child.id && event.tool.status === 'done'));
 });

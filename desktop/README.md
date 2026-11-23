@@ -146,6 +146,11 @@ startup show the dot immediately after discovery.
 Chat opens at the latest message. Each timestamp shows local time, with the
 full date on hover.
 
+Press **Shift+Down** in chat to see active subagents and delegated AFM runs.
+Open an active subagent to see its tool calls and any reasoning the connection
+provides. If a subagent finishes while you are viewing it, its card stays open
+until you leave it. Opening the list does not send a model request.
+
 Press Enter or click Send while the assistant is replying to queue a follow-up.
 Queued messages are sent in order using the project or run selected when each
 message was queued. If the assistant is waiting through AFM or Desktop, Send
@@ -184,6 +189,20 @@ handles these commands directly with any selected provider.
 Choose an OpenAI or Anthropic Deep Agent in Models to use a compatible gateway.
 Set the endpoint URL and API token and select a model that supports tool calls.
 The agent uses the regular Assistant bridge for AFM actions.
+
+The model picker uses the catalog available to the selected connection. The
+reasoning picker uses the catalog or gateway's published levels. If a provider
+reports reasoning support without levels, Desktop offers low, medium, high,
+and xhigh for testing. Compatible Deep Agent gateways also accept manually
+entered levels when discovery does not report support.
+For Codex CLI, the provider default uses the configured model when it appears in
+the live catalog and otherwise uses the client's catalog default.
+
+**Check connection** checks setup and authentication. **Test reply** sends a
+short request with the selected model and reasoning level for API and ACP
+connections. Desktop checks new selections in Models and in the quick chooser,
+where testing uses the draft until you choose Apply. These requests can use
+provider quota.
 
 ### Claude Code in a Docker container
 
@@ -281,7 +300,7 @@ agent's CLI login or name a credential variable from Desktop's environment.
 reasoning and mode choices. For Codex, use the
 [Codex ACP adapter](https://github.com/agentclientprotocol/codex-acp).
 
-Use **Settings → MCP** to add and test global or project-specific stdio and HTTP servers for local ACP assistants. See the [MCP settings guide](../docs/mcp.md#configure-mcp-servers-in-afm-desktop).
+Use **Settings → MCP** to save global or project-specific stdio and HTTP servers for Deep Agents, local ACP, and supported Claude Code and Codex CLIs. Desktop supplies them automatically to eligible chats. See the [MCP settings guide](../docs/mcp.md#configure-mcp-servers-in-afm-desktop).
 
 Desktop passes scoped AFM tools over MCP. The agent controls its own native
 tool permissions through its agent mode. Desktop displays approval prompts the

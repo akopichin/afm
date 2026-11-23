@@ -263,6 +263,37 @@ test('pasted images are removable before sending and travel with an image-only q
   assert.deepEqual(assistant.calls.send[1], { text: '', scope: {}, images: [{ type: 'image/png', data }] });
 });
 
+test('Shift+Down shows live reasoning and keeps a completed agent open until leaving its view', async t => {
+  const { w, get, assistant } = await openShell(t);
+  get('assistant-toggle').click();
+  assistant.emit(start('delegation', 'Delegate two tasks'));
+  get('chat-input').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }));
+  const entries = () => [...get('assistant-agents').querySelectorAll('button')].map(button => button.textContent);
+  assert.deepEqual(entries(), ['Main · Primary assistant']);
+  assistant.emit({ type: 'delegate', turnId: 'delegation', delegate: { id: 'native-agent', name: 'Reviewer', status: 'running' } });
+  assistant.emit({ type: 'tool', turnId: 'delegation', tool: { id: 'deep-agent', name: 'task' } });
+  await frames(w);
+  assert.deepEqual(entries(), ['Main · Primary assistant', 'Reviewer · Running', 'Subagent 2 · Running']);
+  get('assistant-agents').querySelectorAll('button')[1].click();
+  assistant.emit({ type: 'delegate', turnId: 'delegation', delegate: { id: 'native-agent', text: 'Working',
+    messages: 'To Main: [Message content unavailable]', reasoning: 'Check the delegated task.',
+    tools: [{ id: 'child-bash', name: 'Bash', input: 'pwd', status: 'running' }] } });
+  await frames(w);
+  assert.match(get('messages').textContent, /Reviewer · RunningReasoningCheck the delegated task\.Tool callsBash pwd/);
+  assistant.emit({ type: 'delegate', turnId: 'delegation', delegate: { id: 'native-agent', status: 'done' } });
+  await frames(w);
+  assert.match(get('messages').textContent, /Reviewer · FinishedReasoningCheck the delegated task\.Tool callsBash pwd/);
+  assert.doesNotMatch(get('messages').textContent, /Working|unavailable/);
+  get('assistant-agent-bar').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.match(get('assistant-agent-bar').textContent, /Main · 1 delegated/);
+  get('assistant-agent-bar').click();
+  assert.deepEqual(entries(), ['Main · Primary assistant', 'Subagent 2 · Running']);
+  assistant.emit({ type: 'cancelled', turnId: 'delegation', reply: { id: 'rdelegation', role: 'assistant',
+    status: 'cancelled', text: '', tools: [{ id: 'deep-agent', name: 'task', status: 'running' }] } });
+  await frames(w);
+  assert.deepEqual(entries(), ['Main · Primary assistant']);
+});
+
 test('saved history is restored and only streaming events of the current turn change the reply', async t => {
   const saved = [{ id: 'u0', role: 'user', text: 'earlier', context: 'All projects' }, { id: 'r0', role: 'assistant', text: 'old answer', status: 'done', tools: [] }];
   const { w, get, key, assistant } = await openShell(t, { saved });
@@ -363,6 +394,51 @@ test('the quick chooser (Command M) applies provider, model and reasoning throug
   assert.deepEqual(assistant.calls.configure.at(-1), { provider: 'codex', model: 'gpt-test', reasoning: 'high' });
 });
 
+test('the quick chooser tests the draft automatically and can retry without applying it', async t => {
+  const assistant = fakeAssistant();
+  assistant.info.providers.push(providerInfo('portal', { kind: 'anthropic-agent', reasoning: [], models: [
+    { id: 'dashscope/kimi-k3', reasoning: ['low', 'medium', 'high', 'xhigh'] },
+  ] }));
+  const attempts = [];
+  assistant.testModel = (force, draft) => {
+    const result = Promise.withResolvers();
+    attempts.push({ force, draft: JSON.parse(JSON.stringify(draft)), result });
+    return result.promise;
+  };
+  const { w, get, key } = await openShell(t, { assistant });
+  key('KeyM', 'm', { metaKey: true });
+  await tick();
+  get('quick-agent').value = 'portal';
+  get('quick-agent').dispatchEvent(new w.Event('change'));
+  get('quick-model-list').value = 'dashscope/kimi-k3';
+  get('quick-model-list').dispatchEvent(new w.Event('change'));
+  assert.deepEqual([...get('quick-effort').options].map(option => option.value), ['default', 'low', 'medium', 'high', 'xhigh']);
+  get('quick-effort').value = 'high';
+  get('quick-effort').dispatchEvent(new w.Event('change'));
+  await tick(240);
+  const draft = { provider: 'portal', model: 'dashscope/kimi-k3', reasoning: 'high' };
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].force, false);
+  assert.deepEqual(attempts[0].draft, draft);
+  assert.equal(get('quick-model-test-status').getAttribute('aria-busy'), 'true');
+  assert.equal(get('quick-apply-model').disabled, true);
+  assert.deepEqual(assistant.calls.configure, []);
+  attempts[0].result.resolve({ ok: false, detail: 'High was rejected.' });
+  await tick();
+  assert.equal(get('quick-model-test-status').textContent, 'High was rejected.');
+  assert.equal(get('quick-model-test-status').getAttribute('aria-busy'), 'false');
+  get('quick-test-model').click();
+  await tick();
+  assert.equal(attempts[1].force, true);
+  assert.deepEqual(attempts[1].draft, draft);
+  attempts[1].result.resolve({ ok: true, detail: 'Test request succeeded.' });
+  await tick();
+  get('quick-model-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
+  await tick();
+  assert.deepEqual(assistant.calls.configure, [draft]);
+  assert.equal(attempts.length, 2);
+});
+
 test('settings and the quick chooser offer the detected models, a default and custom input', async t => {
   const assistant=fakeAssistant();
   assistant.info.providers[0].models=[{id:'sonnet',label:'Sonnet',default:true}];
@@ -406,6 +482,58 @@ test('a provider is added as a reference to its credential and can be tested', a
   get('test-model').click();
   await tick();
   assert.deepEqual(assistant.calls.test, ['custom-1']);
+});
+
+test('selecting a Deep Agent reasoning level tests it and shows a rejection beside the settings', async t => {
+  const assistant = fakeAssistant();
+  const model = 'qwen3.8-max';
+  assistant.info.providers.push(providerInfo('gateway', { kind: 'openai-agent', reasoning: [], models: [{ id: model, reasoning: ['low', 'medium'] }] }));
+  assistant.info.settings = { ...assistant.info.settings, provider: 'gateway', model };
+  const calls = [];
+  const pending = Promise.withResolvers();
+  assistant.testModel = async force => {
+    calls.push([assistant.info.settings.reasoning, force]);
+    return pending.promise;
+  };
+  const { w, get } = await openShell(t, { assistant });
+  get('settings-toggle').click();
+  await tick();
+  assert.deepEqual([...get('profile-effort').options].map(choice => choice.value), ['default', 'low', 'medium']);
+  get('profile-effort').value = 'medium';
+  get('profile-effort').dispatchEvent(new w.Event('change'));
+  await tick();
+  assert.deepEqual(calls, [['medium', false]]);
+  assert.equal(get('model-test-status').getAttribute('aria-busy'), 'true');
+  pending.resolve({ ok: false, detail: 'This route rejected reasoning “medium”.' });
+  await tick();
+  assert.match(get('model-test-status').textContent, /rejected reasoning/);
+  get('test-model-reply').click();
+  await tick();
+  assert.deepEqual(calls.at(-1), ['medium', true]);
+  assert.deepEqual(assistant.calls.send, []);
+});
+
+test('checking a Deep Agent connection refreshes its catalog in the model picker', async t => {
+  const assistant = fakeAssistant();
+  const provider = providerInfo('portal', { name: 'llm-portal', kind: 'anthropic-agent', models: [] });
+  assistant.info.providers.push(provider);
+  assistant.info.settings.provider = provider.id;
+  const check = assistant.testProvider;
+  assistant.testProvider = async id => {
+    provider.models = [{ id: 'dashscope/qwen3.8-max', label: 'Qwen 3.8 Max' }];
+    return check(id);
+  };
+  const { get } = await openShell(t, { assistant });
+  get('settings-toggle').click();
+  await tick();
+  const modelIds = () => [...get('profile-model-list').options].map(option => option.value);
+  assert.deepEqual(modelIds(), ['', '__custom']);
+  get('test-model').click();
+  await tick();
+  assert.deepEqual(modelIds(), ['', 'dashscope/qwen3.8-max', '__custom']);
+  assert.match(get('model-status').textContent, /1 model found/);
+  assert.match(get('profile-permissions').parentElement.textContent, /AFM tool permissions/);
+  assert.equal(get('profile-permissions').querySelector('[value="yolo"]').textContent, 'Allow AFM actions without approval');
 });
 
 test('a remote ACP card edits the workspace in place', async t => {

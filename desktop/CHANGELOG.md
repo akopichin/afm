@@ -4,10 +4,15 @@
 
 ### Improvement:
 
+- Use a muted focus outline across Desktop controls and embedded AFM dashboards.
+- Discover model-specific reasoning levels and check new Deep Agent and ACP selections with a short test reply.
 - Configure and test global and project MCP servers for local ACP assistants. Import local servers from OpenCode and use securely stored tokens or credential files.
+- Use saved MCP servers automatically from Deep Agents and supported Claude Code and Codex CLIs. Deep Agents connect when they need a server.
 
 ### Fix:
 
+- Show reported Codex, Claude Code, and Deep Agent subagents in the chat agent list.
+- Use the Codex model catalog's default when the configured CLI default is absent from the catalog.
 - Copy full project paths from Home using the system clipboard.
 - Keep Assistant tool calls at their position in the reply as the chat streams and reopens.
 - Bundle the Deep Agents runtime dependencies so Anthropic and OpenAI providers can reply in the packaged Desktop app.

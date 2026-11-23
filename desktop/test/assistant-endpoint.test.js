@@ -14,6 +14,7 @@ const KEY = 'endpoint-key-abcdefgh';
 async function endpoint(t, { status = 200, hang = false } = {}) {
   const seen = [];
   const server = createServer(async (req, res) => {
+    if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [] }));
     let body = '';
     for await (const chunk of req) body += chunk;
     seen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body || '{}') });
@@ -74,6 +75,52 @@ test('an endpoint key can come from a key file; a missing key stops before any r
   assert.equal((await second.assistant.testProvider(second.id)).ok, false);
 });
 
+test('Deep Agent tests the selected effort without adding a chat message and sends it in actual replies', async t => {
+  const requests = [];
+  const model = 'dashscope/qwen3.8-max';
+  const server = createServer(async (req, res) => {
+    if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: model }] }));
+    if (req.url === '/model_group/info') return res.writeHead(404).end();
+    if (req.url === '/model/info') return res.end(JSON.stringify({ data: [
+      { model_name: model, model_info: { supported_reasoning_efforts: ['medium', 'xhigh'] } },
+    ] }));
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body);
+    requests.push(request);
+    if (request.reasoning_effort === 'medium') {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'LiteLLM does not support reasoning_effort' } }));
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const delta = { id: 'ok', object: 'chat.completion.chunk', created: 1, model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }] };
+    res.end(`data: ${JSON.stringify(delta)}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const { assistant, events } = makeAssistant(t, await providerHome(t, { LOCAL_KEY: KEY }));
+  const configured = await assistant.addProvider({
+    name: 'Gateway', kind: 'openai-agent', endpoint: `http://127.0.0.1:${server.address().port}/v1`,
+    credential: { type: 'env', ref: 'LOCAL_KEY' },
+  });
+  const provider = configured.providers.find(item => !item.builtIn);
+  assert.deepEqual(provider.models[0].reasoning, ['medium', 'xhigh']);
+  await assistant.configure({ provider: provider.id, model, reasoning: 'medium' });
+  assert.match((await assistant.testModel()).detail, /rejected reasoning “medium”/);
+  assert.equal((await assistant.testModel(false, { provider: provider.id, model, reasoning: 'xhigh' })).ok, true);
+  assert.equal((await assistant.state()).settings.reasoning, 'medium');
+  await assistant.configure({ reasoning: 'xhigh' });
+  assert.equal((await assistant.testModel()).ok, true);
+  assert.equal((await assistant.testModel()).ok, true);
+  assert.deepEqual(requests.map(request => request.reasoning_effort), ['medium', 'xhigh']);
+  assert.equal(requests[1].tools, undefined);
+  assert.deepEqual(await assistant.history(), []);
+  await assistant.send({ text: 'User message' });
+  await settled(events);
+  assert.equal(requests.at(-1).reasoning_effort, 'xhigh');
+});
+
 test('an endpoint failure and a cancelled stream are reported as such', async t => {
   const failing = await withProvider(t, await endpoint(t, { status: 500 }), { type: 'env', ref: 'K' }, { K: KEY });
   await failing.assistant.send({ text: 'x' });
@@ -111,7 +158,7 @@ test('the window reaches the assistant only through narrow IPC calls that ignore
   const call = (name, ...args) => handlers.get(name)(...args);
   assert.deepEqual([...handlers.keys()].sort(), ['assistant:add-provider', 'assistant:approve', 'assistant:backlog', 'assistant:backlog-plans', 'assistant:cancel', 'assistant:clear', 'assistant:configure', 'assistant:conversations',
     'assistant:follow-up', 'assistant:history', 'assistant:mcp-import', 'assistant:mcp-list', 'assistant:mcp-remove', 'assistant:mcp-save', 'assistant:mcp-test',
-    'assistant:new-conversation', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-provider', 'assistant:update-provider-workspace']);
+    'assistant:new-conversation', 'assistant:remove-provider', 'assistant:scan', 'assistant:send', 'assistant:state', 'assistant:test-model', 'assistant:test-provider', 'assistant:update-provider-workspace']);
   await assert.rejects(call('assistant:update-provider-workspace', 'claude', '/workspace'), /Remote ACP provider no longer exists/);
   await call('assistant:configure', { permission: 'read' });
   await assert.rejects(call('assistant:configure', { executable: '/bin/sh' }), /Invalid assistant setting/);

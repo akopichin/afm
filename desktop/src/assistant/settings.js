@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { isAgentEndpoint } from './deep-agent.js';
+import { isAgentEndpoint } from './model-catalog.js';
 import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 
 export const PERMISSIONS = ['ask', 'read', 'edit', 'yolo'];

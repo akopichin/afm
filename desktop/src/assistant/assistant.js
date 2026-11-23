@@ -9,8 +9,10 @@ import { AssistantBacklog, BACKLOG_NAMESPACE, backlogGuidance } from './backlog.
 import { ApprovalServer } from './approval.js';
 import { detectProvider, searchDirs } from './detect.js';
 import { probeAcp, runAcp } from './acp.js';
+import { watchCodexDelegates } from './codex-delegates.js';
 import { McpServers } from './mcp.js';
-import { isAgentEndpoint, runDeepAgent } from './deep-agent.js';
+import { runDeepAgent, testEndpointModel } from './deep-agent.js';
+import { isAgentEndpoint } from './model-catalog.js';
 import { runEndpoint } from './endpoint.js';
 import { assistantImages, claudeImagePrompt, endpointImagePrompt, writeCodexImages } from './images.js';
 import { buildInvocation, canResume, describeMode, PERMISSION_LABELS } from './modes.js';
@@ -18,7 +20,7 @@ import { belongsTo } from '../projects.js';
 import { filterRuns, scopeLabel } from './policy.js';
 import { runProcess } from './run.js';
 import { AssistantSettings, BUILT_IN, SettingsError, validateProvider, validateSelection } from './settings.js';
-import { parserFor } from './stream.js';
+import { isDelegationTool, parserFor } from './stream.js';
 import { isWatchTool, runWatchTool, SCHEDULE_TOOL } from './watch-tools.js';
 import { repeatingRequest } from '../watch/repeating.js';
 import { readRunStatus } from '../workspace.js';
@@ -32,6 +34,11 @@ const CHAT_PAUSE_MS = 30_000;
 const MAX_TOOLS = 20;
 const PROMPT_BUDGET = 24000;
 const DETECTION_TTL_MS = 5 * 60 * 1000;
+const MODEL_TEST_TIMEOUT_MS = 15_000;
+const MODEL_TEST_PROMPT = 'Reply with OK. Do not access files or call tools.';
+const isModelEndpoint = kind => kind === 'openai' || isAgentEndpoint(kind);
+const endpointModelId = (provider, model) => model || provider.models?.find(item => item.default)?.id
+  || (provider.models?.length === 1 ? provider.models[0].id : '');
 const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
 const SECRET_NAME = /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL/i;
 const SESSION_ID = /^[A-Za-z0-9][\w.-]{0,127}$/;
@@ -73,6 +80,10 @@ function redactor(env) {
   };
   // Provider session ids stay private however short they are; they only go into the provider's own command line.
   redact.addSession = value => { if (value && !sessions.includes(value)) sessions.push(value); };
+  redact.partial = text => {
+    const safe = redact(text);
+    return safe.slice(0, safe.length - unfinishedValue(safe, [...sessions, ...secrets]));
+  };
   // A text delta can end in the middle of a session id, so the part that could begin one is held back until
   // later text shows what it is. A tool call or an approval in between does not end the text; `release` does.
   let held = '';
@@ -109,6 +120,8 @@ export class Assistant {
     this.migrateHistory = migrateHistory;
     this.listeners = new Set();
     this.detections = new Map();
+    this.modelTests = new Map();
+    this.activeModelTests = new Set();
     this.detectGeneration = 0;
     this.clearing = new Set();
     this.active = new Map();
@@ -166,6 +179,7 @@ export class Assistant {
   // Detections taken before this are dropped, and any scan still running cannot store its result afterwards.
   resetDetections() {
     this.detections.clear();
+    this.modelTests.clear();
     this.detectGeneration++;
   }
 
@@ -276,6 +290,79 @@ export class Assistant {
   async testProvider(id) {
     const info = await this.#provider(id, { fresh: true });
     return { id, found: info.found, version: info.version ?? null, permissions: info.permissions, auth: info.auth, capabilities: info.capabilities, ok: info.found && info.auth.state === 'ready' };
+  }
+
+  async testModel(force = false, draft) {
+    const { settings: saved } = await this.#definitions();
+    const settings = draft ? { ...saved, ...validateSelection(draft) } : saved;
+    const environment = await this.#environment();
+    const provider = await this.#provider(settings.provider, { environment });
+    if (provider.auth.state !== 'ready') return { ok: false, detail: provider.auth.detail };
+    if (!isModelEndpoint(provider.kind) && provider.kind !== 'acp')
+      return { ok: false, detail: 'A test reply is available for endpoints and ACP connections.' };
+    const modelId = isModelEndpoint(provider.kind) ? endpointModelId(provider, settings.model) : settings.model;
+    if (!modelId && isModelEndpoint(provider.kind)) return { ok: false, detail: 'Choose a model to test.' };
+    const { env } = environment;
+    const apiKey = provider.credential.type === 'cli' ? '' : await this.#secret(provider, env);
+    const key = digest({ provider: provider.id, endpoint: provider.endpoint, workspace: provider.remoteCwd,
+      workspaceRevision: provider.workspaceRevision, modelId, reasoning: settings.reasoning, environment: environment.key, apiKey });
+    const previous = this.modelTests.get(key);
+    if (previous && (previous.pending || (!force && Date.now() - previous.at < DETECTION_TTL_MS))) return previous.result;
+    if (this.modelTestsClosed) return { ok: false, detail: 'Desktop is closing.' };
+    if (this.activeModelTests.size >= this.maxActive) return { ok: false, detail: 'Several tests are running. Try again in a moment.' };
+    const entry = { at: Date.now(), pending: true, controller: new AbortController() };
+    entry.result = this.#testModelReply(provider, settings, modelId, apiKey, env, entry.controller.signal).then(result => {
+      entry.pending = false;
+      if (!result.ok && this.modelTests.get(key) === entry) this.modelTests.delete(key);
+      return result;
+    }).finally(() => this.activeModelTests.delete(entry));
+    this.activeModelTests.add(entry);
+    if (this.modelTests.size >= 64) this.modelTests.delete(this.modelTests.keys().next().value);
+    this.modelTests.set(key, entry);
+    return entry.result;
+  }
+
+  async #testModelReply(provider, settings, modelId, apiKey, env, shutdown) {
+    const redact = redactor(env);
+    redact.add(apiKey, 1);
+    const signal = AbortSignal.any([shutdown, AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS)]);
+    let directory, levels;
+    try {
+      if (isModelEndpoint(provider.kind)) {
+        await testEndpointModel({ provider, apiKey, modelId, reasoning: settings.reasoning }, MODEL_TEST_PROMPT, signal);
+      } else {
+        const cwd = provider.remoteCwd ?? (directory = await mkdtemp(path.join(os.tmpdir(), 'afm-model-test-')));
+        signal.throwIfAborted();
+        const selection = { ...settings, permission: 'read', acpMode: '' };
+        if (provider.localCodex && !selection.model) selection.model = provider.models?.find(model => model.default)?.id ?? '';
+        let receivedText = false;
+        const process = runAcp({ provider, settings: selection, cwd,
+          env: { ...env, HOME: this.home }, token: apiKey, prompt: MODEL_TEST_PROMPT, images: [],
+          onReasoning: values => { levels = values; }, onEvent: event => {
+            if (event.type === 'session') redact.addSession(event.id);
+            if (event.type === 'delta' && event.text.trim()) receivedText = true;
+          } });
+        const cancel = () => { process.cancel().catch(() => {}); };
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          const result = await process.done;
+          signal.throwIfAborted();
+          if (result.error) throw result.error;
+          if (!receivedText) throw Error('The ACP agent returned no model response.');
+        } finally { signal.removeEventListener('abort', cancel); }
+      }
+      return { ok: true, detail: 'Test request succeeded.', levels };
+    } catch (error) {
+      if (shutdown.aborted) return { ok: false, detail: 'Desktop is closing.' };
+      if (signal.aborted) return { ok: false, detail: 'Test request timed out.' };
+      const message = String(error.message ?? error);
+      if (settings.reasoning !== 'default' && /reasoning[_ ]effort|thought_level|\beffort\b/i.test(message)
+        && /unsupported|not support|invalid|unknown parameter|allowed values/i.test(message))
+        return { ok: false, detail: `This route rejected reasoning “${settings.reasoning}”. Choose Provider default or try another level.`, levels };
+      return { ok: false, detail: clip(redact(message).split('\n')[0], 320), levels };
+    } finally {
+      if (directory) await rm(directory, { recursive: true, force: true });
+    }
   }
 
   // ---- conversations ----
@@ -495,10 +582,16 @@ export class Assistant {
       }
       if (!provider.found) throw new AssistantError('provider_missing', provider.auth.detail);
       if (provider.auth.state !== 'ready') throw new AssistantError('missing_credentials', `${provider.name} is not signed in. ${provider.auth.detail}`);
+      if (provider.kind === 'codex') {
+        if (!settings.model && provider.capabilities.model && provider.fallback) settings.model = provider.fallback;
+        const choice = provider.models?.find(model => settings.model ? model.id === settings.model : model.default);
+        if (settings.reasoning === 'default' && provider.capabilities.config && provider.configuredReasoning
+          && choice?.reasoning?.includes(choice.defaultReasoning) && !choice.reasoning.includes(provider.configuredReasoning))
+          settings.reasoning = choice.defaultReasoning;
+      }
       if (provider.localCodex) {
         if (settings.model && !provider.models?.some(model => model.id === settings.model)) settings.model = '';
         if (!settings.model) settings.model = provider.models?.find(model => model.default)?.id ?? '';
-        if (settings.reasoning && !provider.reasoning.includes(settings.reasoning)) settings.reasoning = 'default';
       }
       if (images.length && provider.kind !== 'openai' && !provider.capabilities.image) {
         throw new AssistantError('unsupported_image', `The installed ${provider.name} CLI does not accept image attachments. Update it or choose another provider.`);
@@ -506,7 +599,10 @@ export class Assistant {
       const scope = await this.#resolveScope(scopeInput);
       const prior = turn.repeating ? [] : await this.history(conversationId);
       Object.assign(turn, { settings, provider, scope, prior, text, images });
-      if (provider.kind === 'acp' && !provider.endpoint && !turn.noTools && !turn.repeating && settings.permission !== 'read') {
+      const acceptsMcp = isAgentEndpoint(provider.kind) || provider.kind === 'acp' && !provider.endpoint
+        || provider.kind === 'claude' && provider.capabilities.mcpConfig
+        || provider.kind === 'codex' && provider.capabilities.config;
+      if (acceptsMcp && !turn.noTools && !turn.repeating && settings.permission !== 'read') {
         turn.mcp = await this.mcp.forScope(scope, turn.environment.env);
       }
       if (provider.kind !== 'openai') {
@@ -524,10 +620,10 @@ export class Assistant {
         if (!turn.repeating && !turn.mcp?.hasFileCredentials) turn.resume = await this.#resumableSession(turn);
       }
       if (turn.repeating && provider.kind === 'openai') turn.facts = await this.#runFacts(scope);
-      if (isAgentEndpoint(provider.kind) && !settings.model && provider.models?.length === 1) settings.model = provider.models[0].id;
+      if (isModelEndpoint(provider.kind)) settings.model = endpointModelId(provider, settings.model);
       const effective = isAgentEndpoint(provider.kind)
-        ? { permission: settings.permission, label: PERMISSION_LABELS[settings.permission], model: settings.model, reasoning: 'default' }
-        : provider.kind === 'openai' ? { permission: 'read', label: PERMISSION_LABELS.read, flags: 'chat only', model: settings.model || null, reasoning: 'default' } : this.#invocation(turn).effective;
+        ? { permission: settings.permission, label: PERMISSION_LABELS[settings.permission], model: settings.model, reasoning: settings.reasoning }
+        : provider.kind === 'openai' ? { permission: 'read', label: PERMISSION_LABELS.read, flags: 'chat only', model: settings.model || null, reasoning: settings.reasoning } : this.#invocation(turn).effective;
       turn.effective = effective;
       user = { id: randomUUID(), role: 'user', text, projectRoot: scope.projectRoot, runId: scope.runId, instanceId: scope.instanceId, context: scopeLabel(turn.scope), at: new Date().toISOString(),
         ...(images.length ? { imageCount: images.length } : {}) };
@@ -545,9 +641,9 @@ export class Assistant {
     return { turnId: turn.turnId, effective: turn.effective, scope: scopeLabel(turn.scope) };
   }
 
-  #invocation(turn, bridge = null, resume = null, imageFiles = []) {
+  #invocation(turn, bridge = null, resume = null, imageFiles = [], external = null) {
     const hasTools = Boolean(bridge) && (turn.provider.kind !== 'claude' || turn.provider.capabilities.mcpConfig);
-    return buildInvocation({ provider: turn.provider, settings: turn.settings, bridge, resume, isolated: turn.noTools,
+    return buildInvocation({ provider: turn.provider, settings: turn.settings, bridge, external, resume, isolated: turn.noTools,
       hasImages: turn.images.length > 0, imageFiles,
       systemPrompt: this.#systemPrompt(turn.scope, { label: PERMISSION_LABELS[turn.settings.permission] }, hasTools, turn) });
   }
@@ -583,7 +679,11 @@ export class Assistant {
           ...this.#transcript(prior, text).map(line => ({ role: line.startsWith('User: ') ? 'user' : 'assistant', content: line.replace(/^(User|Assistant): /, '') })),
           { role: 'user', content: images.length ? endpointImagePrompt(text, images) : text },
         ];
-        turn.process = runDeepAgent({ provider, apiKey, modelId: settings.model, messages, bridge, onEvent,
+        const mcp = turn.mcp && { servers: turn.mcp.configs, cwd: scope.kind === 'all' ? this.home : scope.projectRoot, env, redact,
+          approve: (server, tool, args) => settings.permission === 'yolo' || this.#askUser({
+            turnId: turn.turnId, tool: `${server} · ${tool}`, kind: 'mcp', scope: scopeLabel(scope), summary: clip(JSON.stringify(args ?? {}), 3000),
+          }) };
+        turn.process = runDeepAgent({ provider, apiKey, modelId: settings.model, reasoning: settings.reasoning, messages, bridge, mcp, onEvent,
           systemPrompt: this.#systemPrompt(scope, turn.effective, Boolean(bridge), turn) });
         turn.timing.readyAt = performance.now();
       } else if (provider.kind === 'openai') {
@@ -594,7 +694,7 @@ export class Assistant {
         const apiKey = await this.#secret(provider, env);
         redact.add(apiKey);
         if (turn.cancelled) return this.#finish(turn, turn.yielded ? 'yielded' : 'cancelled');
-        turn.process = runEndpoint({ endpoint: provider.endpoint, apiKey, model: settings.model, messages, onEvent });
+        turn.process = runEndpoint({ endpoint: provider.endpoint, apiKey, model: settings.model, reasoning: settings.reasoning, messages, onEvent });
         turn.timing.readyAt = performance.now();
       } else {
         tempDir = await mkdtemp(path.join(os.tmpdir(), 'afm-turn-'));
@@ -602,11 +702,14 @@ export class Assistant {
         const bridge = provider.remoteCwd ? null : await this.#prepareBridge(turn, tempDir);
         redact.add(turn.bridgeToken);
         const cwd = scope.kind === 'all' ? this.home : scope.projectRoot;
+        const external = ['claude', 'codex'].includes(provider.kind) ? await this.#prepareNativeMcp(turn, tempDir, cwd, bridge) : null;
+        const httpFallbacks = provider.kind === 'acp' && turn.mcp
+          ? await this.#prepareMcpProxies(turn, tempDir, cwd, turn.mcp.configs.filter(config => config.type === 'http')) : null;
         Object.values(turn.credential).forEach(value => redact.add(value));
         Object.assign(env, turn.credential);
         // A resumed session already holds the conversation up to its catch-up point; a fresh one gets the bounded transcript.
-        const start = resume => {
-          const { args } = this.#invocation(turn, bridge, resume?.id, imageFiles);
+        const start = async resume => {
+          const { args } = this.#invocation(turn, bridge, resume?.id, imageFiles, external);
           const context = [];
           if (provider.kind === 'acp') context.push(this.#systemPrompt(scope, { label: turn.effective.label }, Boolean(bridge), turn));
           if (provider.kind === 'claude' && !provider.capabilities.appendSystemPrompt && !turn.repeating)
@@ -620,11 +723,21 @@ export class Assistant {
           const prompt = [...context, ...this.#transcript(resume ? resume.catchUp : prior, text), `User: ${text || 'Please look at the attached image(s).'}`].join('\n\n');
           const input = provider.kind === 'claude' && images.length ? claudeImagePrompt(prompt, images) : prompt;
           if (provider.kind === 'acp') {
-            turn.process = runAcp({ provider, settings, cwd: provider.remoteCwd ?? cwd, env: { ...env, HOME: this.home }, bridge, token: turn.bridgeToken, prompt, images, resume: resume?.id, servers: turn.mcp?.configs, onEvent,
+            turn.process = runAcp({ provider, settings, cwd: provider.remoteCwd ?? cwd, env: { ...env, HOME: this.home }, bridge, token: turn.bridgeToken, prompt, images, resume: resume?.id, servers: turn.mcp?.configs, httpFallbacks, onEvent,
               approve: tool => this.#askUser({ turnId: turn.turnId, tool: tool.title, kind: 'acp', scope: scopeLabel(scope),
                 summary: clip(JSON.stringify(tool.rawInput ?? tool.title), 3000) }) });
           } else {
-            turn.process = runProcess({ command: provider.executable, args, cwd, env, input, parser: parserFor(provider.kind), onEvent, grace: this.grace });
+            const delegates = provider.kind === 'codex' && !turn.repeating
+              ? watchCodexDelegates({ home: path.resolve(cwd, env.CODEX_HOME || path.join(this.home, '.codex'), 'sessions'),
+                startedAt: Date.now(), onEvent }) : null;
+            turn.process = runProcess({ command: provider.executable, args, cwd, env, input, parser: parserFor(provider.kind), onEvent: event => {
+              onEvent(event);
+              if (event.type === 'session') delegates?.start(event.id);
+              if (event.type === 'delegate') delegates?.child(event.id);
+            }, grace: this.grace });
+            turn.timing.readyAt ??= performance.now();
+            try { return await turn.process.done; }
+            finally { await delegates?.stop(); }
           }
           turn.timing.readyAt ??= performance.now();
           return turn.process.done;
@@ -669,9 +782,33 @@ export class Assistant {
       steering: isDesktopConversation(turn.conversationId), memory: !turn.repeating, backlog: !turn.repeating && turn.settings.permission !== 'read', watch, schedule: watch && Boolean(this.watch.schedule), approvalSocket: await this.approvals.listen() };
     await writeFile(policyFile, JSON.stringify(policy), { mode: 0o600 });
     const spec = { command: this.bridge.command, args: [this.bridge.script, '--policy', policyFile], env: this.bridge.env ?? {} };
+    return spec;
+  }
+
+  async #prepareNativeMcp(turn, dir, cwd, bridge) {
+    const servers = await this.#prepareMcpProxies(turn, dir, cwd, turn.mcp?.configs ?? []);
+    if (bridge) servers.afm = bridge;
+    if (!Object.keys(servers).length) return null;
     const configFile = path.join(dir, 'mcp.json');
-    await writeFile(configFile, JSON.stringify({ mcpServers: { afm: { type: 'stdio', ...spec } } }), { mode: 0o600 });
-    return { ...spec, configFile };
+    if (turn.provider.kind === 'claude') {
+      const mcpServers = Object.fromEntries(Object.entries(servers).map(([name, spec]) => [name, { type: 'stdio', ...spec }]));
+      await writeFile(configFile, JSON.stringify({ mcpServers }), { mode: 0o600 });
+    }
+    return { configFile, servers };
+  }
+
+  async #prepareMcpProxies(turn, dir, cwd, configs) {
+    const servers = Object.create(null);
+    const runtime = this.bridge?.command ?? process.execPath;
+    const environment = this.bridge?.env ?? {};
+    for (const [index, config] of configs.entries()) {
+      const file = path.join(dir, `mcp-${index}.json`);
+      const secrets = turn.mcp.credentials.get(config.name);
+      // A private file keeps external MCP credentials and command arguments out of the provider's argv.
+      await writeFile(file, JSON.stringify({ config, cwd, env: { PATH: turn.environment.env.PATH }, secrets }), { mode: 0o600 });
+      servers[config.name] = { command: runtime, args: [path.join(import.meta.dirname, 'mcp-proxy.js'), file], env: environment };
+    }
+    return servers;
   }
 
   // A key file or environment variable the user configured is read here and passed to the provider's environment
@@ -693,7 +830,7 @@ export class Assistant {
   #onProviderEvent(turn, event, redact) {
     const base = { conversationId: turn.conversationId, turnId: turn.turnId };
     const { reply } = turn;
-    if (turn.cancelled) return;
+    if (turn.cancelled && (event.type !== 'delegate' || !event.status)) return;
     if (event.type === 'session') {
       // The id goes into a later command line, so only a plain token is accepted.
       if (SESSION_ID.test(event.id)) {
@@ -720,12 +857,50 @@ export class Assistant {
         reply.text += text;
         this.#queueDelta(turn, text);
       }
+    } else if (event.type === 'delegate') {
+      turn.workStarted = true;
+      if (!event.ownerTool) redact.addSession(event.id);
+      const delegate = { id: digest(event.ownerTool ? [turn.provider.id, turn.turnId, event.id] : [turn.provider.id, event.id]) };
+      if (event.ownerTool) delegate.ownerTool = redact(event.id);
+      for (const [field, limit] of [['name', 120], ['status', 40]]) {
+        if (typeof event[field] === 'string') delegate[field] = clip(redact(event[field]), limit);
+      }
+      const delegates = reply.delegates ??= [];
+      const previous = delegates.find(item => item.id === delegate.id);
+      if (delegate.status === 'unknown' && previous?.status) delete delegate.status;
+      if (typeof event.delta === 'string' && event.channel === 'reasoning') {
+        const buffers = turn.delegateText ??= new Map();
+        const key = delegate.id + ':' + event.channel;
+        const buffer = ((buffers.get(key) ?? '') + event.delta).slice(-12000);
+        buffers.set(key, buffer);
+        const text = redact.partial(buffer);
+        delegate[event.channel] = text.length > 8000 ? text.slice(-8000) : text;
+      }
+      if (event.tool?.id) {
+        const id = digest([delegate.id, event.tool.id]);
+        const tools = (previous?.tools ?? []).slice();
+        const index = tools.findIndex(tool => tool.id === id);
+        if (event.tool.native && event.tool.status) this.#trackNativeTool(turn, id, event.tool.status === 'running');
+        if (index < 0 && typeof event.tool.name !== 'string') return;
+        const tool = { ...tools[index], id, status: event.tool.status ?? tools[index]?.status ?? 'running' };
+        if (typeof event.tool.name === 'string') tool.name = clip(redact(event.tool.name), 160);
+        if (event.tool.input !== undefined) {
+          const input = typeof event.tool.input === 'string' ? event.tool.input : JSON.stringify(event.tool.input);
+          tool.input = clip(redact(input), 1000);
+        }
+        if (index < 0) tools.push(tool);
+        else tools[index] = tool;
+        delegate.tools = tools.slice(-80);
+      }
+      if (previous) Object.assign(previous, delegate);
+      else delegates.push(delegate);
+      this.#emit({ ...base, type: 'delegate', delegate });
     } else if (event.type === 'tool') {
       turn.workStarted = true;
       if (event.native) this.#trackNativeTool(turn, event.id, true);
       const tool = { id: redact(event.id), name: redact(event.name), input: redactInput(redact, event.input),
         startedAt: new Date().toISOString(), offset: reply.text.length, order: ++turn.toolOrder };
-      if (reply.tools.length < MAX_TOOLS) reply.tools.push({ ...tool, status: 'running' });
+      if (reply.tools.length < MAX_TOOLS || isDelegationTool(event.name)) reply.tools.push({ ...tool, status: 'running' });
       this.#emit({ ...base, type: 'tool', tool });
     } else if (event.type === 'tool_result') {
       const id = redact(event.id);
@@ -962,9 +1137,12 @@ export class Assistant {
   // Part of Quit. main.js has stopped the environment imports first, so a reply still waiting for a startup shell
   // fails at once instead of outliving the quit deadline.
   async close() {
+    this.modelTestsClosed = true;
+    const tests = [...this.activeModelTests];
+    for (const test of tests) test.controller.abort();
     const turns = [...this.active.values()];
     for (const turn of turns) this.cancel(turn.conversationId);
-    await Promise.all(turns.map(turn => turn.finished));
+    await Promise.all([...turns.map(turn => turn.finished), ...tests.map(test => test.result)]);
     this.approvals.close();
   }
 }

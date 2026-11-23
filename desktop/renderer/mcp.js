@@ -38,7 +38,7 @@ function drawMcpSettings(panel){
   let disposeEditor;
   const api=nativeAFM.assistant;
   panel.innerHTML=`
-    <p class="muted">Custom servers are used by local ACP assistants with tool access.</p>
+    <p class="muted">Saved servers are available automatically in chats with MCP tool access.</p>
     <div class="mcp-servers"></div>
     <div class="links"><button type="button" data-mcp-add>＋ Add server</button><button type="button" data-mcp-import>Import OpenCode config</button></div>
     <div class="mcp-editor"></div>

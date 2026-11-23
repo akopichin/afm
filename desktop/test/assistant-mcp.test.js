@@ -8,8 +8,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { McpServers } from '../src/assistant/mcp.js';
-import { makeAssistant, settled, stubContext } from './assistant-support.js';
+import { makeAssistant, providerHome, settled, stubContext, until } from './assistant-support.js';
 
 async function setup(t) {
   const home = await mkdtemp(path.join(os.tmpdir(), 'afm-mcp-'));
@@ -155,8 +156,8 @@ test('Assistant sends scoped MCP with the AFM bridge and checks live HTTP capabi
   await assistant.configure({ provider: 'plain' });
   await assistant.send({ text: 'List server names', scope: { projectId: 'project' } });
   const first = await settled(events);
-  assert.equal(first.reply.text, 'afm, Local');
-  assert(events.some(event => event.type === 'notice' && /does not support HTTP/.test(event.text)));
+  assert.equal(first.reply.text, 'afm, Local, Remote');
+  assert(!events.some(event => event.type === 'notice' && /does not support HTTP/.test(event.text)));
   events.length = 0;
   await assistant.configure({ provider: 'http' });
   await assistant.send({ text: 'List server names' });
@@ -164,4 +165,117 @@ test('Assistant sends scoped MCP with the AFM bridge and checks live HTTP capabi
   assert.equal(second.reply.text, 'afm, Remote Bearer [hidden]');
   assert.equal(JSON.stringify(events).includes('should-stay-private'), false);
   assert.equal(JSON.stringify(await assistant.history()).includes('should-stay-private'), false);
+});
+
+test('both local CLIs discover and call a saved project MCP using the stored credential', async t => {
+  const ctx = await providerHome(t, { FAKE_SCENARIO: 'external-mcp' });
+  const { secrets } = await setup(t);
+  const project = async id => ({ id, path: ctx.home });
+  const { assistant, events } = makeAssistant(t, ctx, { secrets, context: stubContext({ project }) });
+  const token = 'cli-mcp-secret';
+  const script = path.join(ctx.home, 'external.mjs');
+  await writeFile(script, `
+    import {createInterface} from 'node:readline';
+    const answer = (id,result) => console.log(JSON.stringify({jsonrpc:'2.0', id, result}));
+    for await (const line of createInterface({input:process.stdin})) {
+      const {id,method,params} = JSON.parse(line);
+      if(method === 'initialize') answer(id,{protocolVersion:params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'external',version:'1'}});
+      if(method === 'tools/list') answer(id,{tools:[{name:'lookup',inputSchema:{type:'object'}}]});
+      if(method === 'tools/call') answer(id,{content:[{type:'text',text:params.arguments.query+' '+process.env.MCP_TOKEN}]});
+    }`);
+  await assistant.mcp.save({ name: 'external', transport: 'stdio', command: process.execPath, args: [script],
+    projectId: 'project', tokenEnv: 'MCP_TOKEN', token });
+  const send = async scope => {
+    events.length = 0;
+    await assistant.send({ text: 'Use the server', scope });
+    const result = await settled(events);
+    assert.equal(result.type, 'done', result.message);
+    return result.reply.text;
+  };
+  for (const provider of ['claude', 'codex']) {
+    await assistant.configure({ provider });
+    assert.equal(await send({ projectId: 'project' }), 'live [hidden]');
+    assert.equal(await send(), 'No external server');
+    await assistant.configure({ permission: 'read' });
+    assert.equal(await send({ projectId: 'project' }), 'No external server');
+    await assistant.configure({ permission: 'ask' });
+  }
+  assert(!JSON.stringify(await ctx.invocations()).includes(token));
+});
+
+test('Deep Agent connects to a saved MCP only on discovery and asks before invoking it', async t => {
+  const model = 'test-model';
+  const name = 'external';
+  const token = 'deep-mcp-secret';
+  let handshakes = 0, listCalls = 0, toolCalls = 0, chatRequests = 0, approved = false;
+  const mcp = new Server({ name, version: '1' }, { capabilities: { tools: {} } });
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID, enableJsonResponse: true });
+  mcp.oninitialized = () => handshakes++;
+  mcp.setRequestHandler(ListToolsRequestSchema, () => {
+    listCalls++;
+    return { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] };
+  });
+  mcp.setRequestHandler(CallToolRequestSchema, ({ params }) => {
+    toolCalls++;
+    assert.equal(approved, true);
+    assert.deepEqual(params.arguments, { query: 'live' });
+    return { content: [{ type: 'text', text: 'Live MCP result' }] };
+  });
+  await mcp.connect(transport);
+  const server = createServer(async (request, response) => {
+    if (request.url === '/mcp') {
+      if (request.headers.authorization !== 'Bearer ' + token) return response.writeHead(401).end();
+      return transport.handleRequest(request, response);
+    }
+    if (request.url === '/v1/models') return response.end(JSON.stringify({ data: [{ id: model }] }));
+    if (request.url !== '/v1/chat/completions') return response.writeHead(404).end();
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const { tools, messages } = JSON.parse(body);
+    chatRequests++;
+    const invoke = (tool, args) => ({ role: 'assistant', tool_calls: [{ index: 0, id: 'tool-' + chatRequests,
+      type: 'function', function: { name: tool, arguments: JSON.stringify(args) } }] });
+    let delta;
+    if (chatRequests === 1) {
+      assert.equal(handshakes, 0);
+      const discovery = tools.find(tool => tool.function.name === 'mcp_list_tools');
+      assert.deepEqual(discovery.function.parameters.properties.server.enum, [name]);
+      delta = invoke('mcp_list_tools', { server: name });
+    } else if (chatRequests === 2) {
+      assert.match(messages.at(-1).content, /lookup/);
+      delta = invoke('mcp_call_tool', { server: name, name: 'lookup', arguments: { query: 'live' } });
+    } else if (chatRequests === 3) {
+      assert.match(messages.at(-1).content, /Live MCP result/);
+      delta = { role: 'assistant', content: 'Got the live result.' };
+    } else {
+      assert(!tools?.some(tool => tool.function.name === 'mcp_list_tools'));
+      delta = { role: 'assistant', content: 'Read-only reply.' };
+    }
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    const result = { id: 'reply-' + chatRequests, object: 'chat.completion.chunk', created: 1, model,
+      choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }] };
+    response.end(`data: ${JSON.stringify(result)}\n\ndata: [DONE]\n\n`);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => { await mcp.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const { home, secrets } = await setup(t);
+  const { assistant, events } = makeAssistant(t, { home, env: { MODEL_KEY: 'test-model-key' } }, { secrets });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  await assistant.settings.addProvider({ kind: 'openai-agent', name: 'Gateway', endpoint: base + '/v1',
+    credential: { type: 'env', ref: 'MODEL_KEY' } }, 'gateway');
+  await assistant.mcp.save({ name, transport: 'http', url: base + '/mcp', token });
+  await assistant.configure({ provider: 'gateway', model });
+  await assistant.send({ text: 'Use the MCP server.' });
+  const approval = await until(events, 'approval');
+  assert.equal(approval.tool, 'external · lookup');
+  assert.equal(toolCalls, 0);
+  approved = assistant.approve(approval.approvalId, true);
+  assert.equal((await settled(events)).reply.text, 'Got the live result.');
+  assert.deepEqual([handshakes, listCalls, toolCalls], [1, 1, 1]);
+  events.length = 0;
+  await assistant.configure({ permission: 'read' });
+  await assistant.send({ text: 'Check it again.' });
+  assert.equal((await settled(events)).reply.text, 'Read-only reply.');
+  assert.deepEqual([handshakes, listCalls, toolCalls], [1, 1, 1]);
 });

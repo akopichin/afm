@@ -61,7 +61,6 @@
   }
   select:not([multiple], [size]) option:disabled { color: var(--text-disabled); cursor: default; }
 }
-select:focus-visible, select:open { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 select:disabled { color: var(--text-disabled); cursor: default; }
 
 .graphite-picker {

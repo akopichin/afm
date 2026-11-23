@@ -1,0 +1,13 @@
+:root, :root[data-theme] {
+  --focus-ring: color-mix(in srgb, var(--text-secondary, #b3bccb) 64%, var(--surface-canvas, #0b111b)) !important;
+}
+
+:where(button, a[href], input, textarea, select, summary, [tabindex]):focus-visible,
+select:open {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (forced-colors: active) {
+  :root, :root[data-theme] { --focus-ring: Highlight !important; }
+}

@@ -1,4 +1,4 @@
-import { isAgentEndpoint } from './deep-agent.js';
+import { isAgentEndpoint } from './model-catalog.js';
 import { SettingsError } from './settings.js';
 
 export const REASONING_LEVELS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['minimal', 'low', 'medium', 'high', 'xhigh'], openai: [] };
@@ -39,12 +39,14 @@ export const PERMISSION_LABELS = { ask: 'Ask before actions', read: 'Read only',
 // The prompt itself goes through stdin so it never appears in argv.
 // `resume` is the provider's own id of the earlier session to continue, or null for a fresh one.
 // `isolated` (Desktop's own replies) has no tools at all (MCP servers and native ones); a CLI that cannot do that is refused.
-export function buildInvocation({ provider, settings, bridge, systemPrompt, resume = null, isolated = false, hasImages = false, imageFiles = [] }) {
+export function buildInvocation({ provider, settings, bridge, external, systemPrompt, resume = null, isolated = false, hasImages = false, imageFiles = [] }) {
   const { capabilities: caps } = provider;
   const { permission, model, reasoning } = settings;
   if (!provider.permissions.includes(permission))
     throw new SettingsError(`${provider.name} cannot enforce "${PERMISSION_LABELS[permission]}" with the installed version. Choose another permission mode.`);
-  if (reasoning !== 'default' && !provider.reasoning.includes(reasoning))
+  const levels = provider.kind === 'codex' && caps.config
+    ? provider.models?.find(choice => model ? choice.id === model : choice.default)?.reasoning ?? provider.reasoning : provider.reasoning;
+  if (provider.kind !== 'acp' && reasoning !== 'default' && !levels.includes(reasoning))
     throw new SettingsError(`${provider.name} does not support reasoning level "${reasoning}".`);
   if (model && caps.model === false) throw new SettingsError(`${provider.name} cannot select a model.`);
   if (provider.kind === 'acp') {
@@ -67,9 +69,10 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
     } else flags = ['--permission-mode', claudeMode(caps, permission)];
     args.push(...flags);
     if (resume) args.push('--resume', resume);
-    if (bridge && caps.mcpConfig) {
-      args.push('--mcp-config', bridge.configFile, '--strict-mcp-config');
-      if (caps.allowedTools) args.push('--allowedTools', 'mcp__afm');
+    if (external && caps.mcpConfig) {
+      args.push('--mcp-config', external.configFile);
+      if (bridge) args.push('--strict-mcp-config');
+      if (bridge && caps.allowedTools) args.push('--allowedTools', 'mcp__afm');
     }
     else if (isolated) {
       // A report must not read files or run commands; if the CLI cannot switch its tools off, no model writes it.
@@ -95,9 +98,12 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
       yolo: ['--dangerously-bypass-approvals-and-sandbox'],
     }[permission];
     args.push(...flags);
-    if (bridge && accepted.config) {
-      args.push('-c', `mcp_servers.afm.command=${toml(bridge.command)}`, '-c', `mcp_servers.afm.args=${toml(bridge.args)}`);
-      if (Object.keys(bridge.env).length) args.push('-c', `mcp_servers.afm.env={${Object.entries(bridge.env).map(([k, v]) => `${k}=${toml(v)}`).join(',')}}`);
+    if (external && accepted.config) {
+      for (const [name, spec] of Object.entries(external.servers)) {
+        const key = `mcp_servers.${name}`;
+        args.push('-c', `${key}.command=${toml(spec.command)}`, '-c', `${key}.args=${toml(spec.args)}`);
+        if (Object.keys(spec.env).length) args.push('-c', `${key}.env={${Object.entries(spec.env).map(([k, v]) => `${k}=${toml(v)}`).join(',')}}`);
+      }
     }
     for (const file of imageFiles) args.push(`--image=${file}`);
     if (resume) args.push(resume);
@@ -108,7 +114,7 @@ export function buildInvocation({ provider, settings, bridge, systemPrompt, resu
 
 // Flags shown to the user for a provider and mode before anything runs.
 export function describeMode(provider, permission) {
-  if (isAgentEndpoint(provider.kind)) return PERMISSION_LABELS[permission];
+  if (isAgentEndpoint(provider.kind)) return 'Controls the AFM tools available in this conversation.';
   if (provider.kind === 'openai') return 'Chat only: no files and no AFM tools';
   try { return buildInvocation({ provider, settings: { permission, model: '', reasoning: 'default' }, bridge: null }).effective.flags; }
   catch (error) { return error.message; }

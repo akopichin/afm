@@ -253,9 +253,19 @@ placeholders like `{YOUR_GITLAB_TOKEN}` refer to Desktop environment variables
 of the same name as the variable being configured. Use `{env:VARIABLE}` or
 `{file:~/path/to/key}` for an explicit source.
 
-**Test connection** checks the MCP handshake from Desktop and shows the last
-result. During an interactive local ACP reply, Desktop supplies the matching
-servers alongside the built-in AFM tools. HTTP servers require HTTP support
-from the selected agent. Custom servers are available in ACP replies with tool
-access. They are excluded from read-only mode and scheduled replies. Remote ACP
-uses the servers configured on the remote side.
+Desktop makes matching saved servers available automatically in interactive
+chats with MCP tool access. **Test connection** checks the handshake and shows
+the last result. Agents can use a saved server before you run this check.
+
+- **Deep Agents** connect to a server when the agent requests its tools.
+  Discovery runs automatically. Tool calls ask for confirmation in Desktop
+  unless the chat uses YOLO.
+- **Local ACP** receives the matching servers alongside the built-in AFM
+  tools. Desktop relays HTTP tool calls over stdio when the agent lacks native
+  HTTP support.
+- **Claude Code and Codex CLI** receive the matching servers when the installed
+  version supports MCP configuration. The CLIs handle tool discovery and their
+  own tool permissions.
+
+Read-only mode, scheduled replies and chat-only endpoints exclude these
+servers. Remote ACP uses the servers configured on the remote side.

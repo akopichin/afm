@@ -1,8 +1,8 @@
-import { endpointModels, isAgentEndpoint } from './deep-agent.js';
+import { endpointModels, isAgentEndpoint } from './model-catalog.js';
 import { codexAcpModes, probeAcp } from './acp.js';
 import { createInterface } from 'node:readline';
 import { spawn, execFile } from 'node:child_process';
-import { access, stat } from 'node:fs/promises';
+import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import { PERMISSION_LABELS, REASONING_LEVELS, supportedPermissions } from './modes.js';
@@ -112,12 +112,12 @@ async function referencedAuth(reference, env) {
 }
 
 // Ask the installed client for the current account's picker; no conversation or model call is started.
-export function codexModels(executable, env) {
+function codexModelCatalog(executable, env) {
   return new Promise(resolve => {
     const child = spawn(executable, ['app-server', '--listen', 'stdio://'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
     const lines = createInterface({ input: child.stdout });
     const models = new Map();
-    let request = 1, ended = false;
+    let request = 2, configPending = true, listPending = true, configuredModel, configuredReasoning, ended = false;
     const finish = () => {
       if (ended) return;
       ended = true;
@@ -125,7 +125,12 @@ export function codexModels(executable, env) {
       lines.close();
       child.stdin.destroy();
       child.kill('SIGKILL');
-      resolve([...models.values()]);
+      if (models.has(configuredModel)) {
+        for (const model of models.values()) model.default = model.id === configuredModel;
+      }
+      const listed = [...models.values()];
+      const fallback = configuredModel && !models.has(configuredModel) ? listed.find(model => model.default)?.id : undefined;
+      resolve({ models: listed, fallback, configuredReasoning });
     };
     const timer = setTimeout(finish, 5000);
     child.on('error', finish);
@@ -133,22 +138,33 @@ export function codexModels(executable, env) {
     child.stdin.on('error', finish);
     const send = message => child.stdin.write(JSON.stringify(message) + '\n');
     const list = cursor => send({ id: ++request, method: 'model/list', params: { limit: 100, cursor } });
+    const complete = () => { if (!configPending && !listPending) finish(); };
     lines.on('line', line => {
       if (ended) return;
       let reply;
       try { reply = JSON.parse(line); } catch { return; }
-      if (reply.id !== request) return;
-      if (reply.error) return finish();
-      if (request === 1) {
+      if (reply.id === 1) {
+        if (reply.error) return finish();
         send({ method: 'initialized', params: {} });
+        send({ id: 2, method: 'config/read', params: { includeLayers: false } });
         return list(null);
       }
+      if (reply.id === 2) {
+        configPending = false;
+        configuredModel = reply.result?.config?.model;
+        configuredReasoning = reply.result?.config?.model_reasoning_effort;
+        return complete();
+      }
+      if (reply.id !== request) return;
       for (const item of reply.result?.data ?? []) {
         if (item.hidden || typeof item.model !== 'string') continue;
-        models.set(item.model, { id: item.model, label: item.displayName || item.model, default: !!item.isDefault });
+        const reasoning = Array.isArray(item.supportedReasoningEfforts)
+          ? item.supportedReasoningEfforts.map(level => level?.reasoningEffort).filter(level => typeof level === 'string') : null;
+        models.set(item.model, { id: item.model, label: item.displayName || item.model, default: !!item.isDefault,
+          ...(reasoning ? { reasoning, defaultReasoning: item.defaultReasoningEffort } : {}) });
       }
       if (reply.result?.nextCursor && request < 10) list(reply.result.nextCursor);
-      else finish();
+      else { listPending = false; complete(); }
     });
     send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'afm-desktop', version: '0.0.1' } } });
   });
@@ -164,7 +180,7 @@ export async function detectProvider(provider, { home, env, dirs, secret }) {
     try {
       const key = await secret(provider, env);
       if (!key) return { ...configured, auth: missing('Set an API key for this endpoint.') };
-      const models = await endpointModels(provider, key);
+      const models = await endpointModels(provider, key, undefined, { discoverGateway: true });
       return { ...configured, models, auth: ready(provider.credential.type, 'API key configured') };
     } catch (error) {
       const detail = /^(The endpoint rejected|The model catalog returned)/.test(error.message)?error.message:'Could not reach the model catalog.';
@@ -173,7 +189,11 @@ export async function detectProvider(provider, { home, env, dirs, secret }) {
   }
   if (provider.kind === 'openai') {
     const auth = await referencedAuth(provider.credential, env);
-    return { ...base, endpoint: provider.endpoint, found: true, capabilities: {}, permissions: supportedPermissions('openai', {}), auth };
+    const models = auth.state === 'ready' ? await Promise.resolve()
+      .then(() => secret(provider, env))
+      .then(key => key ? endpointModels(provider, key, undefined, { discoverGateway: true }) : [])
+      .catch(() => []) : [];
+    return { ...base, endpoint: provider.endpoint, found: true, models, capabilities: {}, permissions: supportedPermissions('openai', {}), auth };
   }
   if (provider.kind === 'acp' && provider.endpoint) {
     const configured = { ...base, endpoint: provider.endpoint, remoteCwd: provider.remoteCwd, workspaceRevision: provider.workspaceRevision, found: true, permissions: ['ask'] };
@@ -197,13 +217,14 @@ export async function detectProvider(provider, { home, env, dirs, secret }) {
     try {
       const { authRequired, ...result } = await probeAcp(configured, { ...env, HOME: home });
       if (provider.codexAdapter && !authRequired) {
-        const catalog = await codexModels(executable, env);
+        const { models: catalog } = await codexModelCatalog(executable, env);
         const directIds = new Set(catalog.map(model => model.id));
         const available = result.models.filter(model => directIds.has(model.id));
         if (available.length) {
-          const preferred = catalog.find(model => model.default && directIds.has(model.id)
-            && available.some(choice => choice.id === model.id))?.id;
-          result.models = available.map(model => ({ ...model, default: preferred ? model.id === preferred : model.default }));
+          const preferred = catalog.find(model => model.default && available.some(choice => choice.id === model.id))?.id;
+          const byId = new Map(catalog.map(model => [model.id, model]));
+          result.models = available.map(model => ({ ...byId.get(model.id), ...model,
+            default: preferred ? model.id === preferred : model.default }));
         }
       }
       if (provider.codexAdapter) {
@@ -224,9 +245,16 @@ export async function detectProvider(provider, { home, env, dirs, secret }) {
   const auth = provider.credential && provider.credential.type !== 'cli' ? await referencedAuth(provider.credential, env) : await cliAuth(provider, executable, env, home);
   // Reasoning is offered only when the CLI has a way to set it.
   const levels = provider.kind === 'claude' ? capabilities.effort ?? [] : capabilities.config ? REASONING_LEVELS.codex : [];
-  const models = provider.kind === 'claude' ? ['sonnet', 'opus', 'haiku'].map(id => ({ id, label: id }))
-    : (!provider.credential || provider.credential.type === 'cli') ? await codexModels(executable, env) : [];
-  return { ...base, models, executable, version: version.stdout.trim().split('\n')[0] || null, found: true, capabilities,
+  let models = [], fallback, configuredReasoning;
+  if (provider.kind === 'claude') models = ['sonnet', 'opus', 'haiku'].map(id => ({ id, label: id }));
+  else if (auth.state === 'ready') {
+    const ref = provider.credential;
+    const key = ref?.type === 'env' ? env[ref.ref] : ref?.type === 'file'
+      ? await readFile(ref.ref, 'utf8').then(value => value.trim(), () => '') : '';
+    if (key || !ref || ref.type === 'cli')
+      ({ models, fallback, configuredReasoning } = await codexModelCatalog(executable, key ? { ...env, OPENAI_API_KEY: key } : env));
+  }
+  return { ...base, models, fallback, configuredReasoning, executable, version: version.stdout.trim().split('\n')[0] || null, found: true, capabilities,
     permissions: supportedPermissions(provider.kind, capabilities), reasoning: levels, auth };
 }
 

@@ -6,6 +6,20 @@ function textOf(content) {
   return Array.isArray(content) ? content.map(part => part?.text ?? '').join('') : '';
 }
 
+export function collabDelegates({ receivers = [], states = {}, mainIds = [], spawning = false, failed = false }) {
+  states ??= {};
+  const ids = new Set([...Object.keys(states), ...(spawning && !failed && Array.isArray(receivers) ? receivers : [])]);
+  const status = {
+    pending_init: 'running', pendingInit: 'running', running: 'running', completed: 'done',
+    errored: 'error', interrupted: 'interrupted', shutdown: 'interrupted', not_found: 'unknown', notFound: 'unknown',
+  };
+  return [...ids].filter(id => typeof id === 'string' && id && !mainIds.includes(id)).map(id => ({
+    type: 'delegate', id, status: status[states[id]?.status] ?? (spawning ? 'running' : 'unknown'),
+  }));
+}
+
+export const isDelegationTool = name => ['task', 'Task', 'Agent', 'start_async_task'].includes(name);
+
 // Each parser turns one line of provider output into zero or more events:
 // {type:'delta',text} {type:'tool',id,name,input} {type:'tool_result',id,error,text} {type:'result',ok,text,error} {type:'session',id} {type:'activity'} (native work started).
 // Lines that are not JSON or not understood are ignored, so a newer CLI does not break the chat.
@@ -15,6 +29,17 @@ export class ClaudeParser {
   parse(line) {
     let event;
     try { event = JSON.parse(line); } catch { return []; }
+    if (typeof event.parent_tool_use_id === 'string') {
+      const events = [];
+      const child = { type: 'delegate', id: event.parent_tool_use_id, ownerTool: true };
+      for (const part of event.message?.content ?? []) {
+        if (event.type === 'assistant' && part.type === 'tool_use')
+          events.push({ ...child, tool: { id: part.id, name: part.name, input: part.input, status: 'running', native: !TOOL_PREFIX.test(part.name) } });
+        if (event.type === 'user' && part.type === 'tool_result')
+          events.push({ ...child, tool: { id: part.tool_use_id, status: part.is_error ? 'error' : 'done', native: true } });
+      }
+      return events;
+    }
     // Every stream-json event names the session; the id is reported when it first appears or changes.
     if (typeof event.session_id === 'string' && event.session_id !== this.#session) {
       this.#session = event.session_id;
@@ -58,14 +83,24 @@ export class ClaudeParser {
 
 export class CodexParser {
   #messages = 0;
+  #session = null;
   parse(line) {
     let event;
     try { event = JSON.parse(line); } catch { return []; }
-    if (event.type === 'thread.started' && typeof event.thread_id === 'string') return [{ type: 'session', id: event.thread_id }];
+    if (event.type === 'thread.started' && typeof event.thread_id === 'string') {
+      this.#session = event.thread_id;
+      return [{ type: 'session', id: this.#session }];
+    }
     const item = event.item;
     if (event.type === 'item.completed' && item?.type === 'agent_message' && item.text) {
       // Codex reports whole messages; separate them so they read as paragraphs.
       return [{ type: 'delta', text: (this.#messages++ ? '\n\n' : '') + item.text }];
+    }
+    if (item?.type === 'collab_tool_call') {
+      return [{ type: 'activity' }, ...collabDelegates({
+        receivers: item.receiver_thread_ids, mainIds: [this.#session, item.sender_thread_id],
+        states: item.agents_states, spawning: item.tool === 'spawn_agent', failed: item.status === 'failed',
+      })];
     }
     // Commands, file changes and searches have effects of their own; nothing may be replayed once one has started.
     if (item && !['agent_message', 'reasoning', 'mcp_tool_call'].includes(item.type)) {

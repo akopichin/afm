@@ -109,6 +109,7 @@ export function fakeAssistant() {
     addProvider: async input => { fake.calls.add.push(plain(input)); return fake.info; },
     removeProvider: async id => { fake.calls.remove.push(id); return fake.info; },
     testProvider: async id => { fake.calls.test.push(id); return { id, found: true, ok: true, version: '1.0', auth: { state: 'ready', detail: 'ok' } }; },
+    testModel: async () => ({ ok: true, detail: 'Test request succeeded.' }),
     send: async request => { fake.calls.send.push(plain(request)); if (fake.rejectSend) throw Error(fake.rejectSend); return { turnId: 't' + fake.calls.send.length }; },
     followUp: async (id, queued) => { fake.calls.followUp.push([id, queued]); },
     cancel: async () => { fake.calls.cancel++; return true; },

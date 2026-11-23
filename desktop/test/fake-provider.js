@@ -11,7 +11,10 @@ if (args[0] === 'app-server') {
   for await (const line of createInterface({input: process.stdin})) {
     const msg = JSON.parse(line);
     if (msg.method === 'initialize') out({id:msg.id, result:{}});
-    if (msg.method === 'model/list') out({id:msg.id, result:{ data:[{model:'gpt-test', displayName:'Test model', isDefault:true}], nextCursor:null }});
+    if (msg.method === 'model/list') out({id:msg.id, result:{ data:[{model:'gpt-test', displayName:'Test model', isDefault:true,
+      ...(env.FAKE_CODEX_MODEL ? {supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}], defaultReasoningEffort:'low'} : {})}], nextCursor:null }});
+    if (msg.method === 'config/read') out({id:msg.id, result:{ config:{ model:env.FAKE_CODEX_MODEL ?? null,
+      model_reasoning_effort:env.FAKE_CODEX_MODEL ? 'medium' : null } }});
   }
   process.exit(0);
 }
@@ -86,15 +89,39 @@ const finish = (ok = true, text = '') => kind === 'codex' ? out(ok ? { type: 'tu
   : out({ type: 'result', session_id: SID, subtype: ok ? 'success' : 'error', is_error: !ok, result: text });
 
 // The AFM tool bridge named in the provider's own config, as the real CLI would start it.
-function bridgeSpec() {
-  if (kind === 'claude') return JSON.parse(readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers.afm;
-  const config = key => JSON.parse(args.find(item => item.startsWith(`mcp_servers.afm.${key}=`)).slice(`mcp_servers.afm.${key}=`.length));
-  return { command: config('command'), args: config('args') };
+function bridgeSpec(name = 'afm') {
+  if (kind === 'claude') {
+    const file = args[args.indexOf('--mcp-config') + 1];
+    return args.includes('--mcp-config') ? JSON.parse(readFileSync(file, 'utf8')).mcpServers[name] : undefined;
+  }
+  const prefix = `mcp_servers.${name}.`;
+  const config = key => {
+    const flag = args.find(item => item.startsWith(prefix + key + '='));
+    return flag && JSON.parse(flag.slice(prefix.length + key.length + 1));
+  };
+  const command = config('command');
+  return command && { command, args: config('args') };
 }
 
 const scenario = env.FAKE_SCENARIO ?? 'stream';
 const pause = Number(env.FAKE_PAUSE ?? 120);
-if (scenario === 'stream') {
+if (scenario === 'external-mcp') {
+  const spec = bridgeSpec('external');
+  if (!spec) {
+    say('No external server');
+  } else {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+    const client = new Client({ name: 'fixture', version: '1' });
+    await client.connect(new StdioClientTransport(spec));
+    try {
+      const { tools } = await client.listTools();
+      const result = await client.callTool({ name: tools[0].name, arguments: { query: 'live' } });
+      say(result.content[0].text);
+    } finally { await client.close(); }
+  }
+  finish();
+} else if (scenario === 'stream') {
   if (kind === 'claude') out({ type: 'stream_event', event: { type: 'message_start' } });
   for (const part of ['Hel', 'lo ', 'world']) { say(part); await delay(pause); }
   if (kind === 'claude') out({ type: 'assistant', message: { content: [{ type: 'text', text: 'Hello world' }] } });

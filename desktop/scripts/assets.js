@@ -12,7 +12,8 @@ if (!entry) throw Error('Build the AFM dashboard assets before preparing Desktop
 const fixture = await readFile('renderer/run.html', 'utf8');
 await writeFile('.generated/run.html', fixture.replace('../.generated/dashboard/', './dashboard/')
   .replaceAll('../.generated/dashboard/', './dashboard/').replace(/assets\/index-[^"]+\.js/, entry)
-  .replace('src="run-fixture.js"', 'src="../renderer/run-fixture.js"').replaceAll('"select.', '"../renderer/select.'));
+  .replace('src="run-fixture.js"', 'src="../renderer/run-fixture.js"').replaceAll('"select.', '"../renderer/select.')
+  .replace('"focus.css"', '"../renderer/focus.css"'));
 
 const { build } = await import('esbuild');
 const monaco = 'node_modules/monaco-editor';

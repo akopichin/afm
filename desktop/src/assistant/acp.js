@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { ClientApp, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
+import { collabDelegates } from './stream.js';
 
 const setup = () => ({ signal: AbortSignal.timeout(12000) });
 const cancelled = { outcome: { outcome: 'cancelled' } };
@@ -56,7 +57,7 @@ function launch({ executable, args, credential, localCodex, endpoint, remoteCwd 
 }
 
 async function initialize(agent) {
-  const info = await agent.request('initialize', { protocolVersion: PROTOCOL_VERSION, clientCapabilities: {},
+  const info = await agent.request('initialize', { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { subagents: {} },
     clientInfo: { name: 'afm-desktop', version: '1' } }, setup());
   if (info.protocolVersion !== PROTOCOL_VERSION) throw Error('The agent did not accept ACP v1.');
   return info;
@@ -94,21 +95,50 @@ function toolResult(update, onEvent) {
   onEvent({ type: 'tool_result', id: update.toolCallId, error: update.status === 'failed', text: text ?? '' });
 }
 
-export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, images, resume, servers = [], onEvent, approve }) {
+export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, images, resume, servers = [], httpFallbacks, onEvent, approve, onReasoning }) {
   let sessionId, prompting = false;
-  const tools = new Set();
+  const tools = new Map();
+  const children = new Set();
   const { agent, stop, ready } = launch(provider, { cwd, env, token, bridge, confirmWorkspace: Boolean(provider.workspaceRevision), approve: async ({ sessionId: session, toolCall, options }) => {
-    if (!prompting || session !== sessionId) return cancelled;
+    if (!prompting || (session !== sessionId && !children.has(session))) return cancelled;
     const allow = options.find(option => option.kind === 'allow_once');
     const deny = options.find(option => option.kind === 'reject_once');
     const selected = allow && settings.permission !== 'read' && (provider.localCodex && settings.permission === 'yolo' || await approve(toolCall)) ? allow : deny;
     return selected ? { outcome: { outcome: 'selected', optionId: selected.optionId } } : cancelled;
   }, onUpdate: (session, update) => {
-    if (!prompting || session !== sessionId) return;
+    if (!prompting) return;
+    if (update.sessionUpdate === 'subagent_update' && (session === sessionId || children.has(session))) {
+      if (!update.sessionId || update.sessionId === sessionId) return;
+      children.add(update.sessionId);
+      const { state, stopReason } = update.state ?? {};
+      const status = state === 'idle' && stopReason
+        ? ({ error: 'error', refusal: 'error', cancelled: 'interrupted' }[stopReason] ?? 'done') : state;
+      onEvent({ type: 'delegate', id: update.sessionId, name: update.title, status });
+      return;
+    }
+    if (children.has(session)) {
+      if (update.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text') {
+        onEvent({ type: 'delegate', id: session, channel: 'reasoning', delta: update.content.text });
+      } else if (['tool_call', 'tool_call_update'].includes(update.sessionUpdate)) {
+        const status = { pending: 'running', in_progress: 'running', completed: 'done', failed: 'error' }[update.status];
+        onEvent({ type: 'delegate', id: session, tool: {
+          id: update.toolCallId, name: update.title ?? update.name, input: update.rawInput ?? undefined, status,
+        } });
+      }
+      return;
+    }
+    if (session !== sessionId) return;
     if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') onEvent({ type: 'delta', text: update.content.text });
     if (update.sessionUpdate === 'tool_call') {
-      tools.add(update.toolCallId);
+      tools.set(update.toolCallId, update.title);
       onEvent({ type: 'tool', id: update.toolCallId, name: update.title, input: update.rawInput ?? {}, native: update.kind === 'execute' });
+    }
+    const raw = update.rawInput;
+    if ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && raw?.agentsStates) {
+      for (const event of collabDelegates({
+        receivers: raw.receiverThreadIds, states: raw.agentsStates, mainIds: [sessionId, raw.senderThreadId],
+        spawning: tools.get(update.toolCallId) === 'spawnAgent', failed: update.status === 'failed',
+      })) if (!children.has(event.id)) onEvent(event);
     }
     if (tools.has(update.toolCallId) && ['tool_call', 'tool_call_update'].includes(update.sessionUpdate)) toolResult(update, onEvent);
   } });
@@ -122,7 +152,10 @@ export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, im
       if (!provider.endpoint) {
         for (const server of servers) {
           if (server.type === 'http' && info.agentCapabilities?.mcpCapabilities?.http !== true) {
-            onEvent({ type: 'notice', text: `MCP server "${server.name}" was skipped. This ACP agent does not support HTTP MCP.` });
+            const fallback = httpFallbacks?.[server.name];
+            if (fallback) mcpServers.push({ name: server.name, command: fallback.command, args: fallback.args,
+              env: Object.entries(fallback.env).map(([name, value]) => ({ name, value })) });
+            else onEvent({ type: 'notice', text: `MCP server "${server.name}" was skipped. This ACP agent does not support HTTP MCP.` });
           } else mcpServers.push(server);
         }
       }
@@ -134,8 +167,9 @@ export function runAcp({ provider, settings, cwd, env, bridge, token, prompt, im
       onEvent({ type: 'session', id: sessionId });
       let options = session?.configOptions;
       for (const [category, value] of [['model', settings.model], ['thought_level', settings.reasoning], ['mode', provider.localCodex ? codexAcpModes[settings.permission] : settings.acpMode]]) {
-        if (!value || (category === 'thought_level' && value === 'default')) continue;
         const config = selector(options, category);
+        if (category === 'thought_level') onReasoning?.(optionValues(config).map(option => option.value));
+        if (!value || (category === 'thought_level' && value === 'default')) continue;
         if (!config && category === 'model' && session?.models?.availableModels.some(item => item.modelId === value)) {
           await agent.request('session/set_model', { sessionId, modelId: value }, setup());
           continue;

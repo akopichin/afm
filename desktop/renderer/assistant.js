@@ -16,6 +16,11 @@ let nextQueuedMessage=0;
 const toolErrorClock=new Intl.DateTimeFormat(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
 const toolErrorOverrides=new Map(Array.isArray(state.assistantToolErrors)?state.assistantToolErrors:[]);
 let assistantInfo=null,chatDrawQueued=false,addingProvider=false,savedWorkspaceId='';
+let modelTestStatus='',modelTestRequest=0,modelTesting=false;
+const acpModelLevels=new Map();
+const isModelEndpoint=m=>['openai','openai-agent','anthropic-agent'].includes(m.kind);
+const canTestModel=m=>m&&(m.kind==='acp'||isModelEndpoint(m));
+const modelSelectionKey=settings=>JSON.stringify([settings?.provider,settings?.model,settings?.reasoning,settings?.codexTransport]);
 
 function authLabel(p){
   if(p.found===false)return 'Not installed';
@@ -60,12 +65,47 @@ function beginModelAction(button,label){
     if(label)button.replaceChildren(...content);
   };
 }
-async function configureAssistant(changes){
-  try{applyAssistantInfo(await nativeAFM.assistant.configure(changes))}catch(error){modelScan=error.message;drawSettings();showNativeError(error)}
+async function checkSelectedModel(force=false){
+  const request=++modelTestRequest;
+  const key=modelSelectionKey(assistantInfo?.settings);
+  const show=(message,busy=false)=>{
+    modelTestStatus=message;
+    modelTesting=busy;
+    setModelTestStatus($('model-test-status'),message,busy);
+  };
+  show('Testing…',true);
+  let result;
+  try{result=await nativeAFM.assistant.testModel(force)}
+  catch(error){result={ok:false,detail:ipcMessage(error)}}
+  if(request!==modelTestRequest||key!==modelSelectionKey(assistantInfo?.settings))return;
+  if(Array.isArray(result.levels)){
+    acpModelLevels.set(JSON.stringify([state.profile,assistantInfo.settings.model||'']),result.levels);
+    refreshProfileReasoning();
+  }
+  show(result.detail);
+  if(!result.ok&&(!$('settings').open||settingsTab!=='models'))showNativeError(result.detail);
+  return result;
+}
+async function configureAssistant(changes,{test=true}={}){
+  try{
+    const before=modelSelectionKey(assistantInfo?.settings);
+    const info=await nativeAFM.assistant.configure(changes);
+    const changed=before!==modelSelectionKey(info.settings);
+    if(changed){modelTestRequest++;modelTestStatus='';modelTesting=false}
+    applyAssistantInfo(info);
+    if(changed){
+      refreshProfileReasoning();
+      setModelTestStatus($('model-test-status'),modelTestStatus,modelTesting);
+      const m=profile();
+      if(test&&canTestModel(m)&&m.authState==='ready'&&(m.kind==='acp'||info.settings.model||m.catalog.some(item=>item.default)||m.catalog.length===1))
+        void checkSelectedModel();
+    }
+  }catch(error){modelScan=error.message;drawSettings();showNativeError(error)}
 }
 // Detection runs the CLIs, so it waits until the user opens the assistant or settings.
 function scanAssistant(){
-  modelScan='Scanning command-line agents…';
+  acpModelLevels.clear();
+  modelScan='Loading model providers…';
   assistantDiscovery.scanning??=nativeAFM.assistant.scan().then(info=>{
     applyAssistantInfo(info);
     const ready=info.providers.filter(p=>p.auth.state==='ready').map(p=>p.name);
@@ -147,12 +187,20 @@ function wireProviderForm(){
     modelScan='Checking '+name+'…';$('model-status').textContent=modelScan;
     try{
       const result=await nativeAFM.assistant.testProvider(id);
-      if(kind==='acp')applyAssistantInfo(await nativeAFM.assistant.state());
+      const info=await nativeAFM.assistant.state();
+      applyAssistantInfo(info);
+      const count=info.providers.find(provider=>provider.id===id)?.models?.length||0;
       modelScan=!result.found?'Not found on this machine.':!result.ok?result.auth.detail:kind==='acp'
         ?[name+' connected',result.version,result.capabilities?.image?'Images':null,result.capabilities?.resume?'Resume':null].filter(Boolean).join(' · ')
-        :`${name} ${result.version||''} is installed and signed in.`.replace('  ',' ');
+        :isModelEndpoint({kind})?`${result.auth.detail}. ${count===1?'1 model found.':count?count+' models found.':'The endpoint returned no models.'}`
+          :`${name} ${result.version||''} is installed and signed in.`.replace('  ',' ');
     }catch(error){modelScan=ipcMessage(error)}finally{finish()}
     refreshModelPanel();
+  };
+  const testReply=$('test-model-reply');
+  if(testReply)testReply.onclick=async()=>{
+    const finish=beginModelAction(testReply,'Testing…');
+    try{await checkSelectedModel(true)}finally{finish();refreshModelPanel()}
   };
   for(const button of $('settings-body').querySelectorAll('[data-edit-workspace]')){
     const id=button.dataset.editWorkspace,row=button.closest('.provider-row');
@@ -339,9 +387,30 @@ function messageHTML(msg){
 }
 let viewedAgent=null;
 function delegatedAgents(){
-  return assistantChat.messages.flatMap(message=>(message.tools||[])
-    .filter(tool=>tool.name==='task'||tool.name==='afm_run_start'||tool.name?.endsWith('__afm_run_start'))
-    .map(tool=>({ key:message.id+':'+tool.id, tool, message })));
+  const entries=new Map();
+  for(const message of assistantChat.messages){
+    for(const delegate of message.delegates||[]){
+      const key=delegate.ownerTool?message.id+':'+delegate.ownerTool:'delegate:'+delegate.id;
+      entries.set(key,{key,message,delegate:{...entries.get(key)?.delegate,...delegate}});
+    }
+    for(const tool of message.tools||[]){
+      const run=tool.name==='afm_run_start'||tool.name?.endsWith('__afm_run_start');
+      if(!run&&!['task','Task','Agent','start_async_task'].includes(tool.name))continue;
+      const key=message.id+':'+tool.id;
+      entries.set(key,{...entries.get(key),key,tool,message,run});
+    }
+  }
+  const states={running:'Running',done:'Finished',error:'Error',interrupted:'Interrupted',
+    idle:'Idle',requires_action:'Needs action'};
+  return [...entries.values()].map((entry,index)=>{
+    const {delegate,tool,run,message}=entry;
+    const state=delegate?.status??tool?.status;
+    const childEnded=['done','error','interrupted'].includes(state);
+    const parentEnded=['done','error','cancelled','yielded'].includes(message.status);
+    const finished=!run&&(childEnded||parentEnded);
+    return {...entry,label:delegate?.name||(run?'AFM run ':'Subagent ')+(index+1),
+      status:run&&tool.status==='done'?'Started':finished&&!childEnded?'Inactive':states[state]||'Status unavailable',finished};
+  }).filter(entry=>!entry.finished||entry.key===viewedAgent);
 }
 function closeAgentList(){
   const list=$('assistant-agents');
@@ -352,20 +421,27 @@ function chooseAgent(key){
   viewedAgent=key;closeAgentList();drawAssistant();
   (key?$('assistant-agent-bar'):$('chat-input')).focus();
 }
-function showAgentList(){
-  if(!$('tasks').hidden||!$('assistant-resume').hidden||!$('assistant-clear').hidden)return;
+function renderAgentList(agents){
   const list=$('assistant-agents');
+  const entries=[{key:null,label:'Main',status:'Primary assistant'},...agents];
+  const signature=JSON.stringify([viewedAgent,entries.map(({key,label,status})=>[key,label,status])]);
+  if(list.dataset.entries===signature)return;
+  list.dataset.entries=signature;
+  const focused=list.contains(document.activeElement)?document.activeElement.dataset.agent:null;
   list.replaceChildren();
-  const entries=[{key:null,label:'Main',status:'Primary assistant'},...delegatedAgents().map(({key,tool},i)=>({
-    key,label:(tool.name==='task'?'Subagent':'AFM run')+' '+(i+1),
-    status:tool.status==='done'?(tool.name==='task'?'Finished':'Started'):tool.status==='running'?'Running':'Error',
-  }))];
   for(const entry of entries){
     const button=document.createElement('button');
     button.type='button';button.textContent=entry.label+' · '+entry.status;
+    button.dataset.agent=entry.key??'';
     button.setAttribute('aria-current',String(entry.key===viewedAgent));
     button.onclick=()=>chooseAgent(entry.key);list.append(button);
   }
+  if(focused!==null)([...list.children].find(button=>button.dataset.agent===focused)||list.querySelector('[aria-current=true]'))?.focus();
+}
+function showAgentList(){
+  if(!$('tasks').hidden||!$('assistant-resume').hidden||!$('assistant-clear').hidden)return;
+  const list=$('assistant-agents');
+  renderAgentList(delegatedAgents());
   list.hidden=false;$('assistant-agent-bar').setAttribute('aria-expanded','true');
   list.querySelector('[aria-current=true]').focus();
 }
@@ -388,15 +464,22 @@ $('assistant')?.addEventListener('keydown',event=>{
 function drawAssistant(){
   const agents=delegatedAgents();
   const agent=agents.find(item=>item.key===viewedAgent);
-  if(!agent)viewedAgent=null;
+  const returnedToMain=!agent&&viewedAgent!==null;
+  if(returnedToMain)viewedAgent=null;
   const bar=$('assistant-agent-bar');
   if(bar)bar.innerHTML=`${agent?'Agent activity':'Main'} · ${agents.length} delegated <kbd>⇧ ↓</kbd>`;
+  if(!$('assistant-agents').hidden)renderAgentList(agents);
   if(agent){
-    $('messages').innerHTML=`<div class="bubble"><strong>Agent activity</strong>${assistantToolHTML(agent.message,agent.tool)}
-      ${agent.tool.status==='done'&&agent.tool.text?`<p>${esc(agent.tool.text)}</p>`:''}</div>`;
+    const reasoning=agent.delegate?.reasoning;
+    const tools=agent.delegate?.tools??[];
+    const body=agent.run?assistantToolHTML(agent.message,agent.tool)+(agent.tool.status==='done'?assistantTextHTML(agent.tool.text||''):'')
+      :(reasoning?`<div class="agent-detail-heading">Reasoning</div>${assistantTextHTML(reasoning)}`:'')
+        +(tools.length?`<div class="agent-detail-heading">Tool calls</div>${tools.map(tool=>assistantToolHTML(agent.message,tool)).join('')}`:'');
+    $('messages').innerHTML=`<div class="bubble"><strong>${esc(agent.label)} · ${esc(agent.status)}</strong>${body}</div>`;
     $('chat-form').hidden=true;return;
   }
   if($('assistant-clear')?.hidden&&$('assistant-resume')?.hidden)$('chat-form').hidden=false;
+  if(returnedToMain&&$('assistant-agents').hidden&&document.activeElement===$('assistant-agent-bar'))$('chat-input').focus();
   $('chat-context').textContent=[scopeText(), assistantChat.name].filter(Boolean).join(' · ');
   $('chat-model').textContent=effectiveLine()||'Choose a provider';
   const box=$('messages'),scrollTop=box.scrollTop,stick=box.scrollHeight-scrollTop-box.clientHeight<80;
@@ -771,6 +854,12 @@ function handleAssistantEvent(event){
     const reply=messages.find(m=>m.turnId===event.turnId&&m.role==='assistant');
     if(event.type==='delta'&&reply){reply.text+=event.text;if(event.segments)reply.segments=event.segments}
     else if(event.type==='tool'&&reply){reply.tools.push({...event.tool,status:'running'})}
+    else if(event.type==='delegate'&&reply){
+      const delegates=reply.delegates??=[];
+      const previous=delegates.find(item=>item.id===event.delegate.id);
+      if(previous)Object.assign(previous,event.delegate);
+      else delegates.push(event.delegate);
+    }
     else if(event.type==='tool_result'&&reply){
       const tool=reply.tools.find(t=>t.id===event.id);
       if(tool){

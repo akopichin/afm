@@ -1,7 +1,7 @@
 const MAX_LINE = 1 << 20;
 
 // Chat with an OpenAI-compatible endpoint: streamed text only, no tools and no file access.
-export function runEndpoint({ endpoint, apiKey, model, messages, onEvent, fetchImpl = fetch }) {
+export function runEndpoint({ endpoint, apiKey, model, reasoning, messages, onEvent, fetchImpl = fetch }) {
   const controller = new AbortController();
   let cancelled = false;
   const done = (async () => {
@@ -9,7 +9,7 @@ export function runEndpoint({ endpoint, apiKey, model, messages, onEvent, fetchI
       const response = await fetchImpl(endpoint + '/chat/completions', {
         method: 'POST', redirect: 'error', signal: controller.signal,
         headers: { 'content-type': 'application/json', authorization: 'Bearer ' + apiKey },
-        body: JSON.stringify({ model, messages, stream: true }),
+        body: JSON.stringify({ model, messages, stream: true, reasoning_effort: reasoning === 'default' ? undefined : reasoning }),
       });
       if (!response.ok) return { code: 1, error: Error(`The endpoint answered ${response.status}.`) };
       const decoder = new TextDecoder();

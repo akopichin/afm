@@ -12,10 +12,33 @@ function permissionDetail(m){
   if(m.id==='codex')return {ask:'--sandbox workspace-write · --ask-for-approval on-request',read:'--sandbox read-only',edit:'--sandbox workspace-write · --ask-for-approval never',yolo:'--dangerously-bypass-approvals-and-sandbox'}[mode];
   return 'Desktop tool permissions';
 }
-function reasoningOptions(m){
-  if(!isDemo)return option('default','Provider default',!m.reasoning||m.reasoning==='default')+m.levels.map(v=>option(v,v,v===m.reasoning)).join('');
-  const reasoning=m.id==='claude'?['low','medium','high','xhigh','max']:m.id==='codex'?['minimal','low','medium','high','xhigh']:['low','medium','high'];
-  return option('default','Provider default',!m.reasoning||m.reasoning==='default')+reasoning.map(v=>option(v,v,v===m.reasoning)).join('');
+function reasoningOptions(m,model=m.model,selected=m.reasoning){
+  const entry=m.catalog?.find(item=>item.id===model)||(!model||model==='CLI default'
+    ?m.catalog?.find(item=>item.default)||(m.catalog?.length===1?m.catalog[0]:null):null);
+  const discovered=!isDemo&&m.kind==='acp'?acpModelLevels.get(JSON.stringify([m.id,model==='CLI default'?'':model])):undefined;
+  const levels=isDemo?(m.id==='claude'?['low','medium','high','xhigh','max']:m.id==='codex'?['minimal','low','medium','high','xhigh']:['low','medium','high'])
+    :discovered??entry?.reasoning??m.levels;
+  const manual=!isDemo&&isModelEndpoint(m)&&!entry?.reasoning;
+  const choices=manual&&selected&&selected!=='default'?[...new Set([...levels,selected])]:levels;
+  return option('default','Provider default',!choices.includes(selected))+choices.map(v=>option(v,v,v===selected)).join('')
+    +(manual?option('__custom','Other level…',false):'');
+}
+function refreshProfileReasoning(){
+  const select=$('profile-effort');
+  if(!select)return;
+  select.innerHTML=reasoningOptions(profile());
+  $('profile-effort-custom').hidden=true;
+}
+function bindReasoningPicker(select,input,change,onCustom){
+  select.onchange=()=>{
+    input.hidden=select.value!=='__custom';
+    if(!input.hidden){input.value='';onCustom?.();input.focus();return}
+    change?.(select.value);
+  };
+  if(change)input.onchange=()=>{
+    const value=input.value.trim();
+    if(value&&input.reportValidity())change(value);
+  };
 }
 function modelOptions(m){
   const selected=m.model==='CLI default'?'':m.model;
@@ -25,28 +48,30 @@ function modelOptions(m){
   return option('',suggested?'Provider default · '+suggested.label:'Provider default',!pick)
     +models.map(v=>option(v.id,v.label||v.id,pick===v.id)).join('')+option('__custom','Custom model…',pick==='__custom');
 }
-function bindModelPicker(select,input,change){
+function bindModelPicker(select,input,change,onCustom){
   input.hidden=select.value!=='__custom';
   select.onchange=()=>{
     input.hidden=select.value!=='__custom';
-    if(!input.hidden){input.focus();input.select();return}
+    if(!input.hidden){onCustom?.();input.focus();input.select();return}
     input.value=select.value;
     change?.(input.value);
   };
 }
 function profileFields(m){
+  const toolPermissions=!isDemo&&(m.kind==='acp'||m.kind==='openai-agent'||m.kind==='anthropic-agent');
   return `<div class="profile-fields"><label>Model<select id="profile-model-list">${modelOptions(m)}</select><input id="profile-model" value="${esc(m.model==='CLI default'?'':m.model)}" placeholder="CLI default" autocomplete="off"></label>
-    <label>Reasoning<select id="profile-effort">${reasoningOptions(m)}</select></label>
+    <label>Reasoning<select id="profile-effort">${reasoningOptions(m)}</select><input id="profile-effort-custom" aria-label="Custom reasoning level" placeholder="e.g. medium" pattern="[a-zA-Z0-9_-]+" maxlength="32" hidden></label>
     ${m.agentModes?.length?`<label>Agent mode<select id="profile-acp-mode">${option('','Agent default',!m.acpMode)}${m.agentModes.map(mode=>option(mode.id,mode.label,mode.id===m.acpMode)).join('')}</select></label>`:''}
-    <label>${m.kind==='acp'?'AFM permissions':'Permissions'}<select id="profile-permissions">${Object.entries(permissionLabels).filter(([k])=>isDemo||m.permissions.includes(k)).map(([k,v])=>option(k,v,k===(m.permission||'ask'))).join('')}</select></label></div>
+    <label>${toolPermissions?'AFM tool permissions':'Permissions'}<select id="profile-permissions">${Object.entries(permissionLabels).filter(([k])=>isDemo||m.permissions.includes(k)).map(([k,v])=>option(k,toolPermissions&&k==='yolo'?'Allow AFM actions without approval':v,k===(m.permission||'ask'))).join('')}</select></label></div>
     <p class="hint profile-mode" id="permission-detail">${esc(permissionDetail(m))}</p>`;
 }
 function wireProfileFields(){
   const m=profile();
-  bindModelPicker($('profile-model-list'),$('profile-model'),model=>{if(isDemo){m.model=model||'CLI default';save();drawChat()}else configureAssistant({model})});
+  const chooseModel=model=>configureAssistant(canTestModel(m)?{model,reasoning:'default'}:{model});
+  bindModelPicker($('profile-model-list'),$('profile-model'),model=>{if(isDemo){m.model=model||'CLI default';save();drawChat()}else chooseModel(model)});
   if(!isDemo){
-    $('profile-model').onchange=e=>configureAssistant({model:e.target.value.trim()});
-    $('profile-effort').onchange=e=>configureAssistant({reasoning:e.target.value});
+    $('profile-model').onchange=e=>chooseModel(e.target.value.trim());
+    bindReasoningPicker($('profile-effort'),$('profile-effort-custom'),reasoning=>configureAssistant({reasoning}));
     if($('profile-acp-mode'))$('profile-acp-mode').onchange=e=>configureAssistant({acpMode:e.target.value});
     $('profile-permissions').onchange=e=>configureAssistant({permission:e.target.value});
     return;
@@ -319,7 +344,8 @@ $('workflows').onclick=e=>{
 function openSettings(first=false,tab='models'){
   onboarding=first;settingsTab=tab;sourceMessage='';drawSettings();
   if(!$('settings').open)$('settings').showModal();
-  if(first)scanModels();
+  if(!isDemo&&tab==='models')ensureAssistantScan();
+  else if(first)scanModels();
   loadSettingsData();
 }
 // Library sources and Git preference are stored by the main process.
@@ -355,7 +381,8 @@ function drawSettings(){
     if(body.querySelector('.workspace-editor[aria-busy="true"]'))return;
     body.innerHTML=tabs+`<p class="muted">${onboarding?'Choose the model for your desktop assistant.':'Default assistant model'}</p>
       <div class="choices">${state.models.map(providerRow).join('')}</div>
-      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':`<button id="test-model">${profile().kind==='acp'?'Test connection':'Test sign-in'}</button>`}<button id="add-model">＋ Other model</button></div><p class="hint" id="model-status" role="status">${esc(modelScan)}</p>
+      ${profileFields(profile())}<div class="links"><button id="scan-models">Scan again</button>${isDemo?'':`<button id="test-model">Check connection</button>${canTestModel(profile())?'<button id="test-model-reply" title="Send a short model request using the selected settings">Test reply</button>':''}`}<button id="add-model">＋ Other model</button></div>
+      ${isDemo?'':`<p class="hint model-test-status" id="model-test-status" role="status" aria-busy="${modelTesting}"${modelTestStatus?'':' hidden'}>${esc(modelTestStatus)}</p>`}<p class="hint" id="model-status" role="status">${esc(modelScan)}</p>
       ${isDemo?demoModelForm:providerForm()}
       ${onboarding?'<div class="actions"><button class="primary" id="finish-setup">Continue to projects →</button></div>':''}`;
     wireProfileFields();
@@ -611,7 +638,10 @@ $('settings').addEventListener('close',()=>{
 document.addEventListener('click',async e=>{
   const el=e.target.closest('button');if(!el||el.disabled)return;
   if(el.hasAttribute('data-close'))el.closest('dialog')?.close();
-  if(el.dataset.panel){settingsTab=el.dataset.panel;drawSettings()}
+  if(el.dataset.panel){
+    settingsTab=el.dataset.panel;drawSettings();
+    if(!isDemo&&settingsTab==='models')ensureAssistantScan();
+  }
   if(el.dataset.profile&&!isDemo){
     const finish=beginModelAction(el);
     try{await configureAssistant({provider:el.dataset.profile})}finally{finish();refreshModelPanel()}
@@ -701,6 +731,59 @@ document.querySelector('.suggestions').onclick=e=>{if(e.target.dataset.prompt)se
 document.addEventListener('workspace-change',drawChat);
 $('launch-hint').title=`${modKey} Shift Enter`;
 document.querySelectorAll('[data-start]').forEach(el=>el.title=`New run (${modKey} Shift Enter)`);
+let quickTestTimer,quickTestVersion=0,quickTestedKey='';
+function setModelTestStatus(status,text,busy){
+  if(!status)return;
+  status.textContent=text;
+  status.hidden=!text;
+  status.setAttribute('aria-busy',String(busy));
+}
+function quickSelection(){
+  const reasoning=$('quick-effort').value==='__custom'?$('quick-effort-custom').value.trim():$('quick-effort').value;
+  return {provider:$('quick-agent').value,model:$('quick-model-id').value.trim(),reasoning};
+}
+function resetQuickTest(){
+  clearTimeout(quickTestTimer);
+  quickTestVersion++;
+  quickTestedKey='';
+  $('quick-test-model').disabled=false;
+  $('quick-apply-model').disabled=false;
+  setModelTestStatus($('quick-model-test-status'),'',false);
+}
+async function testQuickSelection(force=false){
+  if(!$('quick-model').open)return;
+  const settings=quickSelection();
+  if(!settings.reasoning)return;
+  clearTimeout(quickTestTimer);
+  $('quick-model-form').dataset.edited='true';
+  const version=++quickTestVersion;
+  quickTestedKey=JSON.stringify(settings);
+  const button=$('quick-test-model');
+  button.disabled=true;
+  $('quick-apply-model').disabled=true;
+  const status=$('quick-model-test-status');
+  setModelTestStatus(status,'Testing…',true);
+  let result;
+  try{result=await nativeAFM.assistant.testModel(force,settings)}
+  catch(error){result={detail:ipcMessage(error)}}
+  if(version!==quickTestVersion||!$('quick-model').open)return;
+  if(Array.isArray(result.levels)){
+    acpModelLevels.set(JSON.stringify([settings.provider,settings.model]),result.levels);
+    const m=state.models.find(item=>item.id===settings.provider);
+    if(m)$('quick-effort').innerHTML=reasoningOptions(m,settings.model,settings.reasoning);
+  }
+  button.disabled=false;
+  $('quick-apply-model').disabled=false;
+  setModelTestStatus(status,result.detail,false);
+}
+function scheduleQuickTest(){
+  resetQuickTest();
+  const settings=quickSelection();
+  const m=state.models.find(item=>item.id===settings.provider);
+  if(isDemo||!canTestModel(m)||m.authState!=='ready'||!settings.reasoning)return;
+  if(m.kind==='acp'||settings.model||m.catalog.some(item=>item.default)||m.catalog.length===1)
+    quickTestTimer=setTimeout(testQuickSelection,180);
+}
 function showQuickModel(){
   if(document.querySelector('dialog[open]'))return;
   delete $('quick-model-form').dataset.edited;
@@ -710,17 +793,33 @@ function showQuickModel(){
 }
 function fillQuickModel(){
   const m=state.models.find(item=>item.id===$('quick-agent').value);
+  resetQuickTest();
+  $('quick-test-model').hidden=isDemo||!canTestModel(m);
   $('quick-model-list').innerHTML=modelOptions(m);
-  bindModelPicker($('quick-model-list'),$('quick-model-id'));
+  const effort=$('quick-effort'), custom=$('quick-effort-custom');
+  const refreshEffort=(model,selected)=>{
+    custom.hidden=true;
+    effort.innerHTML=reasoningOptions(m,model,selected);
+  };
+  const selectModel=model=>{refreshEffort(model,effort.value);scheduleQuickTest()};
+  bindModelPicker($('quick-model-list'),$('quick-model-id'),selectModel,resetQuickTest);
   $('quick-model-id').value=m.model==='CLI default'?'':m.model;
-  $('quick-effort').innerHTML=reasoningOptions(m);
+  $('quick-model-id').onchange=()=>selectModel($('quick-model-id').value.trim());
+  refreshEffort(m.model,m.reasoning);
+  bindReasoningPicker(effort,custom,scheduleQuickTest,resetQuickTest);
+  custom.oninput=resetQuickTest;
 }
-$('quick-agent').onchange=fillQuickModel;
+$('quick-agent').onchange=()=>{fillQuickModel();scheduleQuickTest()};
+$('quick-test-model').onclick=()=>testQuickSelection(true);
+$('quick-model').addEventListener('close',resetQuickTest);
 $('quick-model-form').addEventListener('input',()=>{$('quick-model-form').dataset.edited='true'});
 $('quick-model-form').onsubmit=e=>{
   e.preventDefault();
   if(!isDemo){
-    configureAssistant({provider:$('quick-agent').value,model:$('quick-model-id').value.trim(),reasoning:$('quick-effort').value});
+    if($('quick-apply-model').disabled)return;
+    const settings=quickSelection();
+    if(!settings.reasoning)return $('quick-effort-custom').focus();
+    configureAssistant(settings,{test:quickTestedKey!==JSON.stringify(settings)});
     $('quick-model').close();return;
   }
   const m=state.models.find(item=>item.id===$('quick-agent').value);

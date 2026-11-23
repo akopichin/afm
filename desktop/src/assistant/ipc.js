@@ -14,6 +14,9 @@ export function registerAssistantIpc(handle, assistant, publish) {
   handle('assistant:remove-provider', id => assistant.removeProvider(String(id)));
   handle('assistant:update-provider-workspace', (id, cwd) => assistant.updateProviderWorkspace(String(id), String(cwd ?? '')));
   handle('assistant:test-provider', id => assistant.testProvider(String(id)));
+  handle('assistant:test-model', (force, draft) => assistant.testModel(force === true, draft == null ? undefined : {
+    provider: draft.provider, model: draft.model, reasoning: draft.reasoning,
+  }));
   handle('assistant:mcp-list', () => assistant.mcp.list());
   handle('assistant:mcp-save', input => assistant.mcp.save({
     id: input?.id, name: input?.name, transport: input?.transport, projectId: input?.projectId,

@@ -77,6 +77,7 @@ if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
     removeProvider:id=>ipcRenderer.invoke('assistant:remove-provider',id),
     updateProviderWorkspace:(id,cwd)=>ipcRenderer.invoke('assistant:update-provider-workspace',id,cwd),
     testProvider:id=>ipcRenderer.invoke('assistant:test-provider',id),
+    testModel:(force,draft)=>ipcRenderer.invoke('assistant:test-model',force,draft),
     mcpList:()=>ipcRenderer.invoke('assistant:mcp-list'),
     mcpSave:input=>ipcRenderer.invoke('assistant:mcp-save',input),
     mcpImport:(text,projectId)=>ipcRenderer.invoke('assistant:mcp-import',text,projectId),

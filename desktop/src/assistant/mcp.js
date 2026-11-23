@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { parse } from 'yaml';
 import { desktopDir, Mutex, readJSON, writeJSON } from '../files.js';
 import { belongsTo } from '../projects.js';
 import { findExecutable } from './detect.js';
+import { openMcp } from './mcp-client.js';
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SECRET_ENV = /TOKEN|PASSWORD|SECRET|CREDENTIAL|(?:^|_)KEY(?:_|$)/i;
@@ -225,6 +223,7 @@ export class McpServers {
   async forScope(scope, env) {
     return this.lock.run(async () => {
       const configs = [], secrets = [], notices = [], revisions = [];
+      const credentials = new Map();
       let usesEnvironment = false, hasFileCredentials = false;
       for (const server of await this.#read()) {
         if (server.projectId && server.projectId !== scope.projectId) {
@@ -235,13 +234,14 @@ export class McpServers {
         try {
           const resolved = await this.#resolve(server, env);
           configs.push(resolved.config);
+          credentials.set(server.name, resolved.secrets);
           secrets.push(...resolved.secrets);
           revisions.push(server.revision);
           usesEnvironment ||= Boolean(server.env?.some(item => item.ref) || server.command && !path.isAbsolute(server.command));
           hasFileCredentials ||= Boolean(server.tokenFile || server.env?.some(item => item.file));
         } catch (error) { notices.push(`MCP server "${server.name}" was skipped. ${error.message}`); }
       }
-      return { configs, secrets, notices, revisions, usesEnvironment, hasFileCredentials };
+      return { configs, secrets, credentials, notices, revisions, usesEnvironment, hasFileCredentials };
     });
   }
 
@@ -273,25 +273,12 @@ export class McpServers {
 }
 
 async function checkConnection(config, env, cwd) {
-  const signal = AbortSignal.timeout(config.type === 'http' ? 8000 : 30000);
-  const transport = config.type === 'http'
-    ? new StreamableHTTPClientTransport(new URL(config.url), {
-      requestInit: { headers: Object.fromEntries(config.headers.map(({ name, value }) => [name, value])), redirect: 'error' },
-      fetch: (url, init) => fetch(url, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal }),
-    })
-    : new StdioClientTransport({ command: config.command, args: config.args, cwd, stderr: 'ignore',
-      env: { ...(env.PATH ? { PATH: env.PATH } : {}), ...Object.fromEntries(config.env.map(({ name, value }) => [name, value])) } });
-  const client = new Client({ name: 'afm-desktop', version: '1' });
+  const { ready, close } = openMcp(config, { cwd, env });
   try {
-    await client.connect(transport, { signal });
+    await ready;
+    await close();
     return { state: 'connected' };
   } catch (error) {
-    const detail = signal.aborted ? 'The MCP handshake timed out.'
-      : [401, 403].includes(error.code) ? 'The server rejected authentication.'
-        : 'The MCP handshake failed. Check the server settings and make sure it is reachable.';
-    return { state: 'error', detail };
-  } finally {
-    if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) await transport.terminateSession().catch(() => {});
-    await client.close().catch(() => {});
+    return { state: 'error', detail: error.message };
   }
 }

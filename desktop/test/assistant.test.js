@@ -72,6 +72,76 @@ test('a missing CLI and a missing login are reported with what to do', async t =
   assert.deepEqual(await ctx.invocations(), [], 'no provider process was started without credentials');
 });
 
+test('Codex uses the catalog default and its supported effort when its configuration is incompatible', async t => {
+  const ctx = await providerHome(t, { FAKE_CODEX_MODEL: 'unavailable', FAKE_PAUSE: '5', ...API_KEYS });
+  const { assistant, events } = makeAssistant(t, ctx);
+  await assistant.configure({ provider: 'codex', permission: 'read' });
+  const codex = (await assistant.scan()).providers.find(provider => provider.id === 'codex');
+  assert.deepEqual(codex.models[0].reasoning, ['low', 'high']);
+  await turn(assistant, events, 'hello');
+  const { args } = (await ctx.invocations()).at(-1);
+  assert.equal(args[args.indexOf('-m') + 1], 'gpt-test');
+  assert.ok(args.includes('model_reasoning_effort="low"'));
+  assert.equal((await assistant.state()).settings.model, '');
+});
+
+test('Codex discovers native subagents from the current turn in its JSONL session log', async t => {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { watchCodexDelegates } = await import('../src/assistant/codex-delegates.js');
+  const ctx = await providerHome(t);
+  const home = path.join(ctx.home, '.codex', 'sessions');
+  const directory = path.join(home, '2026', '11', '23');
+  await mkdir(directory, { recursive: true });
+  const session = '12345678-1234-1234-1234-123456789abc';
+  const event = (agent, time) => JSON.stringify({ type: 'event_msg', timestamp: new Date(time),
+    payload: { type: 'item_completed', item: { type: 'SubAgentActivity', agent_thread_id: agent, agent_path: '/root/' + agent, kind: 'started' } } });
+  const startedAt = Date.now();
+  await writeFile(path.join(directory, 'rollout-session-' + session + '.jsonl'),
+    [event('old', startedAt - 1000), event('first', startedAt), event('second', startedAt), ''].join('\n'));
+  const seen = [];
+  const watcher = watchCodexDelegates({ home, startedAt, onEvent: item => seen.push(item) });
+  watcher.start(session);
+  await watcher.stop();
+  assert.deepEqual(seen.map(item => [item.name, item.status]), [['first', 'running'], ['second', 'running']]);
+});
+
+test('the Codex subagent view reads the published reasoning summary', async () => {
+  const { codexRolloutDelegate } = await import('../src/assistant/codex-delegates.js');
+  const time = new Date();
+  const event = JSON.stringify({ type: 'event_msg', timestamp: time,
+    payload: { type: 'item_completed', item: { type: 'Reasoning', summary_text: ['A short summary.'], raw_content: ['Raw content.'] } } });
+  assert.deepEqual(codexRolloutDelegate(event, +time, 'child', true),
+    { type: 'delegate', id: 'child', channel: 'reasoning', delta: 'A short summary.\n\n' });
+});
+
+test('the Codex subagent view reads tool calls and skips opaque messages', async () => {
+  const { codexRolloutDelegate } = await import('../src/assistant/codex-delegates.js');
+  const time = new Date();
+  const parse = (type, payload) => codexRolloutDelegate(JSON.stringify({ type, timestamp: time, payload }), +time, 'first-id', true);
+  assert.deepEqual(parse('response_item', { type: 'custom_tool_call', call_id: 'shell', name: 'exec', input: 'pwd' }),
+    { type: 'delegate', id: 'first-id', tool: { id: 'shell', name: 'exec', input: 'pwd', status: 'running' } });
+  assert.deepEqual(parse('response_item', { type: 'custom_tool_call_output', call_id: 'shell', output: 'done' }),
+    { type: 'delegate', id: 'first-id', tool: { id: 'shell', status: 'done' } });
+  const opaque = 'gAAAAA' + 'a'.repeat(95) + '=';
+  const encoded = parse('response_item', { type: 'function_call', call_id: 'message', name: 'send_message',
+    arguments: JSON.stringify({ target: '/root', message: opaque }) });
+  assert.equal(encoded, null);
+  for (const [kind, agent_thread_id, agent_path] of [['interacted', 'second-id', '/root/second'], ['started', 'root-id', '/root']]) {
+    assert.equal(parse('event_msg', { type: 'item_completed', item: { type: 'SubAgentActivity', kind, agent_thread_id, agent_path } }), null);
+  }
+  assert.deepEqual(parse('event_msg', { type: 'turn_aborted' }), { type: 'delegate', id: 'first-id', status: 'interrupted' });
+});
+
+test('Claude CLI routes a child Bash call to its parent Agent tool', async () => {
+  const { ClaudeParser } = await import('../src/assistant/stream.js');
+  const parser = new ClaudeParser();
+  const event = { type: 'assistant', parent_tool_use_id: 'delegate-id', message: {
+    content: [{ type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'pwd' } }],
+  } };
+  assert.deepEqual(parser.parse(JSON.stringify(event)), [{ type: 'delegate', id: 'delegate-id', ownerTool: true,
+    tool: { id: 'child-bash', name: 'Bash', input: { command: 'pwd' }, status: 'running', native: true } }]);
+});
+
 for (const kind of ['claude', 'codex']) {
   test(`a pasted image reaches the ${kind} CLI and the Desktop transcript stores only its count`, async t => {
     const ctx = await providerHome(t, { ...API_KEYS, FAKE_PAUSE: '5' });

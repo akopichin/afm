@@ -14,7 +14,7 @@ const AGENT = `
 import { createInterface } from 'node:readline';
 const send = packet => console.log(JSON.stringify({ jsonrpc: '2.0', ...packet }));
 const settings = [
-  { type: 'select', category: 'model', id: 'm', name: 'Model', currentValue: 'example', options: [{ value: 'example', name: 'Example' }] },
+  { type: 'select', category: 'model', id: 'm', name: 'Model', currentValue: 'example', options: [{ value: 'example', name: 'Example' }, { value: 'other', name: 'Other' }] },
   { type: 'select', category: 'thought_level', id: 'r', name: 'Reasoning', currentValue: 'low', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] },
   { type: 'select', category: 'mode', id: 'access', name: 'Access', currentValue: 'readonly', options: [{ value: 'readonly', name: 'Read only' }] },
 ];
@@ -28,10 +28,28 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (msg.method === 'session/new') result({ sessionId: 'fake-session', configOptions: settings });
   if (msg.method === 'session/set_config_option') {
     settings.find(option => option.id === msg.params.configId).currentValue = msg.params.value;
+    if (settings[0].currentValue === 'other' && msg.params.configId === 'm')
+      Object.assign(settings[1], { currentValue: 'max', options: [{ value: 'max', name: 'Max' }] });
     result({ configOptions: settings });
   }
   if (msg.method === 'session/prompt') {
     promptId = msg.id;
+    if (settings[0].currentValue === 'other') {
+      if (settings[1].currentValue !== 'max' || !msg.params.prompt[0].text.startsWith('Reply with OK'))
+        send({ id: promptId, error: { code: -32602, message: 'Unexpected model test' } });
+      else {
+        if (!process.argv.includes('empty-reply')) update('OK');
+        result({ stopReason: 'end_turn' });
+      }
+      continue;
+    }
+    notify({ sessionUpdate: 'subagent_update', sessionId: 'child-session-1', title: 'Reporter', state: { state: 'running' } });
+    send({ method: 'session/update', params: { sessionId: 'child-session-1', update: {
+      sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Check the child task.' } } } });
+    for (const [sessionUpdate, status] of [['tool_call', 'in_progress'], ['tool_call_update', 'completed']]) {
+      send({ method: 'session/update', params: { sessionId: 'child-session-1', update: {
+        sessionUpdate, toolCallId: 'child-bash', title: 'Bash', rawInput: { command: 'pwd' }, status } } });
+    }
     if (settings[1].currentValue !== 'high' || !msg.params.prompt.some(content => content.type === 'image')) {
       send({ id: promptId, error: { code: -32602, message: 'Missing image or reasoning' } });
       continue;
@@ -40,12 +58,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     update('update.');
     for (const toolCallId of ['a', 'b']) notify({ sessionUpdate: 'tool_call', toolCallId, title: toolCallId, status: 'in_progress' });
     notify({ sessionUpdate: 'tool_call_update', toolCallId: 'b', status: 'failed' });
-    send({ id: 'permission', method: 'session/request_permission', params: { sessionId: 'fake-session', toolCall: { toolCallId: 'command', title: 'Read project', kind: 'read' }, options: [
+    send({ id: 'permission', method: 'session/request_permission', params: { sessionId: 'child-session-1', toolCall: { toolCallId: 'command', title: 'Read project', kind: 'read' }, options: [
       { optionId: 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
     ] } });
   }
   if (msg.id === 'permission' && msg.result?.outcome?.optionId === 'allow') {
     update(' Second update.');
+    notify({ sessionUpdate: 'subagent_update', sessionId: 'child-session-1', state: { state: 'idle', stopReason: 'end_turn' } });
     notify({ sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'failed' });
     send({ id: promptId, result: { stopReason: 'end_turn' } });
   }
@@ -82,6 +101,13 @@ test('ACP provider discovers controls, sends a selected model and image, and awa
   assert.equal(done.type, 'done', done.message);
   assert.equal(done.reply.text, 'First update. Second update.');
   const saved = (await assistant.history()).at(-1);
+  assert.deepEqual(saved.delegates.map(({ name, status, reasoning }) => ({ name, status, reasoning })),
+    [{ name: 'Reporter', status: 'done', reasoning: 'Check the child task.' }]);
+  assert.doesNotMatch(saved.text, /Check the child task/);
+  assert.deepEqual(saved.delegates[0].tools.map(({ name, status, input }) => ({ name, status, input })),
+    [{ name: 'Bash', status: 'done', input: '{"command":"pwd"}' }]);
+  assert.ok(!saved.tools.some(tool => tool.name === 'Bash'));
+  assert.doesNotMatch(JSON.stringify(saved.delegates), /child-session-1/);
   assert.deepEqual(saved.tools.map(({ id, offset, order }) => ({ id, offset, order })), [
     { id: 'a', offset: 'First update.'.length, order: 1 },
     { id: 'b', offset: 'First update.'.length, order: 2 },
@@ -93,6 +119,24 @@ test('ACP provider discovers controls, sends a selected model and image, and awa
   assert.deepEqual(saved.segments, [
     { offset: 0, at: new Date(now).toISOString() }, { offset: 13, at: new Date(now + 31000).toISOString() },
   ]);
+});
+
+test('a reply probe discovers ACP reasoning levels after changing the model', async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'acp-test-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const fake = path.join(home, 'agent.mjs');
+  await writeFile(fake, AGENT);
+  const { assistant } = makeAssistant(t, { home, env: process.env });
+  const id = 'model-test-acp';
+  await assistant.settings.addProvider({ name: 'Test ACP', kind: 'acp', executable: process.execPath, args: [fake] }, id);
+  await assistant.configure({ provider: id, model: 'other' });
+  assert.deepEqual(await assistant.testModel(), { ok: true, detail: 'Test request succeeded.', levels: ['max'] });
+  const empty = 'empty-reply-acp';
+  await assistant.settings.addProvider({ name: 'Empty ACP', kind: 'acp',
+    executable: process.execPath, args: [fake, 'empty-reply'] }, empty);
+  await assistant.configure({ provider: empty, model: 'other' });
+  assert.deepEqual(await assistant.testModel(), { ok: false, detail: 'The ACP agent returned no model response.', levels: ['max'] });
+  assert.deepEqual(await assistant.history(), []);
 });
 
 

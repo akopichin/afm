@@ -1,9 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { isDelegationTool } from './stream.js';
+import { deepMcpTools } from './deep-mcp.js';
 
-export const isAgentEndpoint = kind => kind === 'openai-agent' || kind === 'anthropic-agent';
-const anthropicBase = endpoint => endpoint.replace(/\/v1$/, '');
-const noRedirect = (input, init) => fetch(input, { ...init, redirect: 'error' });
+import { anthropicBase, noRedirect } from './model-catalog.js';
+
 function anthropicFetch(apiKey) {
   return (input, init) => {
     const headers = new Headers(init?.headers ?? input?.headers);
@@ -13,37 +14,60 @@ function anthropicFetch(apiKey) {
   };
 }
 
-export async function endpointModels(provider, apiKey, signal = AbortSignal.timeout(4000)) {
-  const anthropic = provider.kind === 'anthropic-agent';
-  const url = anthropic ? anthropicBase(provider.endpoint) + '/v1/models' : provider.endpoint + '/models';
-  const headers = anthropic ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' } : { authorization: 'Bearer ' + apiKey };
-  const response = await noRedirect(url, { headers, signal });
-  if ([401, 403].includes(response.status)) throw Error('The endpoint rejected the API key.');
-  if ([404, 405, 501].includes(response.status)) return [];
-  if (!response.ok) throw Error(`The model catalog returned HTTP ${response.status}.`);
-  const body = await response.json();
-  return (Array.isArray(body.data) ? body.data : []).filter(item => typeof item?.id === 'string')
-    .map(item => ({ id: item.id, label: item.display_name || item.id }));
+function parentDelegate(delegates, namespace) {
+  while (namespace?.includes('|')) {
+    namespace = namespace.slice(0, namespace.lastIndexOf('|'));
+    if (delegates.has(namespace)) return delegates.get(namespace);
+  }
 }
 
-export function runDeepAgent({ provider, apiKey, modelId, systemPrompt, messages, bridge, onEvent }) {
+async function endpointModel({ provider, apiKey, modelId, reasoning, maxTokens }) {
+  const effort = reasoning && reasoning !== 'default' ? reasoning : undefined;
+  if (provider.kind === 'anthropic-agent') {
+    const { ChatAnthropic } = await import('@langchain/anthropic');
+    return new ChatAnthropic({
+      model: modelId, apiKey, anthropicApiUrl: anthropicBase(provider.endpoint), clientOptions: { fetch: anthropicFetch(apiKey) },
+      maxRetries: 0, maxTokens, ...(effort ? { outputConfig: { effort } } : {}),
+    });
+  }
+  const { ChatOpenAI } = await import('@langchain/openai');
+  return new ChatOpenAI({
+    model: modelId, apiKey, configuration: { baseURL: provider.endpoint, fetch: noRedirect },
+    useResponsesApi: false, maxRetries: 0, maxTokens,
+    // Compatible gateways can expose reasoning models under IDs the OpenAI client does not recognize.
+    ...(effort ? { modelKwargs: { reasoning_effort: effort } } : {}),
+  });
+}
+
+function replyText(content) {
+  return typeof content === 'string' ? content : (content ?? []).filter(block => block.type === 'text').map(block => block.text).join('');
+}
+
+export async function testEndpointModel(selection, prompt, signal) {
+  const model = await endpointModel({ ...selection, maxTokens: 128 });
+  const stream = await model.stream([{ role: 'user', content: prompt }], { signal });
+  let received = false;
+  for await (const chunk of stream) {
+    received ||= Boolean(replyText(chunk.content).trim());
+  }
+  signal.throwIfAborted();
+  if (!received) throw Error('The endpoint returned no model response.');
+}
+
+export function runDeepAgent({ provider, apiKey, modelId, reasoning, systemPrompt, messages, bridge, mcp, onEvent }) {
   const controller = new AbortController();
   const done = (async () => {
-    let client;
+    let client, external;
     try {
       const [{ createDeepAgent }, { DynamicStructuredTool }] = await Promise.all([
         import('deepagents'), import('@langchain/core/tools'),
       ]);
-      const model = provider.kind === 'anthropic-agent'
-        ? new (await import('@langchain/anthropic')).ChatAnthropic({
-          model: modelId, apiKey, anthropicApiUrl: anthropicBase(provider.endpoint), clientOptions: { fetch: anthropicFetch(apiKey) },
-          maxRetries: 0,
-        })
-        : new (await import('@langchain/openai')).ChatOpenAI({
-          model: modelId, apiKey, configuration: { baseURL: provider.endpoint, fetch: noRedirect },
-          useResponsesApi: false, maxRetries: 0,
-        });
+      const model = await endpointModel({ provider, apiKey, modelId, reasoning });
       const tools = [];
+      if (mcp?.servers.length) {
+        external = deepMcpTools(DynamicStructuredTool, mcp, controller.signal);
+        tools.push(...external.tools);
+      }
       if (bridge) {
         client = new Client({ name: 'afm-desktop-deep-agent', version: '1' });
         controller.signal.throwIfAborted();
@@ -61,20 +85,43 @@ export function runDeepAgent({ provider, apiKey, modelId, systemPrompt, messages
         }
       }
       const agent = createDeepAgent({ model, systemPrompt, tools });
-      const calls = new Set();
+      const calls = new Map();
+      const delegates = new Map();
       const stream = await agent.streamEvents({ messages }, { version: 'v2', signal: controller.signal });
       for await (const event of stream) {
-        if (event.event === 'on_chat_model_stream' && event.metadata?.langgraph_node === 'model_request'
-          && !event.metadata?.langgraph_checkpoint_ns?.includes('|')) {
+        const namespace = event.metadata?.langgraph_checkpoint_ns;
+        if (event.event === 'on_chat_model_stream' && event.metadata?.langgraph_node === 'model_request') {
           const { content } = event.data.chunk;
-          const text = typeof content === 'string' ? content : content?.filter(block => block.type === 'text').map(block => block.text).join('');
-          if (text) onEvent({ type: 'delta', text });
+          if (namespace?.includes('|')) {
+            const owner = parentDelegate(delegates, namespace);
+            const delta = Array.isArray(content) && content.map(block => block.type === 'thinking' ? block.thinking
+              : block.type === 'reasoning' ? block.reasoning : '').join('');
+            if (owner && delta) onEvent({ type: 'delegate', id: owner, ownerTool: true, channel: 'reasoning', delta });
+          } else {
+            const text = replyText(content);
+            if (text) onEvent({ type: 'delta', text });
+          }
         } else if (event.event === 'on_tool_start') {
-          calls.add(event.run_id);
-          onEvent({ type: 'tool', id: event.run_id, name: event.name, input: event.data.input, native: true });
-        } else if (event.event === 'on_tool_end' && calls.delete(event.run_id)) {
+          // JS stream events identify nested graphs by checkpoint namespace.
+          const owner = parentDelegate(delegates, namespace);
+          const createsDelegate = isDelegationTool(event.name);
+          calls.set(event.run_id, { owner, main: !owner || createsDelegate, namespace });
+          if (createsDelegate && namespace) delegates.set(namespace, event.run_id);
+          if (owner) onEvent({ type: 'delegate', id: owner, ownerTool: true, tool: {
+            id: event.run_id, name: event.name, input: event.data.input, status: 'running', native: true,
+          } });
+          if (!owner || createsDelegate)
+            onEvent({ type: 'tool', id: event.run_id, name: event.name, input: event.data.input, native: true });
+        } else if (['on_tool_end', 'on_tool_error'].includes(event.event) && calls.has(event.run_id)) {
+          const { owner, main, namespace } = calls.get(event.run_id);
+          calls.delete(event.run_id);
+          if (delegates.get(namespace) === event.run_id) delegates.delete(namespace);
           const output = event.data.output;
-          onEvent({ type: 'tool_result', id: event.run_id, error: output?.status === 'error',
+          const error = event.event === 'on_tool_error' || output?.status === 'error';
+          if (owner) onEvent({ type: 'delegate', id: owner, ownerTool: true, tool: {
+            id: event.run_id, status: error ? 'error' : 'done', native: true,
+          } });
+          if (main) onEvent({ type: 'tool_result', id: event.run_id, error,
             text: typeof output?.content === 'string' ? output.content : JSON.stringify(output?.content ?? '') });
         }
       }
@@ -82,7 +129,7 @@ export function runDeepAgent({ provider, apiKey, modelId, systemPrompt, messages
     } catch (error) {
       return controller.signal.aborted ? { cancelled: true } : { error };
     } finally {
-      await client?.close();
+      await Promise.all([external?.close(), client?.close()]);
     }
   })();
   return { done, cancel: () => controller.abort() };
