@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, continueStage, pauseStage, reviseStage } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList, canAttachHelper } from '../components/stages-list'
@@ -370,8 +370,8 @@ export function App(): ReactElement {
     workspaceStage?.id,
   )
 
-  // Focus mode is offered on the Feed and on the Plan / Question views of a stage (their own waiting view or the
-  // history). Any other view or a helper ends it. Overlays, including the Stages drawer DashboardShell reports,
+  // Focus mode is offered on every view of a stage (Feed, Plan / Question history, any attention view) but not on
+  // helpers or global views. Only the user ends it. Overlays, including the Stages drawer DashboardShell reports,
   // keep F and Escape for themselves.
   const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage)
   const isStageDetailView = wsState.view === 'plan-history' || wsState.view === 'dialog-history'
@@ -379,9 +379,13 @@ export function App(): ReactElement {
   const focusAvailable =
     stageFeedShown ||
     (isStageDetailView && selection?.kind === 'stage' && workspaceStage !== null) ||
-    (wsState.view === 'attention' && (contextKind === 'approval' || contextKind === 'question'))
+    (wsState.view === 'attention' && workspaceStage !== null)
   const [railDrawerOpen, setRailDrawerOpen] = useState(false)
   const feedFocus = useFeedFocus({ available: focusAvailable, blocked: anyModalOpen || railDrawerOpen })
+  // Global views have no stage toolbar to leave focus mode from: a wait that ended over Cost lands on the Feed.
+  useLayoutEffect(() => {
+    if (feedFocus.active && (wsState.view === 'cost' || wsState.view === 'team' || wsState.view === 'board')) openFeed()
+  }, [feedFocus.active, wsState.view])
   // Focus mode hides People: an open People drawer would stay as an invisible modal, so entering closes it.
   // The wide panel keeps its choice and comes back on exit.
   useEffect(() => {

@@ -1074,9 +1074,10 @@ input (*"@qa cannot read this post (…) — remove the mention and send again"*
 Focus mode gives one stage's conversation the whole window. It is on the stage
 toolbar, above the Feed: **Focus** (an icon only in windows up to 1180 px wide —
 its name and the **F** shortcut are in the tooltip and accessible name). The button
-is offered on the stage's **Feed** and on its **Approval** or **Question** view and
-plan or dialog history; it is not offered in the **Paused**, **Failed**, **Hook
-failed** and **Helpers** views, for a helper, or in **Team**, **Board** and **Cost**.
+is offered on the stage's **Feed** and on every other view of that stage —
+**Approval**, **Question**, plan or dialog history, **Paused**, **Failed**, **Hook
+failed** and **Helpers**; it is not offered for a helper, or in **Team**, **Board**
+and **Cost**.
 
 In focus mode the run header, the tab strip, **Stages**, the [People
 panel](#people-panel), the run conversations button and the dividers between the
@@ -1102,14 +1103,17 @@ closes the topmost thing first: an open `@` menu, the attachment menu, the Assis
 or another dialog. Only when none is open does it end focus mode, also from the
 composer, where the draft and the cursor stay.
 
-Focus mode stays on while you move between the views that offer it: a stage's Feed,
-its Approval or Question view and plan or dialog history, including when an
-approval or question of another stage opens by itself. It ends when the view changes
-to one that does not offer it: a stage failing, pausing or failing a lifecycle hook
-opens its **Failed**, **Paused** or **Hook failed** view (a click on **Pause** opens
-the Paused view too), and **Team**, **Board** and **Cost** have no focus mode. Such
-a view opens by itself only when you are not typing. Focus mode is not turned on
-again when you return to the Feed, and it is not kept after a page reload.
+Focus mode ends only when you end it: **Exit focus**, **F** or **Escape**. The
+dashboard never turns it off by itself, so answering a question or approving a plan
+keeps it on. A view that opens by itself — an approval or question of another stage,
+a stage failing, pausing or failing a lifecycle hook, a stage waiting for a helper
+decision, or the Paused view after a click on **Pause** — opens inside focus mode,
+with **Feed** and **Exit focus** in the stage toolbar. After you answer or approve,
+the next waiting item opens, or the stage's Feed when nothing else waits. If the
+wait had opened over **Cost**, **Team** or **Board**, you land on the stage's Feed
+instead, because those views have no focus mode. Such a view opens by itself only
+when you are not typing. Focus mode is not turned on again by itself when you return
+to the Feed, and it is not kept after a page reload.
 
 ## Images in the feed (agent → you)
 

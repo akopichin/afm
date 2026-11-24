@@ -1,0 +1,66 @@
+{
+  "schema_version": 2,
+  "baseline_head": "4b57c9f503d9c06a77eda965ec8331d1020c6a3b",
+  "delta_sha256": "9087a3a4119fb5d237fe3e80f2d49c5ea3ee7174937efab966f61080d9d4050b",
+  "acceptance": "PASS",
+  "decision": "continue",
+  "criteria": [
+    {
+      "id": "L2",
+      "scenario": "DASH-S01",
+      "status": "PASS"
+    },
+    {
+      "id": "L3",
+      "scenario": "DASH-S03",
+      "status": "PASS"
+    },
+    {
+      "id": "L4",
+      "scenario": "DASH-S02",
+      "status": "PASS"
+    },
+    {
+      "id": "L5",
+      "scenario": "DASH-S04",
+      "status": "PASS"
+    },
+    {
+      "id": "L6",
+      "scenario": "DASH-S05",
+      "status": "PASS"
+    },
+    {
+      "id": "L7",
+      "scenario": "DASH-S05",
+      "status": "PASS"
+    },
+    {
+      "id": "L8",
+      "scenario": "DASH-S06",
+      "status": "PASS"
+    },
+    {
+      "id": "L9",
+      "scenario": "DASH-S06",
+      "status": "PASS"
+    },
+    {
+      "id": "L10",
+      "scenario": "DASH-S06",
+      "status": "PASS"
+    },
+    {
+      "id": "L11",
+      "scenario": "DASH-S07",
+      "status": "PASS"
+    },
+    {
+      "id": "L12",
+      "scenario": "DASH-S07",
+      "status": "PASS"
+    }
+  ],
+  "non_live": [],
+  "deferred_requirements": []
+}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { isEditableElement } from '../use-is-editing/use-is-editing'
 
 export type FeedFocusOptions = {
-  // available — on screen is the Feed, or the Plan / Question view, of a stage (not a helper, not another view).
+  // available — the view on screen offers focus mode (Feed, Plan, Question, Failed...). It gates only entering.
   available: boolean
   // blocked — an overlay is open above the Feed: a modal, the Assistant, the Stages or People drawer.
   blocked: boolean
@@ -28,11 +28,9 @@ function isFocusKey(e: KeyboardEvent): boolean {
   return e.code === 'KeyF' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat && !isFieldTarget(e.target)
 }
 
-// useFeedFocus — the focus mode: F toggles it, Escape leaves it, and leaving the Feed / Plan / Question views ends it.
+// useFeedFocus — the focus mode: F toggles it, Escape leaves it; only the user ends it, never a change of view.
 export function useFeedFocus({ available, blocked }: FeedFocusOptions): FeedFocus {
   const [active, setActive] = useState(false)
-  // Another view or a helper ends the mode; back in the Feed the user turns it on again.
-  if (active && !available) setActive(false)
 
   // Read at key time, so the listener is added once.
   const current = useRef({ active, available, blocked })
@@ -46,9 +44,11 @@ export function useFeedFocus({ available, blocked }: FeedFocusOptions): FeedFocu
     function onKeyDown(e: KeyboardEvent): void {
       const { active, available, blocked } = current.current
       if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return
-      if (!available || blocked || document.querySelector('dialog[open]') !== null) return
+      if (blocked || document.querySelector('dialog[open]') !== null) return
+      // Leaving works on any view, so the user is never stuck in a mode the view has no button for.
       const exits = active && e.key === 'Escape'
-      if (!exits && !isFocusKey(e)) return
+      const toggles = isFocusKey(e) && (active || available)
+      if (!exits && !toggles) return
       e.preventDefault()
       change(!active)
     }

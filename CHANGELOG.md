@@ -3,6 +3,12 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-24
+
+### Improvement:
+
+- Keep the dashboard focus mode on until you click **Exit focus** or press **F** or **Escape**, including after you answer a question or approve a plan. See [Feed focus](docs/dashboard.md#feed-focus).
+
 ## 2026-11-21
 
 ### Improvement:

@@ -301,7 +301,7 @@ it('Run conversations resized into a drawer in focus mode leaves the first Escap
   expectRunConversationsDrawer(panel, draft)
 })
 
-it('Run conversations resized into a drawer in focus mode does not hold back a new attention item', async () => {
+it('Run conversations resized into a drawer in focus mode does not hold back a new attention item, and Escape brings the drawer back', async () => {
   const viewport = stubDrawerViewport(false)
   const state = setup([['s1', 'running'], ['s2', 'running']], 'assistants')
   render(<App />)
@@ -311,6 +311,10 @@ it('Run conversations resized into a drawer in focus mode does not hold back a n
   state.stages = [['s1', 'running'], ['s2', 'failed']]
   await refreshStatus()
   await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
+  expect(inFocus()).toBe(true)
+  expect(header()).toHaveAttribute('hidden')
+
+  pressEscape(document.body)
   expect(inFocus()).toBe(false)
   expectRunConversationsDrawer(panel, draft)
 })
@@ -366,39 +370,114 @@ it.each([
   expect(inFocus()).toBe(false)
 })
 
-it('a Paused or Failed view and the global views still end focus mode and do not offer it', async () => {
+it.each(['paused', 'failed', 'hook_failed'])('a %s view opens inside focus mode and its toolbar leads back to the Feed in focus mode', async (status) => {
   const state = setup([['s1', 'running'], ['s2', 'running']])
   render(<App />)
   await openStageFeed()
   pressF(document.body)
   expect(inFocus()).toBe(true)
-  state.stages = [['s1', 'running'], ['s2', 'paused']]
+
+  state.stages = [['s1', 'running'], ['s2', status]]
   await refreshStatus()
   await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
-  expect(inFocus()).toBe(false)
-  pressF(document.body)
-  expect(inFocus()).toBe(false)
-  expect(screen.queryByRole('button', { name: /Focus on/ })).toBeNull()
+  expect(inFocus()).toBe(true)
+  expect(header()).toHaveAttribute('hidden')
+  expect(screen.getByRole('button', { name: 'Exit focus' })).toHaveAttribute('aria-pressed', 'true')
 
+  fireEvent.click(screen.getByRole('button', { name: 'Feed' }))
+  expect(inFocus()).toBe(true)
+  expect(screen.getByRole('button', { name: 'Exit Feed focus' })).toBeInTheDocument()
+})
+
+it('outside focus mode the Team view does not offer it and F does nothing', async () => {
+  setup()
+  render(<App />)
+  await openStageFeed()
   fireEvent.click(tab('Team'))
   pressF(document.body)
   expect(inFocus()).toBe(false)
+  expect(screen.queryByRole('button', { name: /Focus on/ })).toBeNull()
 })
 
-it('a new attention view ends focus mode, and returning to the Feed does not restore it', async () => {
+it('a Failed view offers focus mode: the button, F and Escape work; Cost does not offer it', async () => {
+  setup([['s1', 'running'], ['s2', 'failed']])
+  render(<App />)
+  await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
+  expect(inFocus()).toBe(false)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Focus on this view' }))
+  expect(inFocus()).toBe(true)
+  pressEscape(document.body)
+  expect(inFocus()).toBe(false)
+  pressF(document.body)
+  expect(inFocus()).toBe(true)
+  pressEscape(document.body)
+  expect(inFocus()).toBe(false)
+
+  fireEvent.click(tab('Cost'))
+  pressF(document.body)
+  expect(inFocus()).toBe(false)
+  expect(screen.queryByRole('button', { name: /Focus on/ })).toBeNull()
+})
+
+it.each([
+  ['awaiting_user_input', 'dialog-section'],
+  ['awaiting_approval', 'plan-section'],
+])('a stage that starts waiting during focus mode opens in focus mode, and answering it returns to the Feed in focus mode (%s)', async (status, section) => {
   const state = setup([['s1', 'running'], ['s2', 'running']])
   render(<App />)
   await openStageFeed()
   pressF(document.body)
   expect(inFocus()).toBe(true)
 
-  state.stages = [['s1', 'running'], ['s2', 'failed']]
+  state.stages = [['s1', 'running'], ['s2', status]]
   await refreshStatus()
-  await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
-  expect(inFocus()).toBe(false)
+  await waitFor(() => expect(document.getElementById(section)).not.toBeNull())
+  expect(document.getElementById('detail-title')).toHaveTextContent('s2')
+  expect(inFocus()).toBe(true)
+  expect(header()).toHaveAttribute('hidden')
 
-  fireEvent.click(tab('Feed'))
-  expect(inFocus()).toBe(false)
-  expect(await screen.findByText('No events for this stage yet')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Focus on Feed' })).toHaveAttribute('aria-pressed', 'false')
+  state.stages = [['s1', 'running'], ['s2', 'running']]
+  await refreshStatus()
+  await waitFor(() => expect(document.getElementById(section)).toBeNull())
+  expect(document.getElementById('detail-title')).toHaveTextContent('s2')
+  expect(inFocus()).toBe(true)
+  expect(screen.getByRole('button', { name: 'Exit Feed focus' })).toBeInTheDocument()
+})
+
+it('answering one of two waiting stages in focus mode opens the next question in focus mode', async () => {
+  const state = setup([['s1', 'running'], ['s2', 'awaiting_user_input'], ['s3', 'awaiting_user_input']])
+  render(<App />)
+  await waitFor(() => expect(document.getElementById('dialog-section')).not.toBeNull())
+  const first = document.getElementById('detail-title')?.textContent ?? ''
+  const other = first.includes('s2') ? 's3' : 's2'
+  pressF(document.body)
+  expect(inFocus()).toBe(true)
+
+  state.stages = [['s1', 'running'], [first.includes('s2') ? 's2' : 's3', 'running'], [other, 'awaiting_user_input']]
+  state.stages.sort(([a], [b]) => a.localeCompare(b))
+  await refreshStatus()
+  await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent(other))
+  expect(document.getElementById('dialog-section')).not.toBeNull()
+  expect(inFocus()).toBe(true)
+})
+
+it('a wait opened over Cost returns to the Feed, not to Cost, when it ends in focus mode', async () => {
+  const state = setup([['s1', 'running'], ['s3', 'running']])
+  render(<App />)
+  await openStageFeed()
+  fireEvent.click(tab('Cost'))
+
+  state.stages = [['s1', 'running'], ['s3', 'awaiting_user_input']]
+  await refreshStatus()
+  await waitFor(() => expect(document.getElementById('dialog-section')).not.toBeNull())
+  pressF(document.body)
+  expect(inFocus()).toBe(true)
+
+  state.stages = [['s1', 'running'], ['s3', 'running']]
+  await refreshStatus()
+  await waitFor(() => expect(document.getElementById('dialog-section')).toBeNull())
+  expect(inFocus()).toBe(true)
+  expect(screen.getByRole('button', { name: 'Exit Feed focus' })).toBeInTheDocument()
+  expect(screen.queryByRole('tab', { name: 'Cost', selected: true })).toBeNull()
 })

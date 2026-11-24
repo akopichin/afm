@@ -77,6 +77,7 @@ new behavior is introduced only through deltas.
 | MCP | MCP and serve | [mcp-serve](mcp-serve/spec.md) | `/mcp` endpoint: catalog, run binding, approve, waits, artifacts, sessions, stdio bridge |
 | MCP | | [mcp-serve-host](mcp-serve-host/spec.md) | Host `afm serve`: registry, identity, launch/attach, gateway, allowlist |
 | MCP | | [mcp-serve-run](mcp-serve-run/spec.md) | `active-runs` registry record, `--task` sources |
+| DASH | Dashboard | [dashboard](dashboard/spec.md) | Stage focus mode: ends only on Exit focus, **F** or **Escape**; views open inside it |
 
 Cross-domain hot spots: helper waits live in `agent-mesh-waits` (`MESH-R36`) and
 `helpers-barrier` (`HLP-R08`); budget holds of helpers in `helpers-admission` and

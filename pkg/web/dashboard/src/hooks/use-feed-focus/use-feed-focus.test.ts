@@ -178,14 +178,25 @@ describe('useFeedFocus: leaving focus mode', () => {
     expect(result.current.active).toBe(true)
   })
 
-  it('leaving the stage Feed ends focus mode, and coming back does not restore it', () => {
+  it('focus mode stays on when the view stops offering it; Escape and F still leave it, F does not enter it', () => {
     const { result, rerender } = setup()
     press(F)
+    rerender({ available: false, blocked: false })
+    expect(result.current.active).toBe(true)
+    rerender({ available: true, blocked: false })
     expect(result.current.active).toBe(true)
 
     rerender({ available: false, blocked: false })
+    press(ESCAPE)
     expect(result.current.active).toBe(false)
+    press(F)
+    expect(result.current.active).toBe(false)
+
     rerender({ available: true, blocked: false })
+    press(F)
+    expect(result.current.active).toBe(true)
+    rerender({ available: false, blocked: false })
+    press(F)
     expect(result.current.active).toBe(false)
   })
 })
