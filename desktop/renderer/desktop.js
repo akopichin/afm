@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const esc = value => String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const label = r => ({running:'Running',review:'Needs approval',question:'Needs reply',stopped:'Stopped'})[r.state];
+const label = r => ({running:r.hostState==='api-only'?'API only':'Running',review:'Needs approval',question:'Needs reply',stopped:'Stopped'})[r.state];
 const unavailable = r => ({finished:({interrupted:'This run was interrupted.',failed:'This run failed.'})[r.status]||'This run has finished.',offline:'This run is offline. Desktop reconnects when it answers again.',
   mismatch:'This address now belongs to a different run. Refresh the project.','api-only':'Core run · API only'})[r.hostState]||'This run is not available.';
 const active = r => ['running','review','question'].includes(r.state);
@@ -121,11 +121,12 @@ function projectTile(p,index,compact=false){
 function renderHome(){
   closeProjectPath();
   const runs=activeRuns();
-  const pinned=projects.map((project,index)=>({project,index})).filter(({project})=>pinnedProjectIds.has(project.id));
-  $('screen').innerHTML=`<div class="home"><div class="heading"><div><h1>Projects</h1><p class="summary">${projects.length} recent projects · ${runs.length} active runs</p></div><div class="heading-actions"><button class="action" data-folder>Open folder…</button><button class="action primary" data-start>＋ New run</button></div></div>
+  const folders=projects.filter(p=>p.path);
+  const pinned=folders.map((project,index)=>({project,index})).filter(({project})=>pinnedProjectIds.has(project.id));
+  $('screen').innerHTML=`<div class="home"><div class="heading"><div><h1>Projects</h1><p class="summary">${folders.length} recent projects · ${runs.length} active runs</p></div><div class="heading-actions"><button class="action" data-folder>Open folder…</button><button class="action primary" data-start>＋ New run</button></div></div>
   ${pinned.length?`<section aria-labelledby="pinned-projects-title"><div class="section-title"><h2 id="pinned-projects-title">Pinned projects</h2></div><div class="tiles pinned-tiles">${pinned.map(({project,index})=>projectTile(project,index,true)).join('')}</div></section>`:''}
-  <section aria-labelledby="recent-projects-title"><div class="section-title"><h2 id="recent-projects-title">Recent projects</h2></div><div class="tiles">${projects.map((p,i)=>projectTile(p,i)).join('')}</div></section>
-  <section><div class="section-title"><h2>Active runs</h2><span class="total">${runs.length}</span></div><div class="active-list">${runs.map(({p,r})=>`<button class="row" data-project="${p.id}" data-run="${r.id}" style="--tone:${p.tone}"><span class="r-icon">${r.source==='Terminal'?'›_':'▷'}</span><span class="r-name"><strong>${esc(r.flow)}</strong><small>${esc(p.name)}${stageLabel(r)}</small></span><span class="origin">${r.source}</span><span class="mini-state"><i class="dot"></i>${label(r)}</span><small class="row-cost" data-cost-run-key="${esc(r.key||'')}"></small><span class="chev">→</span></button>`).join('')||'<p class="empty">No active runs</p>'}</div></section></div>`;
+  <section aria-labelledby="recent-projects-title"><div class="section-title"><h2 id="recent-projects-title">Recent projects</h2></div><div class="tiles">${folders.map((p,i)=>projectTile(p,i)).join('')}</div></section>
+  <section><div class="section-title"><h2>Active runs</h2><span class="total">${runs.length}</span><div class="spacer"></div>${isDemo?'':`<button type="button" class="action" data-connect-run aria-keyshortcuts="${ariaModKey}+Shift+C">Connect run <kbd aria-hidden="true">${modKey} Shift C</kbd></button>`}</div><div class="active-list">${runs.map(({p,r})=>`<button class="row" data-project="${p.id}" data-run="${r.id}" style="--tone:${p.tone}"><span class="r-icon">${r.source==='Terminal'?'›_':'▷'}</span><span class="r-name"><strong>${esc(r.flow)}</strong><small>${esc(p.name)}${stageLabel(r)}</small></span><span class="origin">${r.source}</span><span class="mini-state"><i class="dot"></i>${label(r)}</span><small class="row-cost" data-cost-run-key="${esc(r.key||'')}"></small><span class="chev">→</span></button>`).join('')||'<p class="empty">No active runs</p>'}</div></section></div>`;
   wireProjectPaths($('screen'));
   if(typeof paintHomeCosts==='function')paintHomeCosts();
 }
@@ -139,7 +140,7 @@ function runTabStatus(run){
     return ['inactive',({failed:'Failed',interrupted:'Interrupted',finished:'Finished'})[run.status]||'Finished'];
   }
   if(run.needsAttention||['review','question'].includes(run.state))return ['waiting','Needs attention'];
-  return ['running','Running'];
+  return ['running',run.hostState==='api-only'?'API only':'Running'];
 }
 function render(){
   closeProjectPath();
@@ -172,11 +173,11 @@ function render(){
     ?`<button class="action" data-delete-run ${deleting||continuing?'disabled':''}>${deleting?'Deleting…':'Delete run…'}</button>`:'';
   const resumeButton=r?.can?.resume||continuing
     ?`<button class="action" data-resume ${continuing?'disabled aria-busy="true"':deleting?'disabled':''}>${continuing?'Resuming…':'Continue run'}</button>`:'';
-  const changesButton=r&&!isDemo?`<button type="button" class="action" data-run-changes aria-pressed="${tab==='changes'}" aria-keyshortcuts="${ariaModKey}+D" title="Changes (${modKey} D)">${changesLabel(r)}</button>`:'';
-  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${changesButton}${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${resumeButton}${deleteButton}${r?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
+  const changesButton=r&&p.path&&!isDemo?`<button type="button" class="action" data-run-changes aria-pressed="${tab==='changes'}" aria-keyshortcuts="${ariaModKey}+D" title="Changes (${modKey} D)">${changesLabel(r)}</button>`:'';
+  $('screen').innerHTML=`<div class="workspace"><nav class="tabs" aria-label="Project tabs"><div class="run-tabs">${tabs||'<span class="tab">Overview</span>'}</div><div class="spacer"></div>${changesButton}${r&&(isDemo||r.can.open)?`<a class="shell-link" target="_blank" rel="noopener" href="${isDemo?esc(runURL(p,r)):'#'}">Open in browser ↗</a>`:''}${r&&active(r)&&(isDemo?r.source==='Desktop':r.can.cancel)?'<button class="action" data-stop>Stop run</button>':''}${resumeButton}${deleteButton}${r&&p.path?'<button class="action primary" data-start>＋ New run</button>':''}</nav><section id="content" class="view"></section></div>`;
   const area=$('content');
   if(!r){area.innerHTML=`<div class="project-idle"><h1>${esc(p.name)}</h1><p class="path">${esc(p.path)}</p><h2>No runs yet</h2><p class="muted">Choose a flow or pipeline to start in this folder.</p><button class="action primary" data-start>＋ New run</button></div>`;return}
-  if(!isDemo&&tab==='changes'){mountRunChanges(r,area);return}
+  if(!isDemo&&p.path&&tab==='changes'){mountRunChanges(r,area);return}
   if(liveTab){
     const stage=r.liveStage;
     area.innerHTML=stage

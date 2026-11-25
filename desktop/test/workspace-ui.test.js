@@ -15,6 +15,54 @@ async function openShell(t, snapshot, extra = {}) {
   return { ...shell, native };
 }
 
+test('Connect run retries a failed URL and opens an attached run without a project', async t => {
+  const run = runRow('docker', { projectRoot: undefined, origin: 'external', ownership: 'attached' });
+  const calls = [];
+  const { d, get, key, native } = await openShell(t, snapshotOf([]), {
+    attach: async url => {
+      calls.push(url);
+      if (calls.length === 1) throw Error('Error invoking remote method \'runs:attach\': Error: No AFM run at this address.');
+      return snapshotOf([], [], { unassigned: [run] });
+    },
+  });
+  const opener = d.querySelector('[data-connect-run]');
+  assert.equal(opener.getAttribute('aria-keyshortcuts'), 'Meta+Shift+C');
+  opener.click();
+  const dialog = get('connect-run'), field = get('connect-run-url'), submit = get('connect-run-submit');
+  const status = get('connect-run-status');
+  assert.equal(dialog.open, true);
+  assert.equal(d.activeElement, field);
+  field.value = 'http://localhost:9999/';
+  submit.click();
+  assert.equal(status.textContent, 'Checking run…');
+  assert.equal(submit.disabled, true);
+  await tick();
+  assert.equal(status.textContent, 'No AFM run at this address.');
+  assert.equal(d.querySelectorAll('.active-list [data-run]').length, 0);
+
+  field.value = 'http://localhost:63439/';
+  submit.click();
+  await tick();
+  assert.deepEqual(calls, ['http://localhost:9999/', 'http://localhost:63439/']);
+  assert.equal(status.textContent, 'Connected');
+  assert.equal(dialog.open, true);
+  const row = d.querySelector('.active-list [data-run]');
+  assert.match(row.textContent, /flow-docker.*External runs/);
+  assert.equal(d.querySelector('.project-tile'), null);
+  submit.click();
+  assert.equal(dialog.open, false);
+  row.click();
+  await tick();
+  assert.equal(native.calls.dashboard, 1);
+  assert.equal(d.querySelector('[data-run-changes]'), null);
+
+  native.emitDashboard(run.key, { navigate: 'connect-run' });
+  assert.equal(dialog.open, true, 'the embedded dashboard forwards the shortcut');
+  dialog.close();
+  assert.equal(key('KeyC', 'C', { metaKey: true, shiftKey: true }).defaultPrevented, true);
+  assert.equal(dialog.open, true, 'the shell handles the shortcut too');
+});
+
 test('run Changes opens by shortcut, filters the tree, and remembers the diff layout', async t => {
   const calls=[];
   const {w,d,key,native}=await openShell(t,twoProjects([]),{

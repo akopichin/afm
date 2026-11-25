@@ -36,6 +36,19 @@ function desktopWith(get) {
 }
 const overviewOf = (runs, host = { state: 'connected', error: null }) => ({ host, projects: [{ id: 'p', path: '/p', name: 'p', runs }], unassigned: [], candidates: [] });
 
+test('refresh after a connection waits for a snapshot taken after the current poll', async t => {
+  const old = Promise.withResolvers();
+  const run = { key: 'external', apiLive: false };
+  const desktop = desktopWith(() => desktop.calls.overview === 1 ? old.promise : { ...overviewOf([]), unassigned: [run] });
+  const workspace = new Workspace({ desktop });
+  t.after(() => workspace.close());
+  const poll = workspace.refresh();
+  const fresh = workspace.refresh({ afterCurrent: true });
+  old.resolve(overviewOf([]));
+  assert.deepEqual((await poll).unassigned, []);
+  assert.deepEqual((await fresh).unassigned, [run]);
+});
+
 test('notices name the exact stage, and only for the run that proves its identity', async t => {
   const fake = await fakeRun(t, { stages: [{ id: 'plan', status: 'done' }, { id: 'review', name: 'Review', status: 'awaiting_approval' }, { id: 'ask', status: 'awaiting_user_input' }] });
   const view = row(fake);

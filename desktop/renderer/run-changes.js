@@ -12,7 +12,7 @@ function changesLabel(run){
 }
 function toggleRunChanges(){
   const {p,r,tab}=selection();
-  if(!r||isDemo)return;
+  if(!r||!p.path||isDemo)return;
   closeFocus();
   closeQueue();
   window.nativeAFM?.focusShell().catch(showNativeError);

@@ -89,6 +89,15 @@
   <button class="action" id="browse-project">Browse folders…</button>
   <form id="path-form"><label>Or enter a project path<input id="project-path" placeholder="~/work/my-project" required></label><label class="check"><input type="checkbox" id="path-git"> Git repository</label><div class="actions"><button class="primary">Open project</button></div></form>
 </dialog>
+<dialog id="connect-run" aria-labelledby="connect-run-title">
+  <form id="connect-run-form">
+    <div class="pane-head"><h2 id="connect-run-title">Connect run</h2><button type="button" class="icon" data-close aria-label="Close">×</button></div>
+    <label for="connect-run-url">Run URL</label>
+    <input id="connect-run-url" type="url" placeholder="http://localhost:63439/" autocomplete="off" spellcheck="false" required>
+    <p id="connect-run-status" class="hint" role="status"></p>
+    <div class="actions"><button class="primary" id="connect-run-submit">Connect</button></div>
+  </form>
+</dialog>
 <dialog id="watch-report" aria-labelledby="watch-report-title">
   <header class="pane-head watch-report-head"><div><small id="watch-report-scope"></small><h2 id="watch-report-title" tabindex="-1"></h2></div><button type="button" class="icon" data-report-close aria-label="Close summary">×</button></header>
   <small id="watch-report-time" class="watch-report-time"></small>

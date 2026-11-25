@@ -15,8 +15,10 @@ test('Electron reserves only the Desktop navigation bindings from the run view',
   assert.deepEqual(key({alt:true, code:'KeyA'}), {navigate:'assistant'});
   assert.deepEqual(key({meta:true, key:'3'}), {navigate:3});
   assert.equal(key({meta:true, shift:true, code:'KeyK'}), 'switch-project');
+  assert.deepEqual(key({meta:true, shift:true, code:'KeyC'}), {navigate:'connect-run'});
   assert.deepEqual(key({meta:true, key:','}), {navigate:'settings'});
   assert.equal(key({control:true, shift:true, code:'KeyK'}, 'linux'), 'switch-project');
+  assert.deepEqual(key({control:true, shift:true, code:'KeyC'}, 'linux'), {navigate:'connect-run'});
   for (const input of [{control:true,code:'KeyK'}, {meta:true,key:'f'}, {alt:true,code:'KeyM'},
     {meta:true,code:'KeyK',isAutoRepeat:true}, {meta:true,code:'KeyH',isComposing:true},
     {meta:true,key:'0'}, {meta:true,key:'2',shift:true}]) assert.equal(key(input), null);

@@ -8,7 +8,7 @@ const baseName=path=>path.split(/[\\/]/).filter(Boolean).at(-1)||path;
 const runLabels={running:'Running',finished:'Finished',offline:'Offline · reconnecting','api-only':'Core run · API only',mismatch:'This run changed'};
 // The UI knows four run states; what a person must do comes from the host's notices, not from the run row.
 function uiRunState(run,kind){
-  if(run.state!=='running')return 'stopped';
+  if(run.state!=='running'&&!(run.state==='api-only'&&run.ownership==='attached'))return 'stopped';
   return kind==='approval'?'review':kind==='question'?'question':'running';
 }
 function runSignature(run,state,live){
@@ -16,17 +16,19 @@ function runSignature(run,state,live){
 }
 function toRun(run,state,signature,live){
   return {id:encodeURIComponent(run.key),key:run.key,rawId:run.runId,instance:run.instanceId,flow:run.name||run.runId,
-    source:run.origin==='desktop'?'Desktop':'Terminal',mode:run.mode,state,status:run.status,hostState:run.state,needsAttention:run.attention,can:run.can,live:Boolean(live),liveStage:live||null,signature};
+    source:run.origin==='desktop'?'Desktop':run.projectRoot?'Terminal':'External',mode:run.mode,state,status:run.status,hostState:run.state,needsAttention:run.attention,can:run.can,live:Boolean(live),liveStage:live||null,signature};
 }
-// Runs whose folder is not on Home still show up, so nothing the host knows about is invisible.
+// Runs outside Home share tabs by local folder, or in External runs when only their URL is known.
 function externalProjects(runs){
   const groups=new Map();
   for(const run of runs){
-    if(!run.projectRoot||!run.runId||!run.instanceId)continue;
-    if(!groups.has(run.projectRoot))groups.set(run.projectRoot,[]);
-    groups.get(run.projectRoot).push(run);
+    if(!run.runId||!run.instanceId)continue;
+    const root=run.projectRoot||'';
+    if(!root&&run.ownership!=='attached')continue;
+    if(!groups.has(root))groups.set(root,[]);
+    groups.get(root).push(run);
   }
-  return [...groups].map(([root,list])=>({id:'external-'+hashOf(root),name:baseName(root),path:root,external:true,runs:list}));
+  return [...groups].map(([root,list])=>({id:root?'external-'+hashOf(root):'external-runs',name:root?baseName(root):'External runs',path:root,external:true,runs:list}));
 }
 // Keeps project and run objects stable on idle snapshots so drafts, focus and open dashboards survive.
 function reconcileInventory(projects,snapshot){

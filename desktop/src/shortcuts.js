@@ -1,5 +1,6 @@
 const ALT_ACTIONS = { KeyA: 'assistant', KeyL: 'live' };
 const PRIMARY_ACTIONS = { KeyH: 'home', KeyJ: 'next', KeyK: 'previous', KeyM: 'model', KeyD: 'changes' };
+const SHIFT_ACTIONS = { KeyK: 'picker', KeyC: 'connect-run' };
 
 // Window-wide shortcuts that native views forward to the Desktop shell.
 // Option/Alt is matched by physical key because Option changes the typed character on a Mac.
@@ -10,7 +11,7 @@ export function shortcutAction(input, platform = process.platform) {
   const primary = platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta;
   if (!primary || input.alt) return null;
   const key = String(input.key).toLowerCase();
-  if (input.shift) return key === 'enter' ? 'launch' : input.code === 'KeyK' ? 'picker' : null;
+  if (input.shift) return key === 'enter' ? 'launch' : SHIFT_ACTIONS[input.code] ?? null;
   if (key === ',') return 'settings';
   if (/^[1-9]$/.test(key)) return Number(key);
   return PRIMARY_ACTIONS[input.code] ?? null;

@@ -47,7 +47,43 @@ function refreshNative(){
   if(isDemo)return Promise.resolve();
   return nativeAFM.refreshWorkspace().then(applyWorkspace).catch(showNativeError);
 }
+const connectDialog=$('connect-run'),connectURL=$('connect-run-url');
+const connectSubmit=$('connect-run-submit'),connectStatus=$('connect-run-status');
+function connectRunStatus(state,text=''){
+  connectStatus.dataset.state=state;
+  connectStatus.textContent=text;
+  connectSubmit.textContent=state==='connected'?'Done':'Connect';
+}
+function openConnectRun(){
+  if(document.querySelector('dialog[open]'))return;
+  if(!connectURL.readOnly){connectURL.value='';connectRunStatus('')}
+  const fromHome=document.activeElement?.hasAttribute('data-connect-run');
+  connectDialog.showModal();
+  if(fromHome)connectDialog.addEventListener('close',()=>document.querySelector('[data-connect-run]')?.focus(),{once:true});
+  connectURL.focus();
+}
+connectURL.oninput=()=>connectRunStatus('');
+$('connect-run-form').onsubmit=async event=>{
+  event.preventDefault();
+  if(connectSubmit.disabled)return;
+  if(connectStatus.dataset.state==='connected'){connectDialog.close();return}
+  connectURL.readOnly=true;
+  connectSubmit.disabled=true;
+  connectRunStatus('connecting','Checking run…');
+  try{
+    applyWorkspace(await nativeAFM.attach(connectURL.value.trim()));
+    connectRunStatus('connected','Connected');
+  }catch(error){
+    const message=String(error?.message||error).replace(/^Error invoking remote method 'runs:attach': (?:\w+: )?/,'');
+    connectRunStatus('error',message);
+  }finally{
+    connectURL.readOnly=false;
+    connectSubmit.disabled=false;
+    if(connectDialog.open)(connectStatus.dataset.state==='connected'?connectSubmit:connectURL).focus();
+  }
+};
 document.addEventListener('click',event=>{
+  if(event.target.closest('[data-connect-run]'))openConnectRun();
   if(!isDemo&&event.target.closest('a.shell-link')){
     event.preventDefault();
     const {r}=selection();

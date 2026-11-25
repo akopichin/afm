@@ -268,6 +268,30 @@ test('a run outside Home is offered as a candidate and attaching never grants co
   assert.equal(after.can.release, false);
 });
 
+test('a run in another registry connects by URL and opens without a local project', fast, async t => {
+  const runHome = await tempHome(t);
+  const ctx = await tempHome(t);
+  const folder = await makeProject(runHome.home, 'external', { flows: { 'flow.yaml': sleepFlow('external') } });
+  const child = spawn(await afmBinary(), ['run', '--dir', folder, '--mode', 'dashboard', '--listen-any-port',
+    path.join(folder, '.afm', 'flows', 'flow.yaml')], { env: runHome.env, stdio: 'ignore' });
+  t.after(() => child.kill());
+  const other = await open(t, runHome);
+  const endpoint = await eventually(async () => (await other.runs.list()).find(run => run.can.open)?.apiUrl, { what: 'external dashboard' });
+  const desktop = await open(t, ctx);
+  assert.deepEqual((await desktop.overview()).unassigned, []);
+  assert.throws(() => desktop.runs.attach('https://example.invalid'), /local HTTP run URL/);
+  const attached = await desktop.runs.attach(endpoint + '/');
+  await desktop.runs.attach(endpoint);
+  const { unassigned } = await desktop.overview();
+  assert.equal(unassigned.length, 1);
+  const [run] = unassigned;
+  assert.equal(run.runId, attached.run_id);
+  assert.equal(run.instanceId, attached.instance_id);
+  assert.equal(run.projectRoot, undefined);
+  assert.equal(run.ownership, 'attached');
+  assert.equal(await desktop.runs.open(run.runId, run.instanceId), endpoint);
+});
+
 test('Git launch modes never discard project changes', fast, async t => {
   const ctx = await tempHome(t);
   const dir = await makeProject(ctx.home, 'repo', { git: true, flows: {

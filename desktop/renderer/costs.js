@@ -354,7 +354,7 @@ function renderCosts() {
   const rows = costsRows(), total = costsTotals(rows), sorted = costsSorted(rows), bars = costsBars(rows);
   const title = costsFinished() ? 'Finished runs' : costsRewind > 0 ? 'Runs then' : 'Active runs';
   const liveClocks = !costsPeriodMode() && !costsFinished();
-  const options = [{ id: 'all', name: 'All projects' }, ...projects.map(p => ({ id: p.id, name: p.name }))];
+  const options = [{ id: 'all', name: 'All projects' }, ...projects.filter(p => p.path).map(p => ({ id: p.id, name: p.name }))];
   const segment = (key, label, items) => `<div class="cost-segment compact" role="group" aria-label="${label}">${items.filter(([value]) => !(value === 'cost' && hidden)).map(([value, text]) => `<button type="button" data-cost-${key}="${value}" aria-pressed="${costsUi[key] === value}">${text}</button>`).join('')}</div>`;
   const noPrice = total.unpriced;
   const readings = rows.map(row => row.figures.history.observedAt).filter(Boolean);

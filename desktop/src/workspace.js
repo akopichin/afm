@@ -108,8 +108,9 @@ export class Workspace {
     if (delay !== null) this.timer = setTimeout(() => { this.timer = null; this.refresh().catch(() => {}); }, delay);
   }
 
-  refresh() {
+  refresh({ afterCurrent = false } = {}) {
     if (this.closed) return Promise.resolve(this.snapshot);
+    if (afterCurrent && this.inflight) return this.inflight.catch(() => {}).then(() => this.refresh());
     if (!this.inflight) {
       this.inflight = this.#build().finally(() => {
         this.inflight = null;

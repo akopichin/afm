@@ -111,6 +111,7 @@ function navigateApp(command){
     closeQueue();closeFocus();toggleChat(open);return;
   }
   if(command==='settings'){closeQueue();closeFocus();openSettings();return}
+  if(command==='connect-run'){if(!isDemo){closeQueue();closeFocus();openConnectRun()}return}
   if(command==='model'){showQuickModel();return}
   if(command==='changes'){toggleRunChanges();return}
   if(command==='live'){
@@ -146,8 +147,12 @@ document.addEventListener('keydown',e=>{
     const command={KeyA:'assistant',KeyL:'live'}[e.code];
     if(command){e.preventDefault();navigateApp(command)}return;
   }
+  if(!isDemo&&primary(e)&&!e.altKey&&e.shiftKey&&e.code==='KeyC'){
+    e.preventDefault();navigateApp('connect-run');return;
+  }
   if(primary(e)&&!e.altKey&&!e.shiftKey){
-    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyD:selection().r&&!isDemo?'changes':null}[e.code]
+    const {p,r}=selection();
+    const command={KeyH:'home',KeyJ:'next',KeyK:'previous',KeyM:'model',KeyD:p?.path&&r&&!isDemo?'changes':null}[e.code]
       ?? (/^[1-9]$/.test(e.key)&&runTab(Number(e.key))?Number(e.key):null);
     if(command){e.preventDefault();navigateApp(command)}
     return;
@@ -181,7 +186,7 @@ onDashboardMessage((frame,msg)=>{
     document.body.classList.toggle('desktop-focus',Boolean(focusedFrame));
     if(focusedFrame)frame.focus();
   }
-  if(Number.isInteger(msg?.navigate)||['home','next','previous','model','assistant','live','settings','changes'].includes(msg?.navigate))navigateApp(msg.navigate);
+  if(Number.isInteger(msg?.navigate)||['home','next','previous','model','assistant','live','settings','changes','connect-run'].includes(msg?.navigate))navigateApp(msg.navigate);
   if(msg==='stage-ready')deliverStage();
   if(msg==='stage-opened')pendingStage=null;
 });

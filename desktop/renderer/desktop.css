@@ -62,6 +62,10 @@ body:has(#dashboard-host:not([hidden])) #screen {flex:none}
 dialog {padding:24px;width:min(490px,94vw);max-height:90dvh;overflow:auto;border-color:var(--separator-subtle)}
 dialog input,dialog select {border-color:var(--separator-subtle);margin:5px 0 0}
 dialog label {font-size:13px;color:var(--text-secondary)}
+#connect-run {box-sizing:border-box;width:min(390px,calc(100% - 32px))}
+#connect-run-status:empty {margin:0}
+#connect-run-status[data-state="error"] {color:var(--danger);overflow-wrap:anywhere}
+#connect-run-status[data-state="connected"] {color:var(--success)}
 #settings {box-sizing:border-box;width:min(700px, calc(100% - 32px));max-width:none;padding:clamp(16px, 4vw, 24px)}
 #settings .segments,#settings .links {flex-wrap:wrap}
 #settings .workflow > span:nth-child(2) {min-width:0;overflow-wrap:anywhere}

@@ -1,5 +1,11 @@
 # AFM Desktop changelog
 
+## 2026-11-25
+
+### Improvement:
+
+- Connect to an existing local AFM run by URL from Active runs, including runs in Docker. Use Command+Shift+C on macOS or Ctrl+Shift+C on Linux to open the connection dialog.
+
 ## 2026-11-23
 
 ### Improvement:

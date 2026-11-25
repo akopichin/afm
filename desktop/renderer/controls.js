@@ -115,8 +115,9 @@ function wireProfileFields(){
 let modelScan='', sourceMessage='', remoteBusy=false;
 function openLauncher(p,query=''){
   if(document.querySelector('dialog[open]'))return;
-  if(!projects.length){$('open-project').showModal();return}
-  $('launch-project').innerHTML=projects.map(item=>option(item.id,item.name,item.id===p?.id)).join('');
+  const folders=projects.filter(item=>item.path);
+  if(!folders.length){$('open-project').showModal();return}
+  $('launch-project').innerHTML=folders.map(item=>option(item.id,item.name,item.id===p?.id)).join('');
   $('workflow-search').value=query;
   $('launch-git').innerHTML=option('auto','Automatic',true)+gitOptions('');
   $('launch-hint').textContent='↑ ↓ to choose · ↵ to start';

@@ -10,7 +10,7 @@ import { desktopDir, readJSON, writeJSON } from './files.js';
 export function localURL(value) {
   const url = new URL(value);
   if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-      || url.username || url.password || !url.port) throw Error('Expected a local AFM endpoint.');
+      || url.username || url.password) throw Error('Expected a local AFM endpoint.');
   return url;
 }
 

@@ -52,6 +52,16 @@ each endpoint's `/api/runtime` and accepts a run only when `instance_id` and `ru
 A run with a forged or reused-port record is shown as `identity_mismatch` and is never
 controlled. Runs of a restarted host are found again from the registry and the host's own state.
 
+### Connect a run in AFM Desktop
+
+On Home, choose **Connect run** next to **Active runs**, or press **Command+Shift+C**
+on macOS (**Ctrl+Shift+C** on Linux). Enter the run's local HTTP URL, such as
+`http://localhost:63439/`, and select **Connect**. This also works for AFM in
+Docker when its port is published on the host. When the dialog says **Connected**,
+choose **Done** and select the run under **Active runs** to open its dashboard.
+Runs without a local project folder open under **External runs**. Core runs have
+an API and appear in the list with an API-only status.
+
 ## Tools
 
 The tools of a single run's [MCP endpoint](mcp.md#tools) are available on the host with an

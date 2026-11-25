@@ -5,7 +5,7 @@ import { open, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { desktopDir, Mutex, readJSON, writeJSON } from './files.js';
-import { HostError, dashboardURL } from './host.js';
+import { HostError, dashboardURL, localURL } from './host.js';
 import { belongsTo } from './projects.js';
 import { configFilesFor, effectivePolicy, inspectGit, prepareBranch, resolveMode, validWorktreeName } from './git-mode.js';
 import { projectFlows } from './sources.js';
@@ -309,7 +309,12 @@ export class Runs {
     return this.host.tool('afm_run_release', { run_id: row.run_id });
   }
 
-  attach(endpoint) { return this.host.tool('afm_run_attach', { endpoint }); }
+  attach(endpoint) {
+    let url;
+    try { url = localURL(endpoint); }
+    catch { throw Error('Enter a local HTTP run URL, for example http://localhost:63439/.'); }
+    return this.host.tool('afm_run_attach', { endpoint: url.origin });
+  }
 
   // What a launch would do, shown before the user confirms it.
   async preview({ projectId, kind, file, explicit, branch, worktree }) {
