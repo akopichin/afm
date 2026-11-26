@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Bundle AFM 3.1.17. In a run started from Desktop, retrying a failed stage automatically unblocks downstream stages once their dependencies succeed.
 - Dock Assistant on either edge using the arrow in its header or Option+Shift+A on macOS and Alt+Shift+A on Linux. Drag the divider to resize the panel. Desktop remembers its side and width.
 
 ## 2026-11-25
