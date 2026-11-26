@@ -34,14 +34,12 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 COPY --from=toolchain /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:$PATH"
 
-# Claude CLI version is pinned; bump only after testing with the afm release.
-ARG CLAUDE_CODE_VERSION=2.1.304
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+# Run each pinned CLI to catch native package failures on either release architecture.
+ARG CLAUDE_CODE_VERSION=2.1.326
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && claude --version
 
-# codex CLI. Версию фиксируем и меняем только после ручной проверки с afm
-# (0.156.1 падал с SIGSEGV на Linux arm64 даже на --version; 0.163.0 проверен).
-ARG CODEX_VERSION=0.163.0
-RUN npm install -g @openai/codex@${CODEX_VERSION}
+ARG CODEX_VERSION=0.172.0
+RUN --mount=type=tmpfs,target=/root/.codex npm install -g @openai/codex@${CODEX_VERSION} && codex --version
 
 # Chrome DevTools MCP for the managed browser capability. Must match
 # browser.PinnedChromeDevtoolsMCPVersion.

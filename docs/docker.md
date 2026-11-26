@@ -86,7 +86,7 @@ docker:
   # image: akopichin/afm:latest
 ```
 
-The image includes claude CLI, Node 22, Python 3.12, Go 1.26, and git. The container
+The image includes Claude Code, Codex CLI, Node 22, Python 3.12, Go 1.26, and git. The container
 starts as root, but the entrypoint (`gosu`) immediately drops privileges to your host
 uid/gid — files in the mounted volumes belong to you, not root.
 

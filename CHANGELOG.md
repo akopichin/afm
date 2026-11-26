@@ -3,6 +3,12 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-26
+
+### Improvement:
+
+- Update the Docker image to Claude Code 2.1.326 and Codex CLI 0.172.0 for runs with Claude Fable 5.2 and GPT-6.2 models.
+
 ## 2026-11-24
 
 ### Improvement:
