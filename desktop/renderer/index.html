@@ -40,7 +40,12 @@
 </div>
 <aside id="assistant" hidden aria-labelledby="assistant-title">
   <div id="assistant-resizer" class="rail-resizer" role="separator" aria-label="Assistant width" aria-controls="assistant" aria-orientation="vertical" tabindex="0"><span class="rail-resizer-grip" aria-hidden="true"></span></div>
-  <div class="pane-head"><div><h2 id="assistant-title">AFM Assistant</h2><small id="chat-context"></small></div><button class="icon" id="close-chat" aria-label="Close assistant">×</button></div>
+  <div class="pane-head"><div><h2 id="assistant-title">AFM Assistant</h2><small id="chat-context"></small></div>
+    <div class="assistant-pane-actions">
+      <button class="icon" id="assistant-side" type="button" aria-label="Move Assistant to the left" aria-keyshortcuts="Alt+Shift+A" aria-controls="assistant">⇤</button>
+      <button class="icon" id="close-chat" aria-label="Close assistant">×</button>
+    </div>
+  </div>
   <nav id="assistant-tabs" class="watch-nav" aria-label="Assistant view" hidden><button type="button" data-assistant-view="chat" aria-pressed="true">Chat</button><button type="button" data-assistant-view="tasks" aria-pressed="false">Tasks <span class="watch-unread" id="tasks-unread" hidden></span></button></nav>
   <div id="messages" role="log" aria-live="polite"></div>
   <div id="tasks" aria-label="Watch tasks" hidden></div>

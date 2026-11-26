@@ -110,6 +110,11 @@ function navigateApp(command){
     const open=$('assistant').hidden||Boolean(focusedFrame);
     closeQueue();closeFocus();toggleChat(open);return;
   }
+  if(command==='move-assistant'){
+    closeQueue();closeFocus();moveAssistant();
+    if($('assistant').hidden)toggleChat(true);
+    return;
+  }
   if(command==='settings'){closeQueue();closeFocus();openSettings();return}
   if(command==='connect-run'){if(!isDemo){closeQueue();closeFocus();openConnectRun()}return}
   if(command==='model'){showQuickModel();return}
@@ -143,6 +148,9 @@ document.addEventListener('pointerdown',e=>{if(!$('attention').contains(e.target
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented||e.isComposing||e.repeat||document.querySelector('dialog[open]'))return;
   if(e.key==='Escape'&&!$('notice-list').hidden){closeQueue();$('all-notices').focus();return}
+  if(e.altKey&&e.shiftKey&&!e.ctrlKey&&!e.metaKey&&e.code==='KeyA'){
+    e.preventDefault();navigateApp('move-assistant');return;
+  }
   if(e.altKey&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey){
     const command={KeyA:'assistant',KeyL:'live'}[e.code];
     if(command){e.preventDefault();navigateApp(command)}return;
@@ -186,7 +194,7 @@ onDashboardMessage((frame,msg)=>{
     document.body.classList.toggle('desktop-focus',Boolean(focusedFrame));
     if(focusedFrame)frame.focus();
   }
-  if(Number.isInteger(msg?.navigate)||['home','next','previous','model','assistant','live','settings','changes','connect-run'].includes(msg?.navigate))navigateApp(msg.navigate);
+  if(Number.isInteger(msg?.navigate)||['home','next','previous','model','assistant','move-assistant','live','settings','changes','connect-run'].includes(msg?.navigate))navigateApp(msg.navigate);
   if(msg==='stage-ready')deliverStage();
   if(msg==='stage-opened')pendingStage=null;
 });

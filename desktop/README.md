@@ -143,6 +143,11 @@ startup show the dot immediately after discovery.
 
 ## Assistant chat
 
+Use the arrow in the Assistant header or press **Option+Shift+A** on macOS
+or **Alt+Shift+A** on Linux to move the panel to the other edge. Drag the
+divider between Assistant and the main view to resize it. Desktop remembers
+the panel's side and width.
+
 Chat opens at the latest message. Each timestamp shows local time, with the
 full date on hover.
 

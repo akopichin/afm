@@ -187,6 +187,7 @@ if(!isDemo){
   const resizer=new ResizeObserver(layout);
   if(!isDemo)resizer.observe($('dashboard-host'));
   new MutationObserver(layout).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['open','hidden','data-ready']});
+  new MutationObserver(layout).observe($('assistant'),{attributes:true,attributeFilter:['data-side']});
   // A native view ignores pointer-events: none, so it steps aside while the assistant grip is dragged.
   new MutationObserver(layout).observe(document.body,{attributes:true,attributeFilter:['class']});
   nativeAFM.onLiveShortcut(action=>{

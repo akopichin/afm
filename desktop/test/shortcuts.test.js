@@ -13,6 +13,8 @@ test('Electron reserves only the Desktop navigation bindings from the run view',
     assert.deepEqual(key({meta:true, code}), {navigate:name});
   }
   assert.deepEqual(key({alt:true, code:'KeyA'}), {navigate:'assistant'});
+  assert.deepEqual(key({alt:true, shift:true, code:'KeyA'}), {navigate:'move-assistant'});
+  assert.deepEqual(key({alt:true, shift:true, code:'KeyA'}, 'linux'), {navigate:'move-assistant'});
   assert.deepEqual(key({meta:true, key:'3'}), {navigate:3});
   assert.equal(key({meta:true, shift:true, code:'KeyK'}), 'switch-project');
   assert.deepEqual(key({meta:true, shift:true, code:'KeyC'}), {navigate:'connect-run'});
@@ -22,6 +24,32 @@ test('Electron reserves only the Desktop navigation bindings from the run view',
   for (const input of [{control:true,code:'KeyK'}, {meta:true,key:'f'}, {alt:true,code:'KeyM'},
     {meta:true,code:'KeyK',isAutoRepeat:true}, {meta:true,code:'KeyH',isComposing:true},
     {meta:true,key:'0'}, {meta:true,key:'2',shift:true}]) assert.equal(key(input), null);
+});
+
+test('Assistant switches sides without changing the draft and resizes towards the main view', async t => {
+  const { w, get, key } = await loadShell(t);
+  get('finish-setup').click();
+  const pane = get('assistant');
+  const button = get('assistant-side');
+  const grip = get('assistant-resizer');
+  assert.equal(pane.dataset.side, 'right');
+  key('KeyA', 'A', { altKey: true, shiftKey: true });
+  assert.equal(pane.hidden, false);
+  assert.equal(pane.dataset.side, 'left');
+  assert.equal(button.getAttribute('aria-label'), 'Move Assistant to the right');
+  get('chat-input').value = 'Draft message';
+
+  const width = Number(grip.getAttribute('aria-valuenow'));
+  key('ArrowRight', 'ArrowRight', {}, grip);
+  assert.equal(Number(grip.getAttribute('aria-valuenow')), width + 20);
+  button.click();
+  assert.equal(pane.dataset.side, 'right');
+  assert.equal(get('chat-input').value, 'Draft message');
+  key('ArrowRight', 'ArrowRight', {}, grip);
+  assert.equal(Number(grip.getAttribute('aria-valuenow')), width);
+  const saved = JSON.parse(w.localStorage.getItem('afm.desktop.sample'));
+  assert.equal(saved.assistantSide, 'right');
+  assert.equal(saved.assistantWidth, width);
 });
 
 for (const platform of PLATFORMS) {

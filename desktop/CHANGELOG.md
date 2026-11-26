@@ -1,5 +1,11 @@
 # AFM Desktop changelog
 
+## 2026-11-26
+
+### Improvement:
+
+- Dock Assistant on either edge using the arrow in its header or Option+Shift+A on macOS and Alt+Shift+A on Linux. Drag the divider to resize the panel. Desktop remembers its side and width.
+
 ## 2026-11-25
 
 ### Improvement:

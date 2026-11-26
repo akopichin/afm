@@ -863,28 +863,47 @@ $('quick-model-key').textContent=`${modKey} M`;
 $('quick-model-key').setAttribute('aria-keyshortcuts',`${ariaModKey}+M`);
 if(!state.setup)openSettings(true);
 
+const assistantPane=$('assistant');
+const sideButton=$('assistant-side');
 const grip=$('assistant-resizer');
 let preferredWidth=Number(state.assistantWidth)||355;
+function setAssistantSide(side){
+  assistantPane.dataset.side=side;
+  const moveLeft=side==='right';
+  const label=`Move Assistant to the ${moveLeft?'left':'right'}`;
+  sideButton.textContent=moveLeft?'⇤':'⇥';
+  sideButton.setAttribute('aria-label',label);
+  sideButton.title=`${label} · ${/Mac/i.test(navigator.platform)?'⌥⇧A':'Alt+Shift+A'}`;
+}
+function moveAssistant(){
+  state.assistantSide=assistantPane.dataset.side==='left'?'right':'left';
+  setAssistantSide(state.assistantSide);
+  save();
+}
+sideButton.onclick=moveAssistant;
+setAssistantSide(state.assistantSide==='left'?'left':'right');
+
 function applyAssistantWidth(requested){
   const max=Math.round(innerWidth*(innerWidth<=800?0.94:0.60));
   const min=Math.min(max,260);
   const width=Math.round(Math.max(min,Math.min(requested,max)));
-  $('assistant').style.setProperty('--assistant-width',width+'px');
+  assistantPane.style.setProperty('--assistant-width',width+'px');
   grip.setAttribute('aria-valuenow',width);
   grip.setAttribute('aria-valuemin',min);
   grip.setAttribute('aria-valuemax',max);
   grip.setAttribute('aria-valuetext',width+' pixels');
   return width;
 }
+const assistantResizeDirection=()=>assistantPane.dataset.side==='left'?1:-1;
 let drag=null;
 grip.onpointerdown=e=>{
   if(e.button!==0||drag)return;
-  drag={id:e.pointerId,x:e.clientX,width:$('assistant').getBoundingClientRect().width};
+  drag={id:e.pointerId,x:e.clientX,width:assistantPane.getBoundingClientRect().width,direction:assistantResizeDirection()};
   grip.setPointerCapture(e.pointerId);
   document.body.classList.add('sizing-assistant');
 };
 grip.onpointermove=e=>{
-  if(drag?.id===e.pointerId)applyAssistantWidth(drag.width+drag.x-e.clientX);
+  if(drag?.id===e.pointerId)applyAssistantWidth(drag.width+(e.clientX-drag.x)*drag.direction);
 };
 grip.onlostpointercapture=()=>{
   if(!drag)return;
@@ -894,7 +913,8 @@ grip.onlostpointercapture=()=>{
 };
 grip.onkeydown=e=>{
   const current=Number(grip.getAttribute('aria-valuenow'));
-  const requested={ArrowLeft:current+20,ArrowRight:current-20,Home:0,End:innerWidth}[e.key];
+  const step=20*assistantResizeDirection();
+  const requested={ArrowLeft:current-step,ArrowRight:current+step,Home:0,End:innerWidth}[e.key];
   if(requested===undefined)return;
   e.preventDefault();
   preferredWidth=applyAssistantWidth(requested);state.assistantWidth=preferredWidth;save();

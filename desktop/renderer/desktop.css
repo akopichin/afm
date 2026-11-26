@@ -134,11 +134,15 @@ body.desktop-focus .shellbar,body.desktop-focus #screen,body.desktop-focus #assi
 #chat-model {padding:5px 0 1px;color:var(--text-muted);font-size:11px}#chat-model:hover {color:var(--violet)}
 
 #assistant {position:relative;flex:none;width:var(--assistant-width,355px)}
-#assistant-resizer {left:-1px;display:flex;touch-action:none}
+#assistant[data-side="left"] {order:-1;border-left:0;border-right:1px solid var(--separator-subtle)}
+.assistant-pane-actions {display:flex;align-items:center;gap:6px;flex:none}
+/* Keep the center of the grip inside Assistant so the native run view cannot cover it. */
+#assistant-resizer {left:2px;display:flex;touch-action:none}
+#assistant[data-side="left"] #assistant-resizer {left:auto;right:2px;transform:translateX(50%)}
 .sizing-assistant #assistant-resizer .rail-resizer-grip {height:60px;background:var(--accent-primary);opacity:1}
 .sizing-assistant,.sizing-assistant * {cursor:col-resize!important;user-select:none}
 .sizing-assistant iframe {pointer-events:none}
-@media(max-width:800px){#assistant {position:absolute}}
+@media(max-width:800px){#assistant {position:absolute}#assistant[data-side="left"] {left:0;right:auto}}
 #quick-model {max-width:400px}
 .model-tools {display:flex;align-items:center;justify-content:space-between;gap:6px}
 #quick-model-key {flex:none;font:11px var(--font-mono);padding:2px 5px;color:var(--text-muted);border:1px solid var(--separator-subtle);border-radius:4px}
