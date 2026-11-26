@@ -4,7 +4,7 @@
 
 ## Scope
 - Stage statuses and the transition table; durable CAS transitions and turn-epoch fencing.
-- Dependency scheduling, command-semaphore leases, completion cascade and failure cascade.
+- Dependency scheduling, command-semaphore leases, completion cascade and waits for failed dependencies.
 - Pause/Continue, including the `auto_run: false` gate.
 - Family (prefix `STG`, disjoint ranges): this file `R01–R10`; retry, restart recovery, exit-on-fail, run end —
   [stage-lifecycle-recovery](../stage-lifecycle-recovery/spec.md) (`R11–R19`); tracks, scripts, artifacts,
@@ -91,18 +91,19 @@ Evidence: engine:internal/orchestrator/race_fixes_test.go `TestCompleteStage_Los
 engine:internal/orchestrator/pause_continue_test.go `TestContinue_RecoveredCompletion_UnblocksDependent`;
 engine:internal/orchestrator/orchestrator.go `completeStageFenced`, `onAgentCompleted`
 
-### STG-R07 Failure cascade to dependents
-Whenever a stage fails, every `pending` stage with a `failed` dependency is moved to `failed` (`blocked_by_dep`),
-transitively, and is never planned. A dependent retried while its dependency is still failed is failed again.
+### STG-R07 Wait for failed dependencies
+Unstarted descendants of a failed stage stay pending. After a successful retry, the scheduler
+activates eligible stages once all dependencies are done. Eager planning can still start early.
+Independent branches continue under the run's configured stop policy.
 
-Evidence: engine:internal/orchestrator/integration_failure_test.go `TestIntegration_FailedDependencyCascade`,
-`TestIntegration_NoPlanningForDoomedStage`; engine:internal/orchestrator/fail_blocked_retry_test.go
-`TestFailBlockedStages_RetryBetweenPassesIsFailedAgain`; engine:internal/orchestrator/scheduling.go `failBlockedStages`
+Evidence: engine:internal/orchestrator/integration_failure_test.go `TestIntegration_FailedDependencyWaits`;
+engine:internal/orchestrator/retry_cascade_test.go `TestIntegration_RetryUnblocksDependent`.
 
-#### STG-S03 Transitive cascade
+#### STG-S03 Transitive dependency wait
+
 - GIVEN `a → b → c` and `a` fails
-- WHEN the cascade runs
-- THEN `b` and `c` are `failed` and no planning agent ran for them.
+- WHEN the operator retries `a` and it succeeds
+- THEN `b` becomes eligible, and `c` becomes eligible after `b` succeeds.
 
 ### STG-R08 Pause
 `Pause` is accepted for `running`, `planning`, `revising`, `retrying`, `awaiting_assistants`, `awaiting_peer`,
@@ -149,5 +150,3 @@ Evidence: engine:internal/orchestrator/pause_continue_test.go `TestIntegration_A
 - **STG-G01** (code≠doc): FSM allows `pause` from `pending`/`awaiting_user_input`, but the public `Pause`
   rejects them; only the `auto_run` gate and budget use those edges. `stage-lifecycle.md` does not say so.
 - **STG-G02** (untested): engine-level rejection E02 (non-pausable status) has no direct StageControl test.
-- **STG-G04** (ambiguous): a `failed` dependent is not reset when its upstream is retried; it needs its own
-  Retry (or `auto_recover`). Docs do not state this.

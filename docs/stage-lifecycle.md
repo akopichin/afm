@@ -73,6 +73,14 @@ running → awaiting_quota → running
   [Dashboard → Pausing a stage](dashboard.md#pausing-a-stage-before-it-starts).
 - `done` / `failed` — complete
 
+## Waiting for a failed dependency
+
+When a stage fails, downstream stages that have not started stay `pending`. Retry the stage that failed.
+After it succeeds, each dependent starts once all its dependencies are done and its usual activation gates
+allow it. Independent branches can continue. A run without human control finishes with a failed outcome
+after independent work drains if only dependency-blocked stages remain. When reopening an older run,
+AFM restores stages previously marked failed solely by a dependency failure to pending.
+
 ## Exit on stage failure
 
 With [`afm run --exit-on-fail`](config-reference.md#exit-on-stage-failure), the

@@ -1,5 +1,5 @@
-github.com/akopichin/afm-engine v1.2.4 h1:XpHJpe7alFv8xM6xZ3Pe1oE3Hq37zkjEsJBsT5qS9LU=
-github.com/akopichin/afm-engine v1.2.4/go.mod h1:oof9rKgQQzbnDgtNEJGpd0WoeSCQ9+Kq5jtJ5JIJtic=
+github.com/akopichin/afm-engine v1.2.5 h1:PAoKeyVo8RvXQBFgqWphHBqg+/bWBmZ8VXiDA2ulfFo=
+github.com/akopichin/afm-engine v1.2.5/go.mod h1:oof9rKgQQzbnDgtNEJGpd0WoeSCQ9+Kq5jtJ5JIJtic=
 github.com/akopichin/afm/contracts v0.4.1 h1:ti+yi0J6UwBr3upQpVJe9Vb6ryIbZiYHE7a/J6PqVxQ=
 github.com/akopichin/afm/contracts v0.4.1/go.mod h1:al5OyOuvs4jWevX1OCgPma8T7kHZewoYclTxUCzjEto=
 github.com/aymanbagabas/go-udiff v0.4.1 h1:OEIrQ8maEeDBXQDoGCbbTTXYJMYRCRO1fnodZ12Gv5o=

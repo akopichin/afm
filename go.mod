@@ -29,7 +29,7 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 )
 
-require github.com/akopichin/afm-engine v1.2.4
+require github.com/akopichin/afm-engine v1.2.5
 
 require (
 	github.com/akopichin/afm/contracts v0.4.1

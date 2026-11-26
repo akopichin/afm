@@ -33,7 +33,7 @@ engine:internal/orchestrator/retry.go `MaxRetries`, `MaxUnknownRetries`, `backof
 #### STG-S04 Exhaustion fails the stage
 - GIVEN an agent that keeps returning a server error
 - WHEN the retry budget is spent
-- THEN the stage is `failed` and the failure cascade runs.
+- THEN the stage is `failed` and unstarted dependent stages remain pending.
 
 ### STG-R12 Manual Retry of a failed stage
 `Retry` is accepted only for `failed`. Exactly one caller wins the `manual_retry` CAS (→ `pending`); only the
@@ -84,8 +84,7 @@ engine:internal/orchestrator/exit_on_fail.go `applyTransition`, `startupStop`
 - THEN the run continues; only a committed `failed` stops it.
 
 ### STG-R15 Natural end of the run
-The workflow ends when every stage is terminal and nothing accepted still owes a turn. Without `HumanControl`
-any terminal mix ends it; with `HumanControl` only all-`done` ends it, so failed stages stay retryable.
+Without `HumanControl`, the workflow ends after accepted work drains when every stage is terminal or waiting on a failed dependency chain. Any stage with its own failure makes the run end as failed. With `HumanControl`, a natural end requires all stages to be done, so a failed stage remains available for Retry.
 
 Evidence: engine:internal/orchestrator/integration_failure_test.go `TestIntegration_DashboardStaysAliveOnAllFailed`,
 `TestIntegration_DashboardRetryAfterAllFailed`; engine:internal/orchestrator/scheduling.go `runStateAllowsExitCore`

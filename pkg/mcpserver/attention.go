@@ -26,6 +26,7 @@ const (
 	actionQuota          = "quota"
 	actionAssistants     = "assistants_blocked"
 	actionBudgetHold     = "budget_hold"
+	reasonPreCompletion  = "pre_completion"
 	toolActionReply      = "reply"
 	toolActionApprove    = "approve"
 	toolActionRevise     = "revise"
@@ -145,7 +146,7 @@ func (s *Service) stageAction(ctx context.Context, id string, st state.StageStat
 			return pendingAction{}, false
 		}
 		action.Type = actionAssistants
-		action.Reason = "pre_completion"
+		action.Reason = reasonPreCompletion
 	default:
 		return pendingAction{}, false
 	}
