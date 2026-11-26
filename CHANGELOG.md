@@ -7,6 +7,7 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Improvement:
 
+- Add a **View in Feed** button to the **Stage failed** banner in the dashboard; it opens the Feed of the failed stage (see the Failed view in [docs/dashboard.md](docs/dashboard.md)).
 - Update the Docker image to Claude Code 2.1.326 and Codex CLI 0.172.0 for runs with Claude Fable 5.2 and GPT-6.2 models.
 
 ## 2026-11-24

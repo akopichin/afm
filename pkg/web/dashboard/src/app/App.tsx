@@ -683,7 +683,19 @@ export function App(): ReactElement {
 
   // Единственная панель детали — по одной за раз, на всю доступную высоту.
   const budgetBanner = stageBudgetView !== undefined && stageBudgetHold !== null ? { title: holdTitle(stageBudgetView), subtitle: holdText(stageBudgetView, budgetScopes.names) } : undefined
-  const attentionBanner = inAttention && contextKind !== null ? <AttentionBanner kind={contextKind} budget={contextKind === 'paused' ? budgetBanner : undefined} /> : undefined
+  // Явный выбор стадии: Feed берёт её из рейла, а очередь могла показать не ту, что выбрана.
+  function handleViewFailedFeed(): void {
+    if (workspaceStage === null) return
+    setSelection({ kind: 'stage', stageId: workspaceStage.id })
+    openFeed()
+  }
+  const attentionBanner = inAttention && contextKind !== null ? (
+    <AttentionBanner
+      kind={contextKind}
+      budget={contextKind === 'paused' ? budgetBanner : undefined}
+      onViewFeed={contextKind === 'failed' ? handleViewFailedFeed : undefined}
+    />
+  ) : undefined
   let detailPanel: ReactElement | null = null
   if (workspaceStage !== null) {
     if (wsState.view === 'attention') {

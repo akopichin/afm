@@ -277,6 +277,7 @@
 }
 .attention-banner[data-tone="danger"] .attention-banner-icon { color: var(--danger); }
 .attention-banner-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.attention-banner-action { margin-inline-start: auto; flex: none; }
 .attention-banner-title {
   font-family: var(--font-ui);
   font-size: 13px;
@@ -859,6 +860,9 @@
 
 /* Phone: the header wraps, so title and actions stay readable on a narrow row. */
 @media (max-width: 600px) {
+  /* Кнопка уходит на свою строку, чтобы текст баннера не сжимался в узкую колонку. */
+  .attention-banner { flex-wrap: wrap; }
+  .attention-banner-action { margin-inline-start: 0; }
   .workspace-header { flex-wrap: wrap; padding: 5px 0; }
   .workspace-header-actions { flex-wrap: wrap; }
   .workspace-title { max-width: 44%; }

@@ -5,6 +5,8 @@ type AttentionBannerProps = {
   kind: AttentionKind
   // budget — стадию на паузе держит бюджет: его текст заменяет текст «paused», ведь Continue здесь открывает окно бюджета.
   budget?: { title: string; subtitle: string }
+  // Какие виды получают действие, решает вызывающий код: сам баннер остаётся презентационным.
+  onViewFeed?: () => void
 }
 
 // Тонкие линейные иконки: круг + знак, цвет берут у тона баннера.
@@ -28,7 +30,7 @@ const COPY: Record<AttentionKind, { title: string; subtitle: string; icon: React
 
 // AttentionBanner — шапка внутри контекстной вкладки: тихая линейная иконка + заголовок «что происходит»
 // + подзаголовок. Данные не тянет — чистый презентационный компонент.
-export function AttentionBanner({ kind, budget }: AttentionBannerProps): ReactElement {
+export function AttentionBanner({ kind, budget, onViewFeed }: AttentionBannerProps): ReactElement {
   const copy = budget === undefined ? COPY[kind] : { ...budget, icon: ICON_PAUSE }
   const tone = kind === 'failed' || kind === 'hook_failed' ? 'danger' : 'attention'
   return (
@@ -41,6 +43,9 @@ export function AttentionBanner({ kind, budget }: AttentionBannerProps): ReactEl
         <span className="attention-banner-title">{copy.title}</span>
         <span className="attention-banner-subtitle">{copy.subtitle}</span>
       </span>
+      {onViewFeed !== undefined && (
+        <button type="button" className="workspace-action attention-banner-action" onClick={onViewFeed}>View in Feed</button>
+      )}
     </div>
   )
 }

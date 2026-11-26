@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "baseline_head": "b132e9c2563073aea15e43d6065ecbd215fe4356",
+  "delta_sha256": "279b7c5cb629829e402bb769caa1106ec654217dd47fb9ac752cbd49af94bdf4",
+  "acceptance": "PASS",
+  "decision": "continue",
+  "criteria": [
+    {
+      "id": "L1",
+      "scenario": "DASH-S08",
+      "status": "PASS"
+    },
+    {
+      "id": "L2",
+      "scenario": "DASH-S08",
+      "status": "PASS"
+    },
+    {
+      "id": "L3",
+      "scenario": "DASH-S10",
+      "status": "PASS"
+    },
+    {
+      "id": "L4",
+      "scenario": "DASH-S09",
+      "status": "PASS"
+    },
+    {
+      "id": "L5",
+      "scenario": "DASH-S11",
+      "status": "PASS"
+    },
+    {
+      "id": "L6",
+      "scenario": "DASH-S12",
+      "status": "PASS"
+    },
+    {
+      "id": "L7",
+      "scenario": "DASH-S13",
+      "status": "PASS"
+    }
+  ],
+  "non_live": [],
+  "deferred_requirements": []
+}

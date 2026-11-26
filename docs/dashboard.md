@@ -110,6 +110,11 @@ right. The selected stage's Feed can also show a People panel on wide screens.
 - **Approval / Question views** — the plan with line-by-line review and inline
   comments, or the agent's question with answer options and a free-text reply, each
   with a fixed bottom action bar.
+- **Failed view** — a failed stage shows the **Stage failed** banner. **View in Feed**
+  in the banner opens the Feed of the stage the view is showing, including after you
+  moved through the attention queue, so you can read what the agent did before it
+  failed. The view and focus mode are not otherwise changed. A **Hook failed** banner
+  has no such button.
 - **Dialog history** — while a question is active, answered history is collapsed by
   default so the current question stays in view. Expand it with **EXPAND HISTORY**;
   when there is no active question, the full history is shown automatically.
@@ -1087,7 +1092,7 @@ filters, the Feed and its composer. If another stage is waiting for you, the too
 also shows a button with that wait's tab label and count (**Approval**,
 **Question**, …): it opens that Approval or Question view and keeps focus mode on.
 From an Approval or Question view, **Feed** in the toolbar opens the stage's Feed and
-also keeps focus mode on.
+also keeps focus mode on. **View in Feed** in the **Stage failed** banner does the same.
 
 Nothing is reloaded when you switch: the composer draft with its selection, recipients,
 reply and attachments, the reading position in the Feed (a Feed scrolled to the bottom

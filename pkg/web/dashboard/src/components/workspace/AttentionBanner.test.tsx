@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, test } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, test, vi } from 'vitest'
 import { AttentionBanner } from './AttentionBanner'
 
 describe('AttentionBanner', () => {
@@ -24,5 +24,16 @@ describe('AttentionBanner', () => {
     expect(screen.getByText(/The run budget is used up/)).toBeInTheDocument()
     expect(screen.queryByText('Stage is paused')).toBeNull()
     expect(container.querySelector('.attention-banner')).toHaveAttribute('data-kind', 'budget')
+  })
+
+  test('offers View in Feed only when the caller passes a handler', () => {
+    const onViewFeed = vi.fn()
+    const { rerender } = render(<AttentionBanner kind="failed" onViewFeed={onViewFeed} />)
+    fireEvent.click(screen.getByRole('button', { name: 'View in Feed' }))
+    expect(onViewFeed).toHaveBeenCalledTimes(1)
+    rerender(<AttentionBanner kind="failed" />)
+    expect(screen.queryByRole('button', { name: 'View in Feed' })).toBeNull()
+    rerender(<AttentionBanner kind="hook_failed" />)
+    expect(screen.queryByRole('button', { name: 'View in Feed' })).toBeNull()
   })
 })
