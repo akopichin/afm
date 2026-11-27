@@ -4,7 +4,7 @@
 
 ### Improvement:
 
-- Bundle AFM 3.1.18 and check Docker and image compatibility at startup and before launch. Inspect the result in Environment, download a compatible image, and continue the selected run.
+- Bundle AFM 3.1.19 and check Docker and image compatibility at startup and before launch. Inspect the result in Environment, download a compatible image, and continue the selected run.
 
 ### Fix:
 

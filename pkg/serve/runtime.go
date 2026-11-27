@@ -14,6 +14,7 @@ import (
 )
 
 const runtimeTool = "afm_docker_runtime"
+const runtimeImageMissing = "missing"
 
 type runtimeRequest struct {
 	MatchingImage bool   `json:"matching_image,omitempty"`
@@ -71,7 +72,7 @@ func (g *Gateway) dockerRuntime(ctx context.Context, in runtimeRequest) (runtime
 	run := func(timeout time.Duration, args ...string) (string, error) {
 		c, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		out, err := exec.CommandContext(c, cli, args...).CombinedOutput()
+		out, err := exec.CommandContext(c, cli, args...).CombinedOutput() //nolint:gosec // cli is docker from LookPath; image references are single arguments with leading dashes rejected.
 		if c.Err() != nil {
 			return "", c.Err()
 		}
@@ -89,7 +90,7 @@ func (g *Gateway) dockerRuntime(ctx context.Context, in runtimeRequest) (runtime
 	}
 	if in.Pull {
 		if out, err := run(10*time.Minute, "pull", "--quiet", s.Image); err != nil {
-			s.State = "missing"
+			s.State = runtimeImageMissing
 			s.Detail = out
 			if out == "" {
 				s.Detail = err.Error()
@@ -98,7 +99,7 @@ func (g *Gateway) dockerRuntime(ctx context.Context, in runtimeRequest) (runtime
 		}
 	}
 	if _, err := run(4*time.Second, "image", "inspect", "--format", "{{.Id}}", s.Image); err != nil {
-		s.State = "missing"
+		s.State = runtimeImageMissing
 		return s, nil
 	}
 	version, err := run(7*time.Second, "run", "--pull=never", "--rm", "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only", "--entrypoint", "/usr/local/bin/afm", s.Image, "--version")
