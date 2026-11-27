@@ -137,8 +137,9 @@ function runTabStatus(run){
   if(run.hostState==='offline')return ['inactive','Offline'];
   if(run.hostState==='mismatch')return ['inactive','Run changed'];
   if(!active(run)&&run.hostState!=='api-only'){
-    return ['inactive',({failed:'Failed',interrupted:'Interrupted',finished:'Finished'})[run.status]||'Finished'];
+    return ['inactive',reportOutcomes[run.outcome ?? run.status]||'Finished'];
   }
+  if(run.cancelRequested && !run.outcome)return ['waiting','Cancellation requested'];
   if(run.needsAttention||['review','question'].includes(run.state))return ['waiting','Needs attention'];
   return ['running',run.hostState==='api-only'?'API only':'Running'];
 }

@@ -67,6 +67,7 @@ type statusReader interface {
 // runtime still holds the API. Both interrupt the run's leader process; a native run that ignores the interrupt
 // is killed after the grace period, a Docker run never is.
 type Controller struct {
+	Host   *Host
 	Runs   runResolver
 	Status statusReader
 	// Probe checks the endpoint's identity right before a signal; nil means ProbeRuntime.
@@ -112,6 +113,25 @@ func (c *Controller) stop(ctx context.Context, runID, action string) (ControlRes
 	}
 	if err := c.verifyIdentity(ctx, v); err != nil {
 		return ControlResult{}, err
+	}
+	if action == ActionCancel && c.Host != nil && v.Launch != nil {
+		receipt, err := c.Host.UpdateReceipt(v.Launch.LaunchID, time.Now(), func(r *Receipt) {
+			if r.RunID == runID && !r.ProcessGone {
+				r.CancelRequestedRunID = runID
+			}
+		})
+		if err != nil {
+			return ControlResult{}, err
+		}
+		if receipt.RunID != runID {
+			return ControlResult{}, &RunChangedError{CurrentRunID: receipt.RunID}
+		}
+		if receipt.ProcessGone {
+			return ControlResult{}, &RunUnavailableError{RunID: runID, Liveness: LiveExited}
+		}
+		if err := c.verifyIdentity(ctx, v); err != nil {
+			return ControlResult{}, err
+		}
 	}
 	// From here on the request's context no longer matters: a stop that started must reach its end.
 	return c.interruptAndWait(v, action)

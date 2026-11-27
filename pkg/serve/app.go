@@ -90,7 +90,7 @@ func (a *App) assemble() error {
 		Host: a.host, Config: opts.Config, Discovery: discovery, Binary: opts.Binary, Env: opts.Env,
 		Groups: opts.Groups.Child.Names(),
 	})
-	a.control = &Controller{Runs: a.inventory, Status: a.sessions, ReleaseAfter: opts.Config.Retention.ReleaseAfter}
+	a.control = &Controller{Host: a.host, Runs: a.inventory, Status: a.sessions, ReleaseAfter: opts.Config.Retention.ReleaseAfter}
 	// Records of exited processes are saved and removed before any launch is watched again, so no watcher sees
 	// a half-reaped registry.
 	if err := a.reapExited(discovery); err != nil {

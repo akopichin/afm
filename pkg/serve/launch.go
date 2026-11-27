@@ -21,6 +21,7 @@ import (
 	"github.com/akopichin/afm-engine/engine"
 	"github.com/akopichin/afm/contracts/flow"
 	"github.com/akopichin/afm/contracts/fsutil"
+	"github.com/akopichin/afm/contracts/state"
 	"github.com/akopichin/afm/contracts/worktree"
 	"github.com/akopichin/afm/pkg/childenv"
 	"github.com/akopichin/afm/pkg/mcpserver"
@@ -143,8 +144,8 @@ func (l *Launcher) Close() {
 // reports anything.
 func InstanceIDFor(launchID string) string { return launchID[:32] }
 
-func terminalState(state string) bool {
-	return state == StateFailed || state == StateLost || state == StateExited
+func terminalState(status string) bool {
+	return status == StateFailed || status == StateLost || status == StateExited
 }
 
 // Start accepts a request and spawns its child. The same request_id with the same parameters returns the
@@ -512,6 +513,21 @@ func (l *Launcher) reaped(launchID string, code int, waitErr error) {
 
 // ended records proof that the launch's process is gone; a launch that was never ready failed with message.
 func (l *Launcher) ended(r *Receipt, message string) {
+	if !r.ProcessGone {
+		// A later launch may resume this run directory. Capture the outcome before releasing its slot.
+		r.OutcomeRunID = r.RunID
+		status := finalStatus(launchOnlyView(r))
+		switch {
+		case runFinished(status):
+			r.Outcome = status
+		case status == string(state.RunStatusRunning):
+			r.Outcome = "process_exited"
+		case r.State == StateFailed || r.State == StateStarting || r.State == StateAccepted:
+			r.Outcome = outcomeLaunchFailed
+		default:
+			r.Outcome = outcomeUnknown
+		}
+	}
 	r.ProcessGone = true
 	switch {
 	case r.State == StateReady:

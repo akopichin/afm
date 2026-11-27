@@ -12,11 +12,11 @@ function uiRunState(run,kind){
   return kind==='approval'?'review':kind==='question'?'question':'running';
 }
 function runSignature(run,state,live){
-  return [run.key,run.name,run.origin,run.mode,run.state,run.status,run.attention,state,run.can.open,run.can.cancel,run.can.release,run.can.report,run.can.resume,run.can.delete,live?.handle,live?.stageId,live?.url,live?.title].join('|');
+  return [run.key,run.name,run.origin,run.mode,run.state,run.status,run.outcome,run.cancelRequested,run.attention,state,run.can.open,run.can.cancel,run.can.release,run.can.report,run.can.resume,run.can.delete,live?.handle,live?.stageId,live?.url,live?.title].join('|');
 }
 function toRun(run,state,signature,live){
   return {id:encodeURIComponent(run.key),key:run.key,rawId:run.runId,instance:run.instanceId,flow:run.name||run.runId,
-    source:run.origin==='desktop'?'Desktop':run.projectRoot?'Terminal':'External',mode:run.mode,state,status:run.status,hostState:run.state,needsAttention:run.attention,can:run.can,live:Boolean(live),liveStage:live||null,signature};
+    source:run.origin==='desktop'?'Desktop':run.projectRoot?'Terminal':'External',mode:run.mode,state,status:run.status,outcome:run.outcome,cancelRequested:run.cancelRequested,hostState:run.state,needsAttention:run.attention,can:run.can,live:Boolean(live),liveStage:live||null,signature};
 }
 // Runs outside Home share tabs by local folder, or in External runs when only their URL is known.
 function externalProjects(runs){

@@ -235,7 +235,7 @@ func newHostFixture(t *testing.T, groups HostGroups) *hostFixture {
 	f.inv = &Inventory{Host: host, Discovery: disc, Now: time.Now}
 	f.sessions = &Sessions{}
 	f.launcher = NewLauncher(LauncherConfig{Host: host, Config: Config{Limits: Limits{MaxRunning: 4, MaxStarting: 2}}, Discovery: disc})
-	f.ctl = &Controller{Runs: f.inv, Status: f.sessions, Grace: 200 * time.Millisecond}
+	f.ctl = &Controller{Host: host, Runs: f.inv, Status: f.sessions, Grace: 200 * time.Millisecond}
 	f.gw = NewGateway(GatewayConfig{Inventory: f.inv, Launcher: f.launcher, Controller: f.ctl, Sessions: f.sessions, Groups: groups, Version: "test"})
 	f.srv = httptest.NewServer(f.gw.Handler())
 	f.client = f.connect()

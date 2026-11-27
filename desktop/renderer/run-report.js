@@ -1,7 +1,7 @@
 'use strict';
 
 const finishedReportPages = new WeakMap();
-const reportOutcomes = { finished: 'Finished', failed: 'Failed', interrupted: 'Interrupted' };
+const reportOutcomes = { finished: 'Finished', failed: 'Failed', interrupted: 'Interrupted', process_exited: 'Process exited before completion', launch_failed: 'Launch failed', unknown: 'Outcome unknown' };
 const reportStatus = status => String(status ?? 'Unknown').replaceAll('_', ' ').replace(/^./, char => char.toUpperCase());
 
 function finishedRunReport(run) {
@@ -10,10 +10,10 @@ function finishedRunReport(run) {
 
   const page = document.createElement('div');
   page.className = 'run-report';
-  const outcome = reportOutcomes[run.status] ?? 'Process stopped';
+  const outcome = reportOutcomes[run.outcome ?? run.status] ?? 'Process stopped';
   page.innerHTML = `<article class="run-report-page"><header class="run-report-head">
     <div><h1>${esc(run.flow)}</h1><p class="mono run-report-id" hidden></p></div>
-    <span class="run-outcome" data-outcome="${esc(run.status ?? '')}">${outcome}</span>
+    <span class="run-outcome" data-outcome="${esc(run.outcome ?? run.status ?? '')}">${outcome}</span>
   </header><div class="run-report-body" role="status"></div></article>`;
   finishedReportPages.set(run, page);
   const body = page.querySelector('.run-report-body');
@@ -29,7 +29,7 @@ function finishedRunReport(run) {
       id.textContent = run.rawId;
       id.hidden = title === run.rawId;
       const status = page.querySelector('.run-outcome');
-      if (reportOutcomes[report.run.status]) {
+      if (!run.outcome && reportOutcomes[report.run.status]) {
         status.dataset.outcome = report.run.status;
         status.textContent = reportOutcomes[report.run.status];
       }

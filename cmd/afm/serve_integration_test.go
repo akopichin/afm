@@ -245,15 +245,17 @@ type serveReportStage struct {
 }
 
 type serveRow struct {
-	RunID      string       `json:"run_id"`
-	InstanceID string       `json:"instance_id"`
-	Ownership  string       `json:"ownership"`
-	Liveness   string       `json:"liveness"`
-	Mode       string       `json:"mode"`
-	APIURL     string       `json:"api_url"`
-	Launch     *serveLaunch `json:"launch"`
-	RunStatus  string       `json:"run_status"`
-	Actions    []string     `json:"actions"`
+	Outcome         string       `json:"outcome"`
+	CancelRequested bool         `json:"cancel_requested"`
+	RunID           string       `json:"run_id"`
+	InstanceID      string       `json:"instance_id"`
+	Ownership       string       `json:"ownership"`
+	Liveness        string       `json:"liveness"`
+	Mode            string       `json:"mode"`
+	APIURL          string       `json:"api_url"`
+	Launch          *serveLaunch `json:"launch"`
+	RunStatus       string       `json:"run_status"`
+	Actions         []string     `json:"actions"`
 }
 
 type serveFailure struct {
@@ -404,6 +406,7 @@ func TestServe(t *testing.T) {
 		{"host SIGKILL and restart reconnects", serveHostKilled},
 		{"host shutdown leaves the run", serveShutdownLeavesRun},
 		{"cancel, release and report after exit", serveCancelRelease},
+		{"process killed before workflow completion", serveRunKilled},
 		{"run_changed after a repeat cycle", serveRunChanged},
 	}
 	for _, sc := range scenarios {
@@ -571,6 +574,9 @@ func serveCancelRelease(t *testing.T, fx *serveFixture) {
 	}
 	cancelled := waitRow(t, session, "the cancelled launch to exit", launchExited(heldLaunch.LaunchID))
 	requireCleanExit(t, cancelled, "interrupted")
+	if cancelled.Outcome != "interrupted" || !cancelled.CancelRequested {
+		t.Fatalf("cancelled row = %+v", cancelled)
+	}
 	requireReportStatus(t, session, held.RunID, "", "interrupted", "failed")
 
 	// Release: the workflow finishes, the core runtime holds its API until released.
@@ -583,6 +589,9 @@ func serveCancelRelease(t *testing.T, fx *serveFixture) {
 	mustCall(t, session, "afm_run_release", map[string]any{"run_id": done.RunID}, nil)
 	released := waitRow(t, session, "the released launch to exit", launchExited(doneLaunch.LaunchID))
 	requireCleanExit(t, released, "finished")
+	if released.Outcome != "finished" || released.CancelRequested {
+		t.Fatalf("released row = %+v", released)
+	}
 	requireReportStatus(t, session, done.RunID, done.InstanceID, "finished", "done")
 }
 
@@ -643,5 +652,27 @@ func serveRunChanged(t *testing.T, fx *serveFixture) {
 	mustCall(t, session, "afm_run_status", map[string]any{"run_id": next.RunID}, &status)
 	if status.RunID != next.RunID {
 		t.Fatalf("status of the current cycle = %q, want %q", status.RunID, next.RunID)
+	}
+}
+
+func serveRunKilled(t *testing.T, fx *serveFixture) {
+	writeFile(t, filepath.Join(fx.alpha, ".afm", "flows", serveFlow), readTestdata(t, "flows/script-failed.yaml"))
+	_, session := fx.startHost()
+	launch, row := startReady(t, session, startArgs("kill", "alpha", serveFlow, "core", ""))
+	waitFor(t, "failed stage waiting for retry", func() bool {
+		var report serveReport
+		mustCall(t, session, "afm_run_report", map[string]any{"run_id": row.RunID}, &report)
+		return report.Run.Status == "running" && len(report.Stages) == 1 && report.Stages[0].Status == "failed"
+	})
+	records, err := runregistry.List(runregistry.Dir(fx.home))
+	if err != nil || len(records) != 1 || records[0].InstanceID != row.InstanceID {
+		t.Fatalf("test process: %+v, %v", records, err)
+	}
+	if err := syscall.Kill(records[0].PID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	stopped := waitRow(t, session, "killed launch to exit", launchExited(launch.LaunchID))
+	if stopped.Outcome != "process_exited" || stopped.CancelRequested || stopped.RunStatus != "running" {
+		t.Fatalf("killed row = %+v", stopped)
 	}
 }

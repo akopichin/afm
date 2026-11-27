@@ -23,3 +23,9 @@ test('a run is identified by its instance and run ids together', () => {
   assert.notEqual(runView(row).key, runView({ ...row, run_id: 'r2' }).key);
   assert.notEqual(runView(row).key, runView({ ...row, instance_id: 'i2' }).key);
 });
+
+test('host outcomes coexist with the journal status and older host rows', () => {
+  const exited = runView({ ...row, liveness: 'exited', outcome: 'process_exited', cancel_requested: true });
+  assert.deepEqual([exited.outcome, exited.status, exited.cancelRequested], ['process_exited', 'running', true]);
+  assert.deepEqual([runView(row).outcome, runView(row).cancelRequested], [null, false]);
+});

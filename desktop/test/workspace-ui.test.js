@@ -121,6 +121,19 @@ test('run tabs show status dots and update when a run starts waiting', async t =
   assert.equal(tabs()[2].getAttribute('aria-label'), 'flow-finished · Finished');
 });
 
+test('a stopped process keeps its host outcome when the run report still says running', async t => {
+  const stopped = { ...ra, state: 'finished', status: 'running', outcome: 'process_exited', can: { open: false, report: true } };
+  const { d, native } = await openShell(t, snapshotOf([projectRow('a', [ra])]), {
+    runReport: async () => ({ run: { status: 'running' }, stages: [], diagnostics: [] }),
+  });
+  d.querySelector('[data-project="a"][data-run="i-ra%3Ara"]').click();
+  await tick();
+  native.publish(snapshotOf([projectRow('a', [stopped])]));
+  await tick();
+  assert.equal(d.querySelector('.run-outcome').textContent, 'Process exited before completion');
+  assert.match(d.querySelector('.tab[data-run]').getAttribute('aria-label'), /Process exited before completion/);
+});
+
 test('a finished tab loads and renders its exact saved report after the dashboard closes', async t => {
   const stopped = { ...ra, state: 'finished', status: 'interrupted', can: { open: false, report: true } };
   const report = { run: { status: 'interrupted', elapsed_ms: 20000 }, stages: [

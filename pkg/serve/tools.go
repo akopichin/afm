@@ -11,6 +11,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	implstate "github.com/akopichin/afm-engine/engine/inspection/state"
 	"github.com/akopichin/afm/pkg/mcpserver"
 	"github.com/akopichin/afm/pkg/runreport"
 	"github.com/akopichin/afm/pkg/usageview"
@@ -73,6 +74,8 @@ func launchOf(r Receipt) launchEntry {
 
 // runEntry is one row of afm_runs_list.
 type runEntry struct {
+	Outcome           string       `json:"outcome,omitempty"`
+	CancelRequested   bool         `json:"cancel_requested,omitempty"`
 	RunID             string       `json:"run_id,omitempty"`
 	InstanceID        string       `json:"instance_id,omitempty"`
 	Ownership         Ownership    `json:"ownership"`
@@ -102,7 +105,9 @@ func (g *Gateway) registerHostTools() {
 	s := g.server
 	sdkmcp.AddTool(s, &sdkmcp.Tool{Name: toolRunsList, Annotations: readAnnotations, Description: "List the runs this host knows: " +
 		"started by the host (managed), attached, or only discovered. Shows identity, liveness (active, unreachable, stale, exited, " +
-		"identity_mismatch), project, endpoint, launch state, run status and the actions open now. Read-only."},
+		"identity_mismatch), project, endpoint, launch state, run status and available actions. Optional outcome: finished, failed, interrupted, " +
+		"process_exited (process gone before a terminal run status), launch_failed, or unknown. An absent outcome may indicate ongoing work or an older record. " +
+		"cancel_requested records host intent only. After run_unavailable from wait, inspect this list. Read-only."},
 		func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ emptyInput) (*sdkmcp.CallToolResult, any, error) {
 			views, err := g.cfg.Inventory.List(ctx)
 			if err != nil {
@@ -187,6 +192,8 @@ func (g *Gateway) entry(ctx context.Context, v RunView) runEntry {
 	if v.Launch != nil {
 		launch := launchOf(*v.Launch)
 		e.Launch = &launch
+		e.CancelRequested = v.RunID != "" && v.Launch.CancelRequestedRunID == v.RunID
+		e.Outcome = v.Launch.outcomeFor(v.RunID)
 	}
 	live := v.Liveness == LiveActive || v.Liveness == LiveActiveOrphaned
 	switch {
@@ -204,6 +211,9 @@ func (g *Gateway) entry(ctx context.Context, v RunView) runEntry {
 			break
 		}
 		e.RunStatus = st.RunStatus
+		if runFinished(st.RunStatus) {
+			e.Outcome = st.RunStatus
+		}
 		e.AttentionRequired = &st.AttentionRequired
 		if v.Ownership == OwnershipManaged && g.cfg.Groups.Runs {
 			if runFinished(st.RunStatus) {
@@ -227,11 +237,11 @@ func finalStatus(v RunView) string {
 	if dir == "" {
 		return ""
 	}
-	src, err := runreport.Load(dir, runreport.LoadOptions{})
+	rs, err := implstate.LoadRunState(dir)
 	if err != nil {
 		return ""
 	}
-	return string(src.State.RunStatus)
+	return string(rs.RunStatus)
 }
 
 // runDirOf is where runID's files are, from the host's own records only; empty when unknown or unsafe.

@@ -27,6 +27,11 @@ const (
 	StateExited    = "exited"
 )
 
+const (
+	outcomeLaunchFailed = "launch_failed"
+	outcomeUnknown      = "unknown"
+)
+
 // ErrRequestConflict means a request_id was reused with different parameters.
 var ErrRequestConflict = errors.New("request_id was already used with different parameters")
 
@@ -46,11 +51,14 @@ type LaunchParams struct {
 
 // Receipt is the durable record of one accepted start request, stored in launches/<launch_id>.json.
 type Receipt struct {
-	SchemaVersion int          `json:"schema_version"`
-	LaunchID      string       `json:"launch_id"`
-	RequestID     string       `json:"request_id"`
-	ParamsHash    string       `json:"params_hash"`
-	Params        LaunchParams `json:"params"`
+	CancelRequestedRunID string       `json:"cancel_requested_run_id,omitempty"`
+	OutcomeRunID         string       `json:"outcome_run_id,omitempty"`
+	Outcome              string       `json:"outcome,omitempty"`
+	SchemaVersion        int          `json:"schema_version"`
+	LaunchID             string       `json:"launch_id"`
+	RequestID            string       `json:"request_id"`
+	ParamsHash           string       `json:"params_hash"`
+	Params               LaunchParams `json:"params"`
 	// Identity is what admission compared when the request was accepted; it never follows later config edits.
 	Identity LaunchIdentity `json:"identity,omitzero"`
 	State    string         `json:"state"`
@@ -68,6 +76,19 @@ type Receipt struct {
 	Error          string    `json:"error,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (r Receipt) outcomeFor(runID string) string {
+	switch {
+	case r.Outcome != "" && r.OutcomeRunID == runID:
+		return r.Outcome
+	case r.State == StateLost:
+		return outcomeUnknown
+	case r.State == StateFailed && r.PID == 0:
+		return outcomeLaunchFailed
+	default:
+		return ""
+	}
 }
 
 // LaunchIdentity is the checkout a launch works in and the name of its run directory: two launches with the same

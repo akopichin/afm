@@ -81,6 +81,10 @@ group the host does not allow is not listed. A forwarded call takes the `run_id`
 made for: when the run served by that process changed (a [repeat](flow-reference.md#repeat-run-successful-flows-again)
 cycle, restart) it fails with `run_changed` and changes nothing.
 
+The list can include an `outcome` for the current run cycle. A recorded workflow result is `finished`, `failed`, or `interrupted`. For a managed launch, `process_exited` means the process ended while the journal still said `running`, `launch_failed` identifies a startup failure, and `unknown` means the host could not establish the result. The host saves its observation when it detects exit. The field can be absent during execution and on older records. Use the list after a live wait returns `run_unavailable`. A failed stage can still be waiting for retry in a running workflow.
+
+`cancel_requested: true` means the host recorded a cancel request for this run cycle before attempting to signal it. Check the outcome and liveness for completion. A Docker stop can return `stop_pending` while the container is still active.
+
 ### Starting a run
 
 `afm_run_start` takes `request_id` (your idempotency key), `project`, `mode` (`core` or

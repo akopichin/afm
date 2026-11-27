@@ -185,3 +185,24 @@ func TestConcurrentCreateYieldsOneWinner(t *testing.T) {
 		t.Errorf("winners = %d, want 1", wins)
 	}
 }
+
+func TestReceiptOutcomeIsBoundToTheObservedRun(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		receipt Receipt
+		want    string
+	}{
+		{"older receipt", Receipt{State: StateExited, ProcessGone: true}, ""},
+		{"lost before identity known", Receipt{State: StateLost}, outcomeUnknown},
+		{"start rejected", Receipt{State: StateFailed}, outcomeLaunchFailed},
+		{"failed readiness with live child", Receipt{State: StateFailed, PID: 17}, ""},
+		{"earlier repeat cycle", Receipt{OutcomeRunID: "old", Outcome: "finished"}, ""},
+		{"same cycle", Receipt{OutcomeRunID: "current", Outcome: "interrupted"}, "interrupted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.receipt.outcomeFor("current"); got != tc.want {
+				t.Errorf("outcome = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -3,6 +3,12 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-27
+
+### Improvement:
+
+- Report run outcomes and host cancellation requests in `afm_runs_list`. Desktop shows when a process exited before its workflow completed. See [Serve](docs/serve.md#tools).
+
 ## 2026-11-26
 
 ### Improvement:

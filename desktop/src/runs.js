@@ -50,6 +50,7 @@ export function runView(row, ledger = {}) {
     key: `${row.instance_id}:${row.run_id}`, runId: row.run_id, instanceId: row.instance_id, name: row.run_name,
     projectRoot: row.project_root, pid: row.pid ?? null, mode: row.mode, apiUrl: row.api_url, ownership: row.ownership,
     origin: launch ? 'desktop' : 'external', launchState: row.launch?.state ?? null,
+    outcome: row.outcome ?? null, cancelRequested: Boolean(row.cancel_requested),
     status: row.run_status ?? null, attention: Boolean(row.attention_required), state,
     // The run's API answers, whatever the UI may do with it; watch reads use this, not `can.open`.
     apiLive: alive,
