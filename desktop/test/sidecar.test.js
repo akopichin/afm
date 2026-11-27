@@ -21,7 +21,7 @@ async function file(t, bytes) {
 }
 
 test('the bundled AFM must match the target OS and CPU and carry the stage browser hook', async t => {
-  const mac = await file(t, header('macho', 'arm64', ` ${CAPABILITY} `));
+  const mac = await file(t, header('macho', 'arm64', ` ${CAPABILITY} afm_docker_runtime `));
   assert.deepEqual(await executableFormat(mac), { platform: 'darwin', arch: 'arm64' });
   assert.deepEqual(await verifySidecar(mac, { platform: 'darwin', arch: 'arm64', checkVersion: false }), { platform: 'darwin', arch: 'arm64', version: null }, 'inspect the package before macOS grants permission to run it');
   const linux = await file(t, header('elf', 'x64', CAPABILITY));
@@ -29,6 +29,8 @@ test('the bundled AFM must match the target OS and CPU and carry the stage brows
   await assert.rejects(verifySidecar(mac, { platform: 'darwin', arch: 'x64' }), /darwin\/arm64, not darwin\/x64/);
   const stale = await file(t, header('macho', 'arm64', 'afm version 3.1.11'));
   await assert.rejects(verifySidecar(stale, { platform: 'darwin', arch: 'arm64' }), /does not support AFM_CHROME_EXECUTABLE/, 'an AFM without the hook is stale');
+  const withoutRuntime = await file(t, header('macho','arm64',CAPABILITY));
+  await assert.rejects(verifySidecar(withoutRuntime, {platform:'darwin',arch:'arm64'}),/does not support Desktop runtime checks/);
   const script = await file(t, '#!/bin/sh\necho afm\n');
   await assert.rejects(verifySidecar(script), /not a native executable/);
 });

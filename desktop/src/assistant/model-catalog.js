@@ -20,15 +20,33 @@ function modelReasoning(item) {
   if (advertised.length) return advertised;
   return undefined;
 }
+function catalogError(detail, credential = false) {
+  return Object.assign(new Error(detail), {catalog: true, credential});
+}
+function transportError(provider, signal, error) {
+  const timeout = signal?.reason?.name === 'TimeoutError' || error.name === 'TimeoutError'
+    || ['ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT'].includes(error.cause?.code);
+  return catalogError(timeout ? 'Request timed out' : 'Cannot reach ' + provider.name + '. Check your connection.');
+}
 export async function endpointModels(provider, apiKey, signal = AbortSignal.timeout(4000), { discoverGateway = false } = {}) {
   const anthropic = provider.kind === 'anthropic-agent';
   const url = anthropic ? anthropicBase(provider.endpoint) + '/v1/models' : provider.endpoint + '/models';
   const headers = anthropic ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' } : { authorization: 'Bearer ' + apiKey };
-  const response = await noRedirect(url, { headers, signal });
-  if ([401, 403].includes(response.status)) throw Error('The endpoint rejected the API key.');
+  let response;
+  try { response = await noRedirect(url, { headers, signal }); }
+  catch (error) { throw transportError(provider, signal, error); }
+  if ([408,504].includes(response.status)) throw catalogError('Request timed out');
+  if ([401, 403].includes(response.status)) throw catalogError('The endpoint rejected the API key.', true);
   const catalogUnavailable = [404, 405, 501].includes(response.status);
-  if (!catalogUnavailable && !response.ok) throw Error(`The model catalog returned HTTP ${response.status}.`);
-  const body = catalogUnavailable ? {} : await response.json();
+  if (!catalogUnavailable && !response.ok) throw catalogError(`The model catalog returned HTTP ${response.status}.`);
+  let body = {};
+  if (!catalogUnavailable) {
+    try { body = await response.json(); }
+    catch (error) {
+      if (error instanceof SyntaxError) throw catalogError('The model catalog returned invalid JSON.');
+      throw transportError(provider,signal,error);
+    }
+  }
   const rows = (Array.isArray(body?.data) ? body.data : []).filter(item => typeof item?.id === 'string' && item.id.trim());
   const models = rows.map(item => {
     const reasoning = modelReasoning(item);

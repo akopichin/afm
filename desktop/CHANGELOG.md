@@ -1,5 +1,16 @@
 # AFM Desktop changelog
 
+## 2026-11-27
+
+### Improvement:
+
+- Bundle AFM 3.1.18 and check Docker and image compatibility at startup and before launch. Inspect the result in Environment, download a compatible image, and continue the selected run.
+
+### Fix:
+
+- Keep the Settings header and close button visible while scrolling.
+- Model connection checks distinguish an unreachable endpoint and a timed-out model catalog request from missing or rejected credentials.
+
 ## 2026-11-26
 
 ### Improvement:

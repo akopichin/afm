@@ -29,8 +29,10 @@ export async function verifySidecar(file, { platform = process.platform, arch = 
   if (!format) throw Error(`${file} is not a native executable.`);
   if (format.platform !== platform || (format.arch && format.arch !== arch))
     throw Error(`${file} is built for ${format.platform}/${format.arch ?? '?'}, not ${platform}/${arch}.`);
-  if (!(await readFile(file)).includes(CAPABILITY))
+  const contents = await readFile(file);
+  if (!contents.includes(CAPABILITY))
     throw Error(`${file} does not support ${CAPABILITY}, so the stage browser would not reach Desktop. Build AFM from this branch (npm run sidecar).`);
+  if (!contents.includes('afm_docker_runtime')) throw Error(file + ' does not support Desktop runtime checks. Build the sidecar from this branch or use a release that includes afm_docker_runtime.');
   const runnable = checkVersion && platform === process.platform && arch === process.arch;
   const version = runnable ? execFileSync(file, ['--version'], { encoding: 'utf8' }).trim() : null;
   return { platform, arch, version };

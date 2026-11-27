@@ -1,5 +1,7 @@
 const {contextBridge,ipcRenderer}=require('electron');
 if(process.isMainFrame)contextBridge.exposeInMainWorld('nativeAFM',{
+  runtimeCheck:(project,pull=false,matching=false)=>ipcRenderer.invoke('runtime:check',project,pull,matching),
+  openDocker:()=>ipcRenderer.invoke('runtime:open-docker'),
   dashboardLayout: (key,bounds) => ipcRenderer.invoke('dashboard:layout',key,bounds),
   dashboardCommand: (key,message) => ipcRenderer.invoke('dashboard:command',key,message),
   dropDashboard: key => ipcRenderer.invoke('dashboard:drop',key),

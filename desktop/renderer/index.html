@@ -25,7 +25,7 @@
     <button id="all-notices" aria-label="Show notification queue" aria-expanded="false" aria-controls="notice-list">⌄</button>
     <div id="notice-list" hidden></div>
   </div>
-  <div id="crumb"></div>
+  <div id="crumb"></div><button class="switch" id="runtime-notice" hidden>Runtime needs attention</button>
   <div class="spacer"></div>
   <button class="switch" id="costs-nav" aria-label="Costs" aria-current="false"><span aria-hidden="true">$</span> Costs</button>
   <button class="switch" id="quick"><span aria-hidden="true">⌕</span> <span class="switch-label">Switch project</span><kbd></kbd></button>
@@ -34,6 +34,7 @@
   <span id="desktop-version" title="AFM Desktop version" hidden></span>
 </header>
 <div id="native-error" role="status" hidden></div>
+<section id="runtime-splash" hidden aria-label="Startup checks"><div id="runtime-art"></div><div class="runtime-caption"><strong>Checking the run environment…</strong><button class="action" id="runtime-skip">Skip</button></div></section>
 <div class="app-body"><div class="main-column">
 <main id="screen"></main>
 <div id="dashboard-host" hidden></div>
@@ -153,4 +154,5 @@
 </div>
 <script src="store.js"></script><script src="run-report.js"></script><script src="project-path.js"></script><script src="run-changes.js"></script><script src="desktop.js"></script><script src="library.js"></script><script src="assistant.js"></script><script src="tasks.js"></script><script src="report.js"></script><script src="mcp.js"></script><script src="controls.js"></script><script src="attention.js"></script>
 <script src="inventory.js"></script><script src="costs.js"></script><script src="native.js"></script><script src="select.js"></script>
+<script src="runtime.js"></script>
 </body></html>

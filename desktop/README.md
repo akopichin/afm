@@ -70,6 +70,12 @@ runs. Close the editor and choose **Start run** to retry. Package defaults apply
 when the options file is empty of overrides. Store secrets in the AFM environment
 settings or `secrets.env` and use references in pipeline options.
 
+## Runtime readiness
+
+Desktop checks Docker from the serving host at startup and again for the selected project before a new run. The startup artwork follows the pointer and the system motion preference. Skip it or use any toolbar control. After three seconds the main window is available even if the host is still connecting.
+
+Open **Settings → Environment** for the last result or choose **Check again**. The check shows the CLI path, Engine version, selected image and installed AFM version. A managed host searches standard Docker CLI locations and defaults to the image matching the bundled AFM release. Explicit image settings take precedence. Download a missing image here, or select the matching image just for a pending launch. Docker-native projects use their project settings; projects with Docker disabled skip these probes.
+
 ## Environment and failed launches
 
 Use **Settings → Environment** to import exported variables from `.zshrc` or

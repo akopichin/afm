@@ -6,6 +6,7 @@ import os from 'node:os';
 import { realpath, readFile, rm } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { desktopEnvironment, refreshEnvironment, stopEnvironmentImports } from './environment.js';
+import { runtimeEnvironment } from './runtime.js';
 import { PipelineOptions } from './pipeline-options.js';
 import { Desktop } from './desktop.js';
 import { LibraryLinks } from './library-links.js';
@@ -73,7 +74,7 @@ const unlockSSH = process.platform === 'win32' ? undefined : chooseSSHKey;
 const desktop = new Desktop({home, binary: () => afmBinary(app.isPackaged ? process.resourcesPath : undefined), environment,
   unlockSSH,
   hostEnv: async () => {
-    const env = await environment();
+    const env = await runtimeEnvironment(await environment(), home);
     if (!(await desktop.prefs.get()).stageBrowser) return env;
     return {...env, ...await stageBrowsers.hostEnv(env.PATH)};
   }});
@@ -278,12 +279,27 @@ handle('navigation:focus-shell', () => window.webContents.focus());
 handle('pipeline-options:get', (id, projectId) => pipelineOptions.get(id, projectId));
 handle('pipeline-options:save', input => pipelineOptions.save(input));
 handle('launch:preview', request => desktop.runs.preview(request));
+async function checkRuntime(project, pull = false, matching = false) {
+  await desktop.host.connect();
+  if (!desktop.host.supportsRuntime) return {state:'host'};
+  return desktop.host.tool('afm_docker_runtime', {project: project || '', pull, matching_image:matching});
+}
+handle('runtime:check', (project, pull, matching) => checkRuntime(project, pull === true, matching === true));
+handle('runtime:open-docker', async () => {
+  if (process.platform !== 'darwin') throw Error('Start your Docker engine, then check again.');
+  const error = await shell.openPath('/Applications/Docker.app');
+  if (error) throw Error(error);
+});
 handle('runs:start', async request => {
   // The first renderer sent a folder and a worktree name; accept it by registering the folder as a project.
   const projectId = request.projectId ?? (await desktop.projects.add(request.folder)).id;
   const explicit = request.explicit ?? (request.worktree ? 'worktree' : undefined);
   const worktree = request.worktree ?? undefined;
   try {
+    await desktop.host.connect();
+    if (desktop.host.configStale(desktop.serveConfig.file)) await desktop.host.restart({confirmExternal:request.confirmHostRestart===true});
+    const runtime = await checkRuntime(projectId,false,request.matchingImage===true);
+    if (!['native','ready'].includes(runtime.state)) return {status:'runtime', runtime, projectId};
     if (request.kind === 'Pipeline' && !request.confirmHostRestart) {
       const options = await pipelineOptions.get(request.file, projectId, {forLaunch: true});
       if (options.error || options.issues.length) return {status: 'pipeline_options', options};
@@ -404,8 +420,10 @@ function openWindow(){
   dashboardViews = new DashboardViews(window, path.join(root, 'src/dashboard-keys.cjs'), path.join(root, 'renderer/focus.css'));
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',event=>event.preventDefault());
+  const assemblyURL=pathToFileURL(path.join(root,'renderer/assembly/index.html')).href;
   function guard(event){
     const url=new URL(event.url);
+    if (!event.isMainFrame && url.href===assemblyURL && event.frame?.parent===window.webContents.mainFrame) return;
     if(event.isMainFrame || !(origins.has(url.origin) || demo && url.href.startsWith(pathToFileURL(path.join(root,'.generated/run.html')).href+'?'))) event.preventDefault();
   }
   window.webContents.on('will-frame-navigate',guard);
@@ -466,6 +484,23 @@ app.whenReady().then(async () => {
       return document.activeElement.id === 'chat-input' && Array.isArray(await window.nativeAFM.runs());
     })()`);
     if (!ready) throw Error('Packaged Desktop failed its first-run check.');
+    const fixedHeader = await window.webContents.executeJavaScript(`(() => {
+      openSettings(false,'environment');
+      const dialog = document.getElementById('settings');
+      const body = document.getElementById('settings-body');
+      const close = dialog.querySelector('[aria-label="Close settings"]');
+      // Exercise overflow even with a large display and an empty user profile.
+      dialog.style.maxHeight = '320px';
+      const top = close.getBoundingClientRect().top;
+      body.scrollTop = body.scrollHeight;
+      const rect = close.getBoundingClientRect();
+      const visible = body.scrollTop > 0 && rect.top === top &&
+        document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest('button') === close;
+      close.click();
+      dialog.style.removeProperty('max-height');
+      return visible && !dialog.open;
+    })()`);
+    if (!fixedHeader) throw Error('Settings header must stay visible and clickable after scrolling.');
     const versionLabel = await window.webContents.executeJavaScript(`(() => {
       const label = document.getElementById('desktop-version');
       return label && !label.hidden && label.textContent;

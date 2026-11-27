@@ -96,6 +96,7 @@ export class Host {
       if (server?.name !== 'afm-serve' || missing.length) {
         throw new HostError('incompatible_host', `The service on this port is not a compatible AFM host${server?.name ? ' (' + server.name + ')' : ''}.`);
       }
+      this.supportsRuntime = tools.has('afm_docker_runtime');
       if (tools.get('afm_run_report').inputSchema?.properties?.instance_id) this.#instanceReports.add(client);
       client.onclose = () => { this.connection = null; this.#set({ state: 'offline', reason: 'Connection to AFM host lost.' }); };
       this.#set({ state: 'connected', reason: null, endpoint: info.endpoint, pid: info.pid, startedAt: info.started_at,
@@ -155,7 +156,7 @@ export class Host {
         throw new HostError('not_supported', 'Update and restart afm serve to view this run report.');
       }
       let result;
-      try { result = await client.callTool({ name, arguments: args }, undefined, { timeout: 15000 }); }
+      try { result = await client.callTool({ name, arguments: args }, undefined, { timeout: name === 'afm_docker_runtime' ? (args.pull ? 630000 : 22000) : 15000 }); }
       catch (error) {
         if (attempt > 0 || !REPEATABLE.has(name) || error.code === -32602) throw error;
         this.connection = null;

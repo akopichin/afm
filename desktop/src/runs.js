@@ -58,8 +58,8 @@ export function runView(row, ledger = {}) {
   };
 }
 
-function fingerprintOf({ projectId, kind, file, explicit, branch, worktree, task }) {
-  return createHash('sha256').update(JSON.stringify([projectId, kind, file, explicit ?? null, branch ?? null, worktree ?? null, task ?? ''])).digest('hex');
+function fingerprintOf({ projectId, kind, file, explicit, branch, worktree, task, matchingImage }) {
+  return createHash('sha256').update(JSON.stringify([projectId, kind, file, explicit ?? null, branch ?? null, worktree ?? null, task ?? '', ...(matchingImage?[true]:[])])).digest('hex');
 }
 
 export class Runs {
@@ -217,7 +217,7 @@ export class Runs {
         throw new HostError('run_changed', 'Restore the original pipeline source before continuing this run.');
       }
     }
-    const hostArgs = { request_id: requestId, project, mode, worktree, ...(pipeline ? {pipeline} : {flow}) };
+    const hostArgs = { request_id: requestId, project, mode, worktree, ...(previous.hostArgs.matching_image ? {matching_image:true} : {}), ...(pipeline ? {pipeline} : {flow}) };
     const effective = previous.effective;
     await this.#updateLedger(all => ({ ...all, [requestId]: {at:new Date().toISOString(), projectId:project,
       projectRoot:row.project_root || previous.projectRoot, hostArgs, effective, gitStart:previous.gitStart, resumedFrom:oldId, resumeRunId:runId} }));
@@ -373,6 +373,7 @@ export class Runs {
     }
     const hostArgs = {
       request_id: requestId, project: plan.project.id, mode: 'dashboard',
+      ...(request.matchingImage ? {matching_image:true} : {}),
       ...(kind === 'Pipeline' ? { pipeline: plan.entry.id } : { flow: plan.entry.id }),
       ...(plan.effective.mode === 'worktree' ? { worktree: plan.effective.worktree } : {}),
       ...(plan.effective.noWorktree ? { no_worktree: true } : {}),

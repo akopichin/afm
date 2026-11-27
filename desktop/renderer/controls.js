@@ -220,18 +220,23 @@ function launchStatus(message, id){
   log.hidden=!id;
   log.onclick=id?()=>nativeAFM.openLaunchLog(id).catch(showNativeError):null;
 }
-async function startNative(p,item){
+async function startNative(p,item,matchingImage=false){
   if(launching)return;
   setLaunching(true);
   launchStatus('Starting AFM…');
   try{
     const projectId=p.external?(await nativeAFM.addProject(p.path)).id:p.id;
-    const request=launchRequest(projectId,item);
+    const request={...launchRequest(projectId,item), matchingImage};
     let started=await nativeAFM.start(request);
     if(started?.status==='external_host'){
       // The host belongs to another tool; restarting it keeps runs alive but needs the user's consent.
       if(!confirm(started.message+'\n\nRestart that host and start the run?')){launchStatus('Run not started.');return}
       started=await nativeAFM.start({...request,confirmHostRestart:true});
+    }
+    if(started?.status==='runtime'){
+      launchStatus('Docker needs attention before this run can start.');
+      window.runtimeIssue(started.runtime,started.projectId,matching=>startNative(p,item,matching));
+      return;
     }
     if(started?.status==='pipeline_options'){
       launchStatus('Review pipeline options before starting.');
@@ -504,7 +509,7 @@ function drawNotifications(body,tabs){
 let notificationStatus='';
 function drawEnvironment(body,tabs){
   const {shell,file,names}=savedEnvironment;
-  body.innerHTML=tabs+`<form id="env-source">
+  body.innerHTML=tabs+`<section id="runtime-settings"></section><form id="env-source">
     <label>Import exported shell variables<select name="shell">${[['none','None'],['zsh','.zshrc'],['bash','.bashrc']].map(([id,label])=>option(id,label,id===shell)).join('')}</select></label>
     <label>Environment file<input name="file" placeholder="~/.config/afm/desktop.env" value="${esc(file)}"></label>
     <div class="actions"><button class="primary">Save sources</button></div></form>
@@ -515,6 +520,7 @@ function drawEnvironment(body,tabs){
     <p class="muted">Restart AFM host to apply these settings to new runs. Existing runs keep their environment.</p>
     <div class="actions"><button id="env-refresh">Refresh environment</button><button id="env-restart">Restart AFM host</button></div>
     <p class="muted">Variables from your shell and environment file are read once and kept. Refresh after changing them outside Desktop.</p><p class="hint" role="status">${esc(environmentStatus)}</p>`;
+  window.runtimePanel?.();
   async function update(changes){
     try {savedEnvironment=(await nativeAFM.updateEnvironment(changes)).environment;environmentStatus='Saved.';assistantDiscovery.scanned=false}
     catch(error){environmentStatus=error.message}

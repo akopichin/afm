@@ -87,6 +87,10 @@ export function codexCapabilities(help, resumeHelp = '') {
 }
 
 const ready = (via, detail) => ({ state: 'ready', via, detail });
+function catalogAuthError(error) {
+  if (!error.catalog) return {state:'error', detail:'Could not read the endpoint credential.'};
+  return error.credential ? missing(error.message) : {state:'error', detail:error.message};
+}
 const missing = detail => ({ state: 'missing', via: null, detail });
 
 // Presence of a login is enough: token values are never read into Desktop's own state.
@@ -183,17 +187,21 @@ export async function detectProvider(provider, { home, env, dirs, secret }) {
       const models = await endpointModels(provider, key, undefined, { discoverGateway: true });
       return { ...configured, models, auth: ready(provider.credential.type, 'API key configured') };
     } catch (error) {
-      const detail = /^(The endpoint rejected|The model catalog returned)/.test(error.message)?error.message:'Could not reach the model catalog.';
-      return { ...configured, auth: missing(detail) };
+      return { ...configured, auth: catalogAuthError(error) };
     }
   }
   if (provider.kind === 'openai') {
+    const configured = {...base, endpoint:provider.endpoint, found:true, capabilities:{}, permissions:supportedPermissions('openai',{})};
     const auth = await referencedAuth(provider.credential, env);
-    const models = auth.state === 'ready' ? await Promise.resolve()
-      .then(() => secret(provider, env))
-      .then(key => key ? endpointModels(provider, key, undefined, { discoverGateway: true }) : [])
-      .catch(() => []) : [];
-    return { ...base, endpoint: provider.endpoint, found: true, models, capabilities: {}, permissions: supportedPermissions('openai', {}), auth };
+    if (auth.state !== 'ready') return {...configured, models:[], auth};
+    try {
+      const key = await secret(provider,env);
+      if (!key) return {...configured, models:[], auth:missing('Set an API key for this endpoint.')};
+      const models = await endpointModels(provider,key,undefined,{discoverGateway:true});
+      return {...configured, models, auth};
+    } catch(error) {
+      return {...configured, models:[], auth:catalogAuthError(error)};
+    }
   }
   if (provider.kind === 'acp' && provider.endpoint) {
     const configured = { ...base, endpoint: provider.endpoint, remoteCwd: provider.remoteCwd, workspaceRevision: provider.workspaceRevision, found: true, permissions: ['ask'] };
