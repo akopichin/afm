@@ -83,6 +83,18 @@ cycle, restart) it fails with `run_changed` and changes nothing.
 
 The list can include an `outcome` for the current run cycle. A recorded workflow result is `finished`, `failed`, or `interrupted`. For a managed launch, `process_exited` means the process ended while the journal still said `running`, `launch_failed` identifies a startup failure, and `unknown` means the host could not establish the result. The host saves its observation when it detects exit. The field can be absent during execution and on older records. Use the list after a live wait returns `run_unavailable`. A failed stage can still be waiting for retry in a running workflow.
 
+For example, after a forced process exit the list can contain this row fragment:
+
+```json
+{
+  "launch": { "state": "exited" },
+  "run_status": "running",
+  "outcome": "process_exited"
+}
+```
+
+Here the host observed the process exit before the workflow recorded a final result. An external client waiting for completion can stop polling that process and report the interruption.
+
 `cancel_requested: true` means the host recorded a cancel request for this run cycle before attempting to signal it. Check the outcome and liveness for completion. A Docker stop can return `stop_pending` while the container is still active.
 
 ### Starting a run
@@ -145,6 +157,6 @@ projects or run directories.
   Anyone who can reach the port can use every enabled group, including `runs`. Remote access is a
   later stage; use an SSH tunnel.
 - Docker runs are stopped gracefully only (`SIGINT`), never killed by the host.
-- Verified on Linux only; macOS and Docker hosts were not exercised.
+- Native macOS integration tests also cover cancel, release and forced process exit. The Docker `stop_pending` case has controller-test coverage.
 - Budgets cannot be set at start; use `afm_budget_adjust` afterwards.
 - A run whose process exited keeps its files; read it with `afm_run_report` if it was started by the host or explicitly attached with `afm_run_attach`. A manual run that was only discovered is forgotten when its record disappears, so attach it before it ends.

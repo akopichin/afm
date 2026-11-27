@@ -147,6 +147,16 @@ empty config (list/attach still work). `retention.release_after` is off by defau
 Evidence: `afm:pkg/serve/config_test.go` `TestParseConfigFull`, `TestParseConfigDefaults`, `TestParseConfigRejects`, `TestLoadConfigMissingFileIsEmpty`;
 `afm:pkg/serve/control_test.go` `TestSweepIsOffByDefault`, `TestSweepReleasesAfterContinuousObservation`
 
+## AFM 3.1.20 delta
+
+### MCP-R34 Run outcomes and cancellation requests survive managed process exit
+
+`afm_runs_list` can return an optional `outcome`. A verified live endpoint can report `finished`, `failed` or `interrupted`. When the host observes that a managed process has exited, it records the outcome in the receipt for the observed run ID. A terminal journal status takes precedence. A journal still at `running` gives `process_exited`. Startup failure can give `launch_failed`, and a lost launch or indeterminate exit can give `unknown`. A receipt from an older host can omit the outcome. A later repeat cycle only receives a saved outcome that matches its run ID.
+
+For a managed cancel, the host persists the target run ID before signalling. The matching row exposes `cancel_requested: true`, including while a Docker stop is pending. A release or an external interrupt alone does not set this flag. Consumers can read the list after a forwarded wait returns `run_unavailable`.
+
+Evidence: `afm:pkg/serve/receipts_test.go` `TestReceiptOutcomeIsBoundToTheObservedRun` and `afm:cmd/afm/serve_integration_test.go` `TestServe` (“cancel, release and report after exit”, “process killed before workflow completion”).
+
 ## Errors and rejections
 | ID | Condition | Observable result | Evidence |
 |----|-----------|-------------------|----------|
@@ -159,5 +169,5 @@ Evidence: `afm:pkg/serve/config_test.go` `TestParseConfigFull`, `TestParseConfig
 | MCP-E26 | forwarded call with stale `run_id` | `run_changed` | `TestStaleRunIDGetsRunChangedNotTheNextRunsData` |
 
 ## Coverage gaps and discrepancies
-- **MCP-G20** (untested): only Linux is verified (`docs/serve.md`); macOS/Docker hosts not exercised; `TestServe` skips Windows.
+- **MCP-G20** (untested): live Docker cancellation remains a coverage gap. Native macOS cancel, release and forced process exit are covered by `TestServe`. The Docker grace-period behavior is covered by `TestDockerRunIsNeverKilled`.
 - **MCP-G21** (doc-only): "budgets cannot be set at start" is stated in `docs/serve.md`; no test asserts the absence.

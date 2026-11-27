@@ -53,6 +53,8 @@ path and choose a file to see its diff. **Since run start** uses the commit
 recorded at launch. **Against main** uses the merge base with the locally
 available main branch. Unified is the default. Desktop remembers your layout.
 
+After a Desktop upgrade, open **Settings → Environment → Docker for runs** to check the versions. **Installed AFM** comes from the selected Docker image. **Required AFM** comes from the connected `afm serve` process. If the image already matches the bundled CLI and the host still reports the previous version, choose **Restart AFM host** in Environment and then **Check again**. Active runs continue through the host restart. See [host lifetime](serve.md#lifetime).
+
 Install the macOS app with `brew install --cask akopichin/afm/afm-desktop`.
 When the tap is already installed, use `brew install --cask afm-desktop`.
 Update it with `brew upgrade --cask afm-desktop`. Homebrew selects the correct

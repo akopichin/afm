@@ -4,6 +4,7 @@
 
 ### Improvement:
 
+- Desktop 0.5.7 bundles AFM 3.1.20. Run tabs show pending cancellation, and the tab and finished report show “Process exited before completion” when the process ends while the journal still says `running`.
 - Bundle AFM 3.1.19 and check Docker and image compatibility at startup and before launch. Inspect the result in Environment, download a compatible image, and continue the selected run.
 
 ### Fix:

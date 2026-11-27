@@ -32,6 +32,14 @@ provider and use its login or a credential reference. Open a project folder to
 start a run. See the [Desktop release guide](../docs/releases.md#afm-desktop-releases)
 for archives, checksums and upgrades.
 
+### Check AFM versions after an upgrade
+
+Open **Settings → Environment → Docker for runs**. **Installed AFM** is the version inside the selected Docker image. **Required AFM** is the version of the connected `afm serve` process. Desktop can reconnect to a host started before the upgrade. If the image is already at the bundled version and **Required AFM** is older, choose **Restart AFM host** in Environment, then **Check again** under Docker for runs. Active runs continue during the host restart.
+
+### Read the outcome of a run
+
+An active run tab can show **Cancellation requested** while the host waits for the process to stop. If the process exits while the journal still shows a running workflow, the tab and saved report header show **Process exited before completion**. A recorded terminal result shows **Finished**, **Failed** or **Interrupted**. Desktop uses the run status when an older host omits the outcome.
+
 ## Add a pipeline from a link
 
 Open an `afm://library/install?source=…` link to review a repository in Library.
