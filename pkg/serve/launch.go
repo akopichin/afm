@@ -63,8 +63,9 @@ const (
 // StartRequest is what a client may ask for. Everything resolves through the config allowlist; nothing is a path
 // or a command line.
 type StartRequest struct {
-	RequestID string
-	Project   string
+	MatchingImage bool
+	RequestID     string
+	Project       string
 	// Pipeline names a configured pipeline; Flow names a file in the project's .afm/flows. Exactly one is set.
 	Pipeline string
 	Flow     string
@@ -172,6 +173,9 @@ func (l *Launcher) Start(req StartRequest) (Receipt, error) {
 	case !errors.Is(err, fs.ErrNotExist):
 		return Receipt{}, err
 	}
+	if req.MatchingImage && os.Getenv("AFM_DESKTOP_RUNTIME_IMAGE") == "" {
+		return Receipt{}, invalidRequest("this host has no matching Desktop image")
+	}
 	argv, err := l.prepare(req, params)
 	if err != nil {
 		return Receipt{}, err
@@ -227,7 +231,7 @@ func (l *Launcher) canonical(req StartRequest) (LaunchParams, error) {
 		return LaunchParams{}, invalidRequest("%v", err)
 	}
 	return LaunchParams{
-		Project: req.Project, Pipeline: req.Pipeline, Flow: req.Flow, Mode: req.Mode, Worktree: req.Worktree, NoWorktree: req.NoWorktree,
+		MatchingImage: req.MatchingImage, Project: req.Project, Pipeline: req.Pipeline, Flow: req.Flow, Mode: req.Mode, Worktree: req.Worktree, NoWorktree: req.NoWorktree,
 		MCPAllow: groups, TaskSHA256: TaskDigest(req.Task),
 	}, nil
 }
@@ -449,6 +453,9 @@ func (l *Launcher) spawn(receipt Receipt, argv []string, dir string) (Receipt, e
 	cmd := exec.Command(l.cfg.Binary, argv...)
 	cmd.Dir = dir
 	cmd.Env = childenv.ForAFMChild(l.cfg.Env)
+	if receipt.Params.MatchingImage {
+		cmd.Env = append(cmd.Env, "AFM_DOCKER_IMAGE="+os.Getenv("AFM_DESKTOP_RUNTIME_IMAGE"))
+	}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	detach(cmd)
 	if err := cmd.Start(); err != nil {

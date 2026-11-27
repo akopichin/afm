@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"regexp"
 	"strings"
 
@@ -12,7 +13,10 @@ var releaseVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-(alph
 func loadProductConfig(globalDir, projectDir string) (config.Config, error) {
 	cfg, err := config.LoadFrom(globalDir, projectDir)
 	if err == nil && cfg.Docker.Image == "" {
-		cfg.Docker.Image = productDockerImage(version)
+		cfg.Docker.Image = os.Getenv("AFM_DESKTOP_RUNTIME_IMAGE")
+		if cfg.Docker.Image == "" {
+			cfg.Docker.Image = productDockerImage(version)
+		}
 	}
 	return cfg, err
 }

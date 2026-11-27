@@ -325,3 +325,7 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
   project file browser and the [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run)),
   so this boundary is unconditional — it does not depend on whether those features are
   enabled. Use an SSH tunnel for remote access rather than widening the publish.
+
+## Desktop runtime checks
+
+AFM Desktop checks the serving host's Docker CLI, engine and image at startup and before creating a run. Open **Settings → Environment** to see the last result, repeat the check or download the selected image. A Desktop-managed host defaults to the release image matching its bundled AFM. A configured image takes precedence. When an override is incompatible, the launcher can use the matching image for the pending run. See the [Desktop guide](https://github.com/akopichin/afm/tree/main/desktop#runtime-readiness).

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -26,6 +27,11 @@ func newServeCmd() *cobra.Command {
 			"a restarted host finds them again. Only one host runs per user.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if os.Getenv("AFM_DESKTOP_MANAGED_RUNTIME") == "1" && releaseVersionPattern.MatchString(version) {
+				if err := os.Setenv("AFM_DESKTOP_RUNTIME_IMAGE", "akopichin/afm:v"+strings.TrimPrefix(version, "v")); err != nil {
+					return err
+				}
+			}
 			groups := serve.AllHostGroups()
 			if cmd.Flags().Changed("mcp-allow") {
 				var err error

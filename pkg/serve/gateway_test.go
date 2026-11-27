@@ -309,7 +309,7 @@ func (f *hostFixture) toolNames() []string {
 
 func TestGatewayOffersToolsByGroup(t *testing.T) {
 	hostTools := []string{toolRunsList, toolReport}
-	runTools := []string{toolRunStart, toolAttach, toolCancel, toolRelease}
+	runTools := []string{runtimeTool, toolRunStart, toolAttach, toolCancel, toolRelease}
 	readTools := []string{"afm_artifact_read", "afm_events_read", "afm_run_status", "afm_run_wait"}
 	tests := []struct {
 		name   string
@@ -362,7 +362,7 @@ func TestForwardedToolsRequireRunID(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.HasPrefix(tool.Name, "afm_") || slices.Contains([]string{toolRunsList, toolRunStart, toolAttach, toolCancel, toolRelease, toolReport}, tool.Name) {
+		if !strings.HasPrefix(tool.Name, "afm_") || slices.Contains([]string{toolRunsList, toolRunStart, toolAttach, toolCancel, toolRelease, toolReport, runtimeTool}, tool.Name) {
 			continue
 		}
 		raw, _ := json.Marshal(tool.InputSchema)

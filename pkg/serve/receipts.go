@@ -33,14 +33,15 @@ var ErrRequestConflict = errors.New("request_id was already used with different 
 // LaunchParams are the typed, allowlist-resolved parameters of a start request. The task text is kept only as
 // its digest; the text itself lives in the tasks directory.
 type LaunchParams struct {
-	Project    string   `json:"project"`
-	Pipeline   string   `json:"pipeline,omitempty"`
-	Flow       string   `json:"flow,omitempty"`
-	Mode       string   `json:"mode"`
-	Worktree   string   `json:"worktree,omitempty"`
-	NoWorktree bool     `json:"no_worktree,omitempty"`
-	MCPAllow   []string `json:"mcp_allow,omitempty"`
-	TaskSHA256 string   `json:"task_sha256,omitempty"`
+	MatchingImage bool     `json:"matching_image,omitempty"`
+	Project       string   `json:"project"`
+	Pipeline      string   `json:"pipeline,omitempty"`
+	Flow          string   `json:"flow,omitempty"`
+	Mode          string   `json:"mode"`
+	Worktree      string   `json:"worktree,omitempty"`
+	NoWorktree    bool     `json:"no_worktree,omitempty"`
+	MCPAllow      []string `json:"mcp_allow,omitempty"`
+	TaskSHA256    string   `json:"task_sha256,omitempty"`
 }
 
 // Receipt is the durable record of one accepted start request, stored in launches/<launch_id>.json.

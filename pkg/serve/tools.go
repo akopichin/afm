@@ -31,15 +31,16 @@ const (
 type emptyInput struct{}
 
 type startInput struct {
-	RequestID  string   `json:"request_id" jsonschema:"your idempotency key: repeating it with the same parameters returns the same launch, with other parameters it is refused"`
-	Project    string   `json:"project" jsonschema:"project id from serve.yaml"`
-	Pipeline   string   `json:"pipeline,omitempty" jsonschema:"pipeline id from serve.yaml; give this or flow"`
-	Flow       string   `json:"flow,omitempty" jsonschema:"flow file name inside the project's .afm/flows; give this or pipeline"`
-	Mode       string   `json:"mode" jsonschema:"core (HTTP API only) or dashboard (API and Web UI)"`
-	Worktree   string   `json:"worktree,omitempty" jsonschema:"worktree name; a second run of the same flow in the same project needs its own"`
-	NoWorktree bool     `json:"no_worktree,omitempty" jsonschema:"run in the project checkout even if the flow or config enables worktrees; not with worktree"`
-	MCPAllow   []string `json:"mcp_allow,omitempty" jsonschema:"permissions of the run's own MCP: reply, stages, approve, budget, or read; default is what the host allows"`
-	Task       string   `json:"task,omitempty" jsonschema:"starting prompt text, appended to the flow's prompt"`
+	MatchingImage bool     `json:"matching_image,omitempty" jsonschema:"use the Desktop host matching image for this launch"`
+	RequestID     string   `json:"request_id" jsonschema:"your idempotency key: repeating it with the same parameters returns the same launch, with other parameters it is refused"`
+	Project       string   `json:"project" jsonschema:"project id from serve.yaml"`
+	Pipeline      string   `json:"pipeline,omitempty" jsonschema:"pipeline id from serve.yaml; give this or flow"`
+	Flow          string   `json:"flow,omitempty" jsonschema:"flow file name inside the project's .afm/flows; give this or pipeline"`
+	Mode          string   `json:"mode" jsonschema:"core (HTTP API only) or dashboard (API and Web UI)"`
+	Worktree      string   `json:"worktree,omitempty" jsonschema:"worktree name; a second run of the same flow in the same project needs its own"`
+	NoWorktree    bool     `json:"no_worktree,omitempty" jsonschema:"run in the project checkout even if the flow or config enables worktrees; not with worktree"`
+	MCPAllow      []string `json:"mcp_allow,omitempty" jsonschema:"permissions of the run's own MCP: reply, stages, approve, budget, or read; default is what the host allows"`
+	Task          string   `json:"task,omitempty" jsonschema:"starting prompt text, appended to the flow's prompt"`
 }
 
 type attachInput struct {
@@ -125,6 +126,7 @@ func (g *Gateway) registerHostTools() {
 	if !g.cfg.Groups.Runs {
 		return
 	}
+	g.registerRuntime()
 	sdkmcp.AddTool(s, &sdkmcp.Tool{Name: toolRunStart, Annotations: idempotentRuns, Description: "Start a run from a project and a " +
 		"pipeline or flow that serve.yaml allows. Returns at once with the launch (state starting); follow it with afm_runs_list. The same " +
 		"request_id returns the same launch and never starts a second run. Needs group runs."},
