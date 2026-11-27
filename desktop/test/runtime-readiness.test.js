@@ -12,8 +12,12 @@ test('a Finder launch recovers Docker without replacing an explicit image',async
   const bin=path.join(home,'.docker/bin');
   await mkdir(bin,{recursive:true});
   await writeFile(path.join(bin,'docker'),'#!/bin/sh\n',{mode:0o755});
-  const env=await runtimeEnvironment({PATH:'/bin',AFM_DOCKER_IMAGE:'custom'},home,'darwin');
-  assert.equal(env.PATH,'/bin:'+bin);
+  const originalPath=path.join(home,'empty-bin');
+  await mkdir(originalPath);
+  const env=await runtimeEnvironment({PATH:originalPath,AFM_DOCKER_IMAGE:'custom'},home,'darwin');
+  assert.equal(env.PATH,[originalPath,bin].join(path.delimiter));
+  const recovered=await runtimeEnvironment(env,home,'darwin');
+  assert.equal(recovered.PATH,env.PATH);
   assert.equal(env.AFM_DESKTOP_MANAGED_RUNTIME,'1');
   assert.equal(env.AFM_DOCKER_IMAGE,'custom');
 });
